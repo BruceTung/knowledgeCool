@@ -1,0 +1,71 @@
+# ============================================================
+# 知源 KnowledgeCool · Git 忽略规则
+# ============================================================
+
+# ---------------- 工具与协作目录 ----------------
+# WorkBuddy 的会话、记忆、修改备份都放在这里,不进版本库
+.workbuddy/
+
+# ---------------- 依赖 ----------------
+node_modules/
+.pnpm-store/
+.yarn/
+
+# ---------------- 构建产物 ----------------
+dist/
+build/
+out/
+.next/
+.nuxt/
+*.tsbuildinfo
+
+# ---------------- 环境变量与密钥(严禁提交) ----------------
+# 本项目可能部署在共享机器上,任何密钥、凭证一律不入库
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.jks
+credentials.json
+secrets.json
+
+# ---------------- 日志与临时文件 ----------------
+*.log
+logs/
+npm-debug.log*
+pnpm-debug.log*
+yarn-error.log*
+tmp/
+temp/
+
+# ---------------- 本地数据卷(Docker / 数据库 / 附件) ----------------
+data/
+volumes/
+docker/volumes/
+*.sqlite
+*.sqlite3
+*.db
+
+# ---------------- 备份产物 ----------------
+backups/
+*.dump
+*.sql.gz
+*.tar.gz
+
+# ---------------- 编辑器与操作系统 ----------------
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---------------- 测试与覆盖率 ----------------
+coverage/
+.nyc_output/
+playwright-report/
+test-results/
