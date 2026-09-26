@@ -86,6 +86,35 @@ WEB_ORIGIN=http://<服务器IP或域名>:8080
 阶段一的 TLS 视部署方式而定:有域名就上 Let's Encrypt(见 §6);
 没有域名、直接用 IP + http 访问时,**必须显式设 `SESSION_COOKIE_SECURE=false`**。
 
+### 回收站保留策略(v2.4)
+
+```bash
+# 删除的东西在回收站里放多少天之后被**自动彻底删除**。默认 30。
+# ⚠️ 填 0(或负数)= 关闭自动清理,回收站里的东西不会自己消失。
+TRASH_RETENTION_DAYS=30
+# 扫描间隔(小时)。0 同样表示关闭。默认 6。
+TRASH_PURGE_INTERVAL_HOURS=6
+```
+
+**这三个事实必须知道:**
+
+1. **到点就是不可逆的物理删除** —— 与界面上的「彻底删除」是同一条代码路径。
+   不放心就先设 `TRASH_RETENTION_DAYS=0` 关掉它,只用手动清理。
+2. **超管可以手动触发一次**,并且支持先空跑看清单:
+
+   ```bash
+   # 只列不删(先在界面上"回收站 → 按保留策略清理"看也行)
+   curl -b cookie.txt -X POST 'localhost:8080/api/v1/admin/maintenance/trash-purge?dryRun=true'
+   ```
+
+   界面上的入口在「回收站」页右上角,只有超管看得到。
+3. **每次清理都写审计**(`node.purge.auto`,actor 为空,带标题与子树大小),
+   在 `/audit` 里能查到"哪些东西是系统到期清掉的"。
+
+附件的大小上限与扩展名白名单**不在这里配** —— 它们是代码里的常量
+(`apps/api/src/upload/upload.controller.ts`)。放宽白名单是安全决策,
+不该靠改一个环境变量就能做到。
+
 ---
 
 ## 3. 启动
@@ -191,6 +220,8 @@ SESSION_COOKIE_SECURE=true
 
 ## 7. 升级
 
+### 有仓库的部署密钥时
+
 ```bash
 git pull
 docker compose up -d --build
@@ -198,6 +229,52 @@ docker compose up -d --build
 
 `prisma migrate deploy` 会在新容器启动时自动应用新增的迁移。
 **升级前先备份** —— 回滚代码容易,回滚数据库不容易。
+
+### ⚠️ 没有部署密钥时:用 tar 传代码(本项目的实际情况)
+
+本项目的构建服务器**没有配仓库的部署密钥**,所以升级走"本地打包 → scp → 解包":
+
+```bash
+# 本地:打包(排除掉不该传的东西)
+tar -czf /tmp/kc-src.tar.gz \
+  --exclude='./node_modules' --exclude='*/node_modules' --exclude='./.git' \
+  --exclude='./.workbuddy' --exclude='*/dist' --exclude='./prototype' \
+  --exclude='./.env' --exclude='./apps/api/src/generated' \
+  -C <仓库根目录> .
+
+scp /tmp/kc-src.tar.gz ubuntu@<服务器>:/tmp/kc-src.tar.gz
+```
+
+```bash
+# 服务器:解包前**必须先把源码目录清空**
+cd ~/knowledgeCool
+mkdir -p /tmp/kc-keep
+mv .env docker-compose.override.yml DEMO-ACCOUNTS.txt backups /tmp/kc-keep/ 2>/dev/null
+mv .env.bak-* /tmp/kc-keep/ 2>/dev/null
+find . -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+tar -xzf /tmp/kc-src.tar.gz -C .
+find /tmp/kc-keep -mindepth 1 -maxdepth 1 -exec mv {} . \;
+rm -rf /tmp/kc-keep
+docker compose up -d --build
+```
+
+> **为什么解包前要清空:`tar -xzf` 覆盖不会删除已被移除的文件。**
+> 某个版本里删掉的前端模块(例如 v2.0 删掉的 `features/pages`)会原样留着,
+> 而它们引用的共享类型已经不存在 → `tsc` 直接失败、镜像建不出来。
+> 这个坑在 v2.0 部署时踩过一次,所以写在这里。
+
+> `apps/api/src/generated`(Prisma 生成物)不必传 —— 镜像构建时 `prisma generate`
+> 会重新生成。排除它既减小包体,也避免把旧版本生成物带到新版本里。
+
+### 升级后自检
+
+```bash
+docker compose ps                                  # 四容器 healthy
+docker compose exec api node scripts/verify-org.mjs   # 129 项端到端断言
+```
+
+> 验收脚本已进镜像(`apps/api/Dockerfile` 里 COPY 了 `scripts/`),所以能在容器内直接跑,
+> 不必在宿主机上再装一份 Node 与依赖。
 
 ---
 
@@ -209,7 +286,9 @@ docker compose up -d --build
 | `api` 容器反复重启 | 数据库没起来 / 密码不对 | `docker compose logs api`,核对 `.env` 的 `POSTGRES_PASSWORD` 与 `DATABASE_URL` |
 | 页面能开、接口 502 | api 未 ready | `docker compose ps` 看 api 是否 healthy;`logs api` 找 `migrate deploy` 是否失败 |
 | 图片 404 | web 容器没挂到 uploads 卷 | `docker compose config` 看 web 的 volumes 里有没有 `uploads:/data/uploads:ro` |
-| 中文搜索搜不到 | `pg_trgm` 扩展或三元组索引丢失 | `docker compose exec postgres psql -U knowledgecool -d knowledgecool -c "\dx"` 确认 `pg_trgm` 在;`\di page_contents_trgm_idx` 确认索引在 |
+| 中文搜索搜不到 | `pg_trgm` 扩展或三元组索引丢失 | `docker compose exec postgres psql -U knowledgecool -d knowledgecool -c "\dx"` 确认 `pg_trgm` 在;`\di node_contents_trgm_idx` 确认索引在 |
+| **回收站里的东西不见了** | 保留期到了,被 `RetentionService` 自动清掉 | 这是**设计行为**。先去 `/audit` 搜 `node.purge.auto` 确认;不想让它发生就设 `TRASH_RETENTION_DAYS=0` |
+| **某人不在某个组的成员列表里了** | 他的归属被移出,或本来就没加过 | 节点的成员弹窗(`☰`)能查"这个节点下都有谁";调岗是**两步**:先加入新节点,再从原节点移出 |
 | 磁盘被备份撑满 | 没清理旧备份 | 给 `backups/` 加保留策略(例如只留最近 14 天),**不要**用 `rm -rf` 一把清 |
 
 ---
@@ -224,5 +303,7 @@ docker compose up -d --build
 - [ ] 已创建管理员,并且**没有**在库里留下测试账号
 - [ ] `./scripts/backup.sh` 跑通,且备份已被同步到异地
 - [ ] `./scripts/restore-drill.sh` 跑通
+- [ ] **确认回收站保留策略符合预期**(v2.4,默认 30 天后自动彻底删除;
+      不需要就设 `TRASH_RETENTION_DAYS=0`;界面上的天数取自服务端,不是写死的)
 - [ ] 四个容器都是 `restart: unless-stopped`(compose 默认已配)
 - [ ] 记下 `docker compose logs` 的位置,出问题时有人知道去哪看
