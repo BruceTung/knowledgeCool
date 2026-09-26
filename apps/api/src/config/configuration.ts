@@ -28,6 +28,17 @@ export interface AppConfiguration {
    */
   sessionCookieSecure: boolean;
   /**
+   * 会话与短期凭证的签名密钥。
+   *
+   * 用途:首登改密的一次性凭证(`signSetupToken`);阶段二协同网关签短期 JWT
+   * 也会用它(§6.1.1 把它留给那个用途,现在又被首登改密借用了)。
+   *
+   * ⚠️ **没有默认值** —— 部署时必须显式配置(compose 里用
+   * `${SESSION_SECRET:?...}` 强制)。为空时首登改密**不会降级放行**,
+   * 而是明确报错 —— 降级会让这条链路静默失效,那是更坏的结果。
+   */
+  sessionSecret: string;
+  /**
    * 回收站保留天数(v2.4)。
    *
    * **`<= 0` 表示关闭自动清理** —— 回收站里的东西不会自己消失。
@@ -66,6 +77,8 @@ export function loadConfiguration(): AppConfiguration {
     appVersion: process.env.APP_VERSION ?? '0.1.0',
     sessionTtlHours: toInt(process.env.SESSION_TTL_HOURS, 24 * 30),
     sessionCookieSecure: toBool(process.env.SESSION_COOKIE_SECURE, isProduction),
+    // 空字符串表示未配置 —— 由使用方(首登改密)决定怎么处理,这里不做兜底默认值。
+    sessionSecret: process.env.SESSION_SECRET ?? '',
     // 默认 30 天。设 0(或负数)即关闭 —— 见接口上的说明。
     trashRetentionDays: toInt(process.env.TRASH_RETENTION_DAYS, 30),
     // 默认 6 小时扫一次。清理本身很轻(一个走索引的查询),

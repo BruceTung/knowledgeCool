@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { Navigate, Outlet, Route, Routes } from 'react-router-dom';
 
 import { ErrorNote, FullScreenNote } from './components/ui';
-import { isUnauthorized, needsPasswordChange, useMe, useSetupState } from './features/auth/queries';
+import { isUnauthorized, useMe, useSetupState } from './features/auth/queries';
 import { AppLayout } from './routes/AppLayout';
 import { AuditPage } from './routes/AuditPage';
 import { ChangePasswordPage } from './routes/ChangePasswordPage';
@@ -18,40 +18,40 @@ import { UsersAdminPage } from './routes/UsersAdminPage';
 /**
  * 路由表(DESIGN.md §7.2)。
  *
- * ⚠️ v2.0 的三处结构变化:
+ * 四条结构性的约定:
  *
  *   1. **`/` 就是工作台**。不再有 `/spaces` 那一层 —— 登录后左侧已经常驻
  *      整棵组织树,再插一个"选择空间"的中间页只是让人多点一次。
  *   2. **`/s/:spaceId/p/:pageId` → `/n/:nodeId`**。空间与页面合并成一棵树后,
  *      路径里不再需要"空间"这一段。
- *   3. **新增 `/change-password`,并且它必须在 AppLayout 之外** ——
- *      强制改密时不能让人看到侧边栏(那里每一个入口点了都会报 403)。
- *
- * `/setup` 与 `/login` 刻意放在最外层(不套 RequireAuth)—— 它们存在的意义
- * 就是「还没登录」这个状态,套上守卫会变成死循环重定向。
+ *   3. **`/setup` 与 `/login` 在最外层**(不套 `RequireAuth`)——
+ *      它们存在的意义就是「还没登录」这个状态,套上守卫会变成死循环重定向。
+ *   4. **`/change-password` 也在最外层**(v2.4 的变化)。
+ *      首次改密的人**没有会话**,套 `RequireAuth` 会被立刻踢回登录页 ——
+ *      那就正好复现了用户反馈的「初次登录后回不到 login 页面」的另一面:
+ *      他被卡在一个永远跳走的循环里。
+ *      这一页自己判断模式(有一次性凭证 / 有会话 / 都没有)。
+ *   5. **没有「强制改密闸门」这一层了**。原来那个 `RequirePasswordChanged`
+ *      是配合"首登也发会话"的旧设计;现在首登不发会话,就不存在
+ *      "已登录但未改密"的状态,那一层自然也不需要了。
  */
 export function App() {
   return (
     <Routes>
       <Route path="/setup" element={<SetupPage />} />
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/change-password" element={<ChangePasswordPage />} />
 
-      {/* 需要登录,但**不**要求已改密 —— 改密页本身在这里 */}
       <Route element={<RequireAuth />}>
-        <Route path="/change-password" element={<ChangePasswordPage />} />
-
-        {/* 已登录且已改密,才给完整的工作台 */}
-        <Route element={<RequirePasswordChanged />}>
-          <Route element={<AppLayout />}>
-            <Route path="/" element={<HomePage />} />
-            <Route path="/n/:nodeId" element={<NodeDetailPage />} />
-            <Route path="/search" element={<SearchPage />} />
-            <Route path="/trash" element={<TrashPage />} />
-            <Route path="/audit" element={<AuditPage />} />
-            <Route path="/admin/org" element={<OrgAdminPage />} />
-            <Route path="/admin/users" element={<UsersAdminPage />} />
-            <Route path="*" element={<NotFound />} />
-          </Route>
+        <Route element={<AppLayout />}>
+          <Route path="/" element={<HomePage />} />
+          <Route path="/n/:nodeId" element={<NodeDetailPage />} />
+          <Route path="/search" element={<SearchPage />} />
+          <Route path="/trash" element={<TrashPage />} />
+          <Route path="/audit" element={<AuditPage />} />
+          <Route path="/admin/org" element={<OrgAdminPage />} />
+          <Route path="/admin/users" element={<UsersAdminPage />} />
+          <Route path="*" element={<NotFound />} />
         </Route>
       </Route>
     </Routes>
@@ -88,20 +88,6 @@ function RequireAuth() {
     );
   }
 
-  return <Outlet />;
-}
-
-/**
- * 强制改密闸门。
- *
- * ⚠️ 这一层**不是安全边界** —— 真正的拦截在服务端全局守卫里:
- * 未改密时除「改密」与「登出」之外的所有接口一律 403
- * `PASSWORD_CHANGE_REQUIRED`(§6.1.2)。
- * 这里只是别让人看到一个满屏报错的界面。
- */
-function RequirePasswordChanged() {
-  const me = useMe();
-  if (needsPasswordChange(me.data)) return <Navigate to="/change-password" replace />;
   return <Outlet />;
 }
 

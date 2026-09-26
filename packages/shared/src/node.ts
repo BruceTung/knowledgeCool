@@ -50,8 +50,13 @@ export interface NodeSummary {
   /** 所有者 */
   ownerId: string;
   ownerName: string;
-  /** 未解决评论数(树上的角标) */
-  openCommentCount: number;
+  /**
+   * 这个节点上的**评论总数**(含回复),树上的角标。
+   *
+   * ⚠️ 它数的是"有几条评论",不是"有几个待解决问题" ——
+   * 这个系统里没有"问题"这个概念(2026-09-27 用户明确纠正过一次)。
+   */
+  commentCount: number;
 }
 
 /**

@@ -11,11 +11,12 @@ import { AuthGuard } from './auth.guard.js';
 
 const ACTIVE_USER = {
   id: 'u-1',
-  email: 'a@example.com',
-  name: 'A',
-  department: null,
+  employeeNo: 'KC001',
+  name: '某人',
   avatarColor: 'gray',
   isSuperAdmin: false,
+  status: 'active',
+  mustChangePassword: false,
 };
 
 function createContext(request: Record<string, unknown>): ExecutionContext {
@@ -35,6 +36,7 @@ function createGuard(options: {
   };
   const auth = {
     resolveUserBySessionToken: vi.fn(() => Promise.resolve(options.resolveUser ?? null)),
+    revokeSession: vi.fn(() => Promise.resolve()),
   };
   const guard = new AuthGuard(reflector as never, auth as never);
   return { guard, reflector, auth };
@@ -108,5 +110,20 @@ describe('AuthGuard', () => {
 
     expect(a.code).toBe(b.code);
     expect(a.message).toBe(b.message);
+  });
+
+  it('有会话却仍待改密 → 吊销会话并按**未登录**处理(纵深防御)', async () => {
+    // ⚠️ 按当前流程这种状态**不可能**出现:首次登录不发会话、
+    // 建人不发会话、重置密码的脚本会踢掉会话。
+    // 但万一出现(例如有人手工改库),必须让"半登录态"不可能存在 ——
+    // 而不是放他进来再逐个接口去判。v2.4 之前正是那种做法,还因此漏过一次白名单。
+    const { guard, auth } = createGuard({
+      resolveUser: { ...ACTIVE_USER, mustChangePassword: true },
+    });
+
+    await expect(
+      guard.canActivate(createContext({ cookies: { kc_session: 'weird' } })),
+    ).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+    expect(auth.revokeSession).toHaveBeenCalledWith('weird');
   });
 });

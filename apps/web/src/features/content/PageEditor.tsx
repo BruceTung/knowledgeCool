@@ -277,6 +277,22 @@ export function SaveStateLabel({ state }: { state: SaveState }) {
   return <span className={`text-xs ${color[state]}`}>{text[state]}</span>;
 }
 
+/**
+ * 工具栏按钮的统一规格。
+ *
+ * ⚠️ 原来文字按钮(链接 / 图片 / 表格)没写 `min-w`,而符号按钮写了 ——
+ * 于是一行里按钮宽度参差。再加上按钮高度是"内边距撑出来的",
+ * 分隔线(`h-4`)与按钮的视觉中线也对不齐。
+ * 用户反馈的「图标、字体大小、字样都不对称」,这一排是主要来源之一。
+ *
+ * 收敛成常量:固定高度 + 最小宽度 + 居中对齐,新增按钮不会再各写一份。
+ */
+const TOOL_BUTTON_CLASS =
+  'flex h-6 min-w-[26px] items-center justify-center rounded px-1.5 text-xs leading-none transition-colors';
+const TOOL_BUTTON_IDLE_CLASS = 'text-slate-600 hover:bg-slate-100';
+const TOOL_BUTTON_ACTIVE_CLASS = 'bg-slate-900 text-white';
+const TOOL_DIVIDER_CLASS = 'mx-1.5 h-3.5 w-px bg-slate-200';
+
 function Toolbar({
   editor,
   onPickImage,
@@ -302,22 +318,20 @@ function Toolbar({
       type="button"
       title={title}
       onMouseDown={guard(action)}
-      className={`min-w-[28px] rounded px-1.5 py-1 text-xs leading-none transition-colors ${
-        active ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100'
-      }`}
+      className={`${TOOL_BUTTON_CLASS} ${active ? TOOL_BUTTON_ACTIVE_CLASS : TOOL_BUTTON_IDLE_CLASS}`}
     >
       {label}
     </button>
   );
 
   return (
-    <div className="flex flex-wrap items-center gap-0.5 border-b border-slate-200 px-4 py-2">
+    <div className="flex flex-wrap items-center gap-0.5 border-b border-slate-200 px-6 py-2">
       {button('B', editor.isActive('bold'), () => editor.chain().focus().toggleBold().run(), '粗体')}
       {button('I', editor.isActive('italic'), () => editor.chain().focus().toggleItalic().run(), '斜体')}
       {button('U', editor.isActive('underline'), () => editor.chain().focus().toggleUnderline().run(), '下划线')}
       {button('S', editor.isActive('strike'), () => editor.chain().focus().toggleStrike().run(), '删除线')}
 
-      <span className="mx-1 h-4 w-px bg-slate-200" />
+      <span className={TOOL_DIVIDER_CLASS} />
 
       {([1, 2, 3] as const).map((level) =>
         button(
@@ -328,7 +342,7 @@ function Toolbar({
         ),
       )}
 
-      <span className="mx-1 h-4 w-px bg-slate-200" />
+      <span className={TOOL_DIVIDER_CLASS} />
 
       {button('•', editor.isActive('bulletList'), () => editor.chain().focus().toggleBulletList().run(), '无序列表')}
       {button('1.', editor.isActive('orderedList'), () => editor.chain().focus().toggleOrderedList().run(), '有序列表')}
@@ -336,7 +350,7 @@ function Toolbar({
       {button('</>', editor.isActive('codeBlock'), () => editor.chain().focus().toggleCodeBlock().run(), '代码块')}
       {button('⌀', editor.isActive('code'), () => editor.chain().focus().toggleCode().run(), '行内代码')}
 
-      <span className="mx-1 h-4 w-px bg-slate-200" />
+      <span className={TOOL_DIVIDER_CLASS} />
 
       <button
         type="button"
@@ -356,8 +370,8 @@ function Toolbar({
           }
           editor.chain().focus().extendMarkRange('link').setLink({ href }).run();
         })}
-        className={`rounded px-1.5 py-1 text-xs leading-none transition-colors ${
-          editor.isActive('link') ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100'
+        className={`${TOOL_BUTTON_CLASS} ${
+          editor.isActive('link') ? TOOL_BUTTON_ACTIVE_CLASS : TOOL_BUTTON_IDLE_CLASS
         }`}
       >
         链接
@@ -368,7 +382,7 @@ function Toolbar({
         title="插入图片"
         disabled={imageUploading}
         onMouseDown={guard(onPickImage)}
-        className="rounded px-1.5 py-1 text-xs leading-none text-slate-600 transition-colors hover:bg-slate-100 disabled:opacity-50"
+        className={`${TOOL_BUTTON_CLASS} ${TOOL_BUTTON_IDLE_CLASS} disabled:opacity-50`}
       >
         {imageUploading ? '上传中…' : '图片'}
       </button>
@@ -385,7 +399,7 @@ function Toolbar({
         '插入 3×3 表格',
       )}
 
-      <span className="mx-1 h-4 w-px bg-slate-200" />
+      <span className={TOOL_DIVIDER_CLASS} />
 
       {button('↶', false, () => editor.chain().focus().undo().run(), '撤销')}
       {button('↷', false, () => editor.chain().focus().redo().run(), '重做')}

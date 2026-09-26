@@ -208,6 +208,14 @@ model NodeContent {
 }
 
 // ---------------- 评论(全员可发,v2.0) ----------------
+/// ⚠️ **评论就是评论,不是"问题单"(v2.4)。**
+///
+/// 这里曾有一个 `status` 列(`open` / `resolved`),界面上表现为「标记已解决」
+/// 与节点树上的「未解决评论」角标。用户明确纠正过:「评论只是评论,不是问题,
+/// 你不要擅自赋予评论额外的含义」—— 那套语义已连同这一列一起删除。
+///
+/// 不要再把状态字段加回来。一个没人要求的状态机,会让每条评论都背上
+/// "它解决了没有"这个问题,而讨论本来不需要被结案。
 model Comment {
   id        String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   nodeId    String  @map("node_id") @db.Uuid
@@ -215,8 +223,6 @@ model Comment {
   parentId  String? @map("parent_id") @db.Uuid
   userId    String  @map("user_id") @db.Uuid
   body      String
-  /// open | resolved —— check 约束在 migration 里
-  status    String  @default("open")
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
   // 阶段二会新增 anchor_type / anchor_text / anchor_pos 三列 —— 现在刻意不加

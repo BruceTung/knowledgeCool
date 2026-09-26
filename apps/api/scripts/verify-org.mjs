@@ -13,17 +13,17 @@
  *
  * ⚠️ **它有副作用:会把演示账号的密码改掉。**
  *
- * A 组那段「验证首次登录强制改密」不是演给你看的 —— 它**真的**会把 KC003 的密码
- * 从 `123456` 改成 `KC_SEED_PASSWORD`;而 `login()` 这个辅助函数在发现
- * `mustChangePassword` 为真时也会顺手改密,所以 KC004 同样会被改。
+ * A 组那段「首次登录改密」不是演给你看的 —— 它**真的**会把 KC003 的密码
+ * 从 `123456` 改成 `KC_SEED_PASSWORD`;而 `login()` 这个辅助函数在遇到
+ * "需要先改密"的账号时也会顺手改掉,所以 KC004 同样会被改。
  *
  * 后果:**跑完之后 `DEMO-ACCOUNTS.txt` 里写的 `123456` 就登不上了。**
  * 这不是 bug —— 要验就真验,不能只看界面。想还原成文档描述的状态:
  *
  *   docker compose exec api node scripts/reset-demo-passwords.mjs
  *
- * (每次跑都会少 7 项断言:那两个账号已经改过密了,强制改密那一段会走"跳过"分支。
- *  所以「122 项通过」等于「129 项通过」,不是回归。)
+ * (那两个账号已经改过密时,首登那一段会走"跳过"分支,总数因此比满项少几项 ——
+ *  那是跳过,不是失败。)
  *
  * ⚠️ 与上一版脚本的**根本区别**:v1 的 76 项断言里有一批在新模型下是错的反的
  * (「只读成员越权 403」「检索结果按权限过滤」)—— 那些断言的存在本身就说明
@@ -72,15 +72,16 @@ function syncCookie(response) {
   }
 }
 
-async function api(method, path, body) {
+async function api(method, path, body, options = {}) {
   const headers = { Accept: 'application/json' };
   if (cookie !== '') headers.Cookie = cookie;
-  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  // multipart 的 Content-Type 必须由 fetch 自己填(boundary 是它生成的),所以这里跳过
+  if (body !== undefined && !options.formData) headers['Content-Type'] = 'application/json';
 
   const response = await fetch(`${BASE}${path}`, {
     method,
     headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
+    body: options.formData ?? (body === undefined ? undefined : JSON.stringify(body)),
   });
   syncCookie(response);
 
@@ -91,34 +92,52 @@ async function api(method, path, body) {
   } catch {
     json = null;
   }
-  return { status: response.status, body: json, text };
+  // `setCookie` 单独给出来:有一条断言必须看**响应头**才知道结果 ——
+  // "首次登录不下发会话 Cookie"。只看 `cookie` 变量是看不出来的
+  // (它会在没有新 Cookie 时保留上一次的值)。
+  return { status: response.status, body: json, text, setCookie: response.headers.getSetCookie?.() ?? [] };
+}
+
+/** 响应里是否下发了会话 Cookie。 */
+function issuedSession(response) {
+  return response.setCookie.some((item) => item.startsWith('kc_session='));
 }
 
 /**
- * 登录。
+ * 登录,并**必要时完成首次改密**。
  *
- * 初始密码 `123456` 的账号会被强制改密,所以这里**顺便把改密流程也验了**:
- * 用 123456 登进去之后立刻改成目标密码。这样脚本第一遍跑也只需 seed 一次。
+ * ⚠️ v2.4 起首次登录不再建立会话,所以这里多了一段:
+ * 拿到 `password-change-required` 就凭一次性凭证改密,然后用新密码**重新登录**
+ * (改密后服务端仍然不给会话 —— 那是刻意的,所以脚本也必须真登一次)。
+ *
+ * 顺带把"首登改密"这条链路每次都验一遍。
  */
 async function login(employeeNo, candidates) {
   for (const password of candidates) {
     const attempt = await api('POST', '/auth/login', { employeeNo, password });
-    if (attempt.status === 200 || attempt.status === 201) {
-      const me = await api('GET', '/auth/me');
-      if (me.body?.user?.mustChangePassword === true) {
-        const changed = await api('POST', '/auth/change-password', {
-          currentPassword: password,
-          newPassword: SEED_PASSWORD,
-        });
-        if (changed.status !== 204) {
-          throw new Error(
-            `${employeeNo} 改密失败:HTTP ${String(changed.status)} ${JSON.stringify(changed.body)}`,
-          );
-        }
-        console.log(`  · ${employeeNo} 用初始密码登录 → 已被强制改密(顺带验过这条链路)`);
+    if (attempt.status !== 200 && attempt.status !== 201) continue;
+
+    if (attempt.body?.kind === 'password-change-required') {
+      const changed = await api('POST', '/auth/initial-password', {
+        setupToken: attempt.body.setupToken,
+        newPassword: SEED_PASSWORD,
+      });
+      if (changed.status !== 204) {
+        throw new Error(
+          `${employeeNo} 首登改密失败:HTTP ${String(changed.status)} ${JSON.stringify(changed.body)}`,
+        );
       }
+      const again = await api('POST', '/auth/login', { employeeNo, password: SEED_PASSWORD });
+      if (again.status !== 200) {
+        throw new Error(
+          `${employeeNo} 改密之后重新登录失败:HTTP ${String(again.status)} ${JSON.stringify(again.body)}`,
+        );
+      }
+      console.log(`  · ${employeeNo} 用初始密码登录 → 被要求先改密,改完重新登录(顺带验过这条链路)`);
       return true;
     }
+
+    return true;
   }
   return false;
 }
@@ -134,9 +153,9 @@ async function main() {
   console.log(`接口: ${BASE}\n`);
 
   // ============================================================
-  // A. 认证与强制改密
+  // A. 认证与首次登录改密
   // ============================================================
-  console.log('A. 认证与强制改密');
+  console.log('A. 认证与首次登录改密');
 
   cookie = '';
   check('未登录访问 /org/tree → 401', (await api('GET', '/org/tree')).status === 401);
@@ -158,47 +177,120 @@ async function main() {
     `${JSON.stringify(wrongPassword.body)} vs ${JSON.stringify(unknownUser.body)}`,
   );
 
-  // 未改密的账号:me 要能读,别的接口要被挡
+  // ---- 首次登录:不建立会话,只给一张一次性凭证(v2.4 重做) ----
+  //
+  // 这一段的核心是一条**否定性断言**:服务端不下发会话 Cookie。
+  // 旧实现是"照样登录、再由守卫拦住业务接口",结果人卡在半登录态 ——
+  // 进不去系统,也退不出去。用户明确要求「第一次登录不应该记录登录状态」。
   cookie = '';
-  const loginKc003 = await api('POST', '/auth/login', {
+  const firstLogin = await api('POST', '/auth/login', {
     employeeNo: 'KC003',
     password: INITIAL_PASSWORD,
   });
-  if (loginKc003.status !== 200 && loginKc003.status !== 201) {
-    console.log('  · KC003 的密码已经不是初始密码了(脚本已跑过一次),跳过强制改密的断言');
+
+  if (firstLogin.status !== 200) {
+    console.log('  · KC003 已经设过密码了(脚本跑过一次),跳过首次改密那一段');
+    console.log('    想重跑这一段:docker compose exec api node scripts/reset-demo-passwords.mjs');
   } else {
-    const meDuringGate = await api('GET', '/auth/me');
     check(
-      '未改密时 /auth/me 仍可读(前端要靠它知道该跳改密页)',
-      meDuringGate.status === 200 && meDuringGate.body.user.mustChangePassword === true,
+      '首次登录返回 kind = password-change-required(登录是**两种结果**之一)',
+      firstLogin.body?.kind === 'password-change-required',
+      JSON.stringify(firstLogin.body).slice(0, 120),
     );
-    const blocked = await api('GET', '/org/tree');
     check(
-      '未改密时其他接口 → 403 PASSWORD_CHANGE_REQUIRED',
-      blocked.status === 403 && blocked.body?.error?.code === 'PASSWORD_CHANGE_REQUIRED',
+      '★ 首次登录**不下发会话 Cookie**(不记录登录状态)',
+      !issuedSession(firstLogin),
+      `Set-Cookie: ${firstLogin.setCookie.join(' | ') || '(空)'}`,
     );
-    const changed = await api('POST', '/auth/change-password', {
-      currentPassword: INITIAL_PASSWORD,
-      newPassword: 'abc',
-    });
-    check('新密码太弱(少于 8 位)→ 400', changed.status === 400);
-    const changed2 = await api('POST', '/auth/change-password', {
-      currentPassword: INITIAL_PASSWORD,
+    check(
+      '带回一张一次性凭证(两段式,点分隔)',
+      typeof firstLogin.body?.setupToken === 'string' &&
+        firstLogin.body.setupToken.split('.').length === 2,
+    );
+
+    // 没有会话 → 对业务接口而言他就是**未登录**
+    check(
+      '首登之后访问业务接口 → 401(不是 403 —— 他压根没有登录状态)',
+      (await api('GET', '/org/tree')).status === 401,
+    );
+
+    // 改密:**不要原密码**
+    const weak = await api('POST', '/auth/initial-password', {
+      setupToken: firstLogin.body.setupToken,
       newPassword: '12345678',
     });
-    check('新密码只有数字 → 400', changed2.status === 400);
-    const changed3 = await api('POST', '/auth/change-password', {
-      currentPassword: 'wrong-current',
-      newPassword: 'Abcd1234',
-    });
-    check('当前密码不对 → 401', changed3.status === 401);
-    const ok = await api('POST', '/auth/change-password', {
-      currentPassword: INITIAL_PASSWORD,
+    check('首登改密用弱密码(纯数字)→ 400', weak.status === 400);
+
+    const forged = await api('POST', '/auth/initial-password', {
+      setupToken: 'forged.payload',
       newPassword: SEED_PASSWORD,
     });
-    check('改成合法密码 → 204', ok.status === 204);
-    check('改密后 /org/tree 可访问', (await api('GET', '/org/tree')).status === 200);
+    check('伪造的凭证改密 → 401', forged.status === 401);
+
+    const okChange = await api('POST', '/auth/initial-password', {
+      setupToken: firstLogin.body.setupToken,
+      newPassword: SEED_PASSWORD,
+    });
+    check(
+      '首登改密(**不需要原密码**)→ 204',
+      okChange.status === 204,
+      `实际 ${String(okChange.status)}`,
+    );
+
+    check(
+      '★ 改完之后**仍然没有会话** —— 必须重新登录',
+      !issuedSession(okChange) && (await api('GET', '/org/tree')).status === 401,
+    );
+
+    // 凭证是一次性的:用户状态一翻转,这张就作废了
+    const reuse = await api('POST', '/auth/initial-password', {
+      setupToken: firstLogin.body.setupToken,
+      newPassword: 'Another1234',
+    });
+    check('同一张凭证不能复用 → 401(一次性)', reuse.status === 401);
+
+    cookie = '';
+    const relogin = await api('POST', '/auth/login', {
+      employeeNo: 'KC003',
+      password: SEED_PASSWORD,
+    });
+    check(
+      '用新密码重新登录 → kind = session',
+      relogin.status === 200 && relogin.body?.kind === 'session',
+    );
+    check('★ 这一次才下发会话 Cookie', issuedSession(relogin));
+    check('新会话能访问业务接口 → 200', (await api('GET', '/org/tree')).status === 200);
   }
+
+  // ---- 已登录用户主动改密:仍然要原密码(v2.4 把它与首登改密彻底分开) ----
+  //
+  // 首登不要原密码,理由很直白:登录那一步刚验过一次,再要就是重复。
+  // 已登录改密要原密码,理由不同:会话可能被他人接管(电脑没锁屏)。
+  // 两条路径的身份依据不一样,所以是两条接口、两套校验 —— 不是"重复实现"。
+  cookie = '';
+  await login('KC002', [SEED_PASSWORD]);
+
+  const wrongCurrent = await api('POST', '/auth/change-password', {
+    currentPassword: 'not-the-password',
+    newPassword: 'Another1234',
+  });
+  check('已登录改密:当前密码不对 → 401', wrongCurrent.status === 401);
+
+  const weakNew = await api('POST', '/auth/change-password', {
+    currentPassword: SEED_PASSWORD,
+    newPassword: '12345678',
+  });
+  check('已登录改密:新密码太弱(纯数字)→ 400', weakNew.status === 400);
+
+  const sameAsOld = await api('POST', '/auth/change-password', {
+    currentPassword: SEED_PASSWORD,
+    newPassword: SEED_PASSWORD,
+  });
+  check('已登录改密:新密码与当前相同 → 400', sameAsOld.status === 400);
+
+  // 上面三条都不该动到密码 —— 用原密码再登一次确认
+  cookie = '';
+  check('三次失败的改密都没有动到密码(原密码仍可登录)', await login('KC002', [SEED_PASSWORD]));
 
   // ============================================================
   // 摸清树与人的位置(用超管)
@@ -614,8 +706,76 @@ async function main() {
   // ============================================================
   console.log('\nK. 审计日志');
 
+  // ⚠️ 先在**本组内自己制造**两个动作:`node.content.update` 与 `org.import`。
+  //
+  // 原因:审计接口只返回最近 200 条,而这两个动作只有"种子"或日常使用才会产生。
+  // 库里跑过几轮验收之后,最早那批就被挤出去了 —— 断言会**莫名其妙地失败**,
+  // 而功能一点问题没有(在服务器上实测踩到:本地过、服务器不过)。
+  // 依赖"历史记录还在"的断言,迟早会这么坏掉。
+  //
+  // 顺带把「下载模板 → 原样上传 = 零差异」这条性质在**端到端**层面也验一遍
+  // (此前只有单测覆盖)。
+  cookie = '';
+  await login('KC002', [SEED_PASSWORD]);
+  {
+    const contentOf = async (title) => {
+      const id = nodeId(title);
+      const got = await api('GET', `/nodes/${id}/content`);
+      return { id, body: got.body };
+    };
+    const target = await contentOf('接口规范');
+    const saved = await api('PUT', `/nodes/${target.id}/content`, {
+      content: target.body.content,
+      baseUpdatedAt: target.body.updatedAt,
+    });
+    check('原样保存一次正文 → 200(顺便给审计制造一条 node.content.update)', saved.status === 200);
+  }
+
   cookie = '';
   await login('KC001', [ADMIN_PASSWORD]);
+  {
+    const templateRes = await fetch(`${BASE}/admin/org/import-template`, {
+      headers: { Cookie: cookie },
+    });
+    check('下载组织架构模板 → 200', templateRes.status === 200);
+    const templateBuf = Buffer.from(await templateRes.arrayBuffer());
+
+    const makeForm = () => {
+      const form = new FormData();
+      form.append('file', new Blob([templateBuf]), 'org-import.xlsx');
+      return form;
+    };
+
+    const preview = await api('POST', '/admin/org/import?dryRun=true', undefined, {
+      formData: makeForm(),
+    });
+    // ⚠️ 用 2xx 而不是 200:Nest 的 POST 默认回 201,写死 200 会假失败。
+    check(
+      '模板原样上传 → 预览成功',
+      preview.status >= 200 && preview.status < 300,
+      `实际 ${String(preview.status)}`,
+    );
+    check(
+      '★ 下载模板原样上传 = **零差异**(导入的幂等性)',
+      preview.body?.preview?.newUsers?.length === 0 &&
+        preview.body?.preview?.newNodes?.length === 0 &&
+        preview.body?.preview?.errors?.length === 0,
+      `新增人 ${String(preview.body?.preview?.newUsers?.length)} / 新增节点 ${String(preview.body?.preview?.newNodes?.length)} / 错误 ${String(preview.body?.preview?.errors?.length)}`,
+    );
+
+    const applied = await api(
+      'POST',
+      `/admin/org/import?dryRun=false&contentHash=${preview.body.contentHash}`,
+      undefined,
+      { formData: makeForm() },
+    );
+    check(
+      '确认写入(零差异)→ 2xx,并留下一条 org.import 审计',
+      applied.status >= 200 && applied.status < 300,
+      `实际 ${String(applied.status)}`,
+    );
+  }
+
   const logs = await api('GET', '/audit-logs?limit=200');
   const actions = new Set((logs.body?.items ?? []).map((item) => item.action));
   check('超管能看到审计记录', logs.status === 200 && logs.body.items.length > 0);
@@ -868,9 +1028,11 @@ async function main() {
     `editableNodeIds=${JSON.stringify(chenLeaf.body?.editableNodeIds)}`,
   );
   check(
-    '响应里确实只有那一棵子树的节点',
-    chenLeaf.body.nodes.length === 1,
-    `实际 ${String(chenLeaf.body?.nodes?.length ?? 0)} 个`,
+    '响应里确实只有那一棵子树的节点(不含它的任何祖先)',
+    chenLeaf.body.nodes.some((node) => node.id === nodeId('接口规范')) &&
+      !chenLeaf.body.nodes.some((node) => node.title === '技术部') &&
+      !chenLeaf.body.nodes.some((node) => node.title === '后端组'),
+    `实际 ${String(chenLeaf.body?.nodes?.length ?? 0)} 个:${chenLeaf.body.nodes.map((n) => n.title).join('、')}`,
   );
 
   cookie = '';

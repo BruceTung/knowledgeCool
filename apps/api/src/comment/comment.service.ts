@@ -18,7 +18,14 @@
  * | 看评论 | 全员 |
  * | 发表 / 回复 | **全员** |
  * | 改评论正文 | **只有作者本人** —— 编辑别人的话是篡改他人言论 |
- * | 标为已解决 / 删除 | 作者本人,或该节点的**任一祖先所有者** |
+ * | 删除 | 作者本人,或该节点的**任一祖先所有者** |
+ *
+ * ⚠️ **这里没有"已解决"。**
+ *
+ * 评论不是问题单。此前那一套 `open` / `resolved` 状态(以及"标记已解决"按钮、
+ * 节点树上的"未解决"角标)已整体移除,连数据库列一起 ——
+ * 用户明确纠正过:「评论只是评论,不是问题,你不要擅自赋予评论额外的含义」。
+ * 不要再以"将来可能会用"为理由加回来。
  */
 
 import { Injectable } from '@nestjs/common';
@@ -42,7 +49,6 @@ const COMMENT_SELECT = {
   nodeId: true,
   parentId: true,
   body: true,
-  status: true,
   createdAt: true,
   updatedAt: true,
   userId: true,
@@ -90,11 +96,14 @@ export class CommentService {
           departed: row.user.status === 'departed',
         },
         body: row.body,
-        status: row.status === 'resolved' ? 'resolved' : 'open',
         createdAt: row.createdAt.toISOString(),
         updatedAt: row.updatedAt.toISOString(),
         // 前端据此决定按钮显隐。**服务端仍是唯一裁判** —— 这里只是别让按钮白点。
-        canResolve: isMine || canModerateAny,
+        //
+        // ⚠️ `canEdit` 与 `canDelete` 刻意分开:所有者能删别人的评论(版务),
+        // 但**不能改**(篡改他人言论)。之前两个按钮共用一个标志,
+        // 结果所有者看得到「编辑」、点了却 403。
+        canEdit: isMine,
         canDelete: isMine || canModerateAny,
         replies,
       };
@@ -115,7 +124,6 @@ export class CommentService {
     return {
       nodeId,
       total: rows.length,
-      openCount: rows.filter((row) => row.status !== 'resolved').length,
       threads,
     };
   }
@@ -168,11 +176,11 @@ export class CommentService {
   }
 
   /**
-   * 改正文 / 切换解决状态。
+   * 改评论正文。**只有作者本人。**
    *
-   * ⚠️ 两种操作的权限**不同**,所以共用一道闸会给错权限:
-   *   - 改正文:**只有作者本人**(编辑别人的话是篡改他人言论)
-   *   - 标为已解决:作者本人**或**该节点的任一祖先所有者(§5.4 的两格)
+   * ⚠️ 该节点的所有者**也不行** —— 他能删(版务清理),但不能改别人说的话。
+   * 这两件事此前共用一道闸,结果是所有者能编辑他人言论;
+   * 分开之后 `canEdit` 只认作者,`canDelete` 认作者或祖先所有者。
    */
   async update(
     operator: Actor,
@@ -181,40 +189,23 @@ export class CommentService {
   ): Promise<CommentView> {
     const existing = await this.prisma.comment.findUnique({
       where: { id: commentId },
-      select: { id: true, nodeId: true, userId: true, parentId: true },
+      select: { id: true, nodeId: true, userId: true },
     });
     if (existing === null) throw AppError.notFound();
 
-    const isMine = existing.userId === operator.id;
-
-    // 只有非作者才需要查"是不是祖先所有者",作者本人直接放行
-    const canModerateAny = isMine
-      ? true
-      : (await this.permissions.access(operator, existing.nodeId)).canManage;
-
-    if (input.body !== undefined) {
-      if (!isMine) throw AppError.forbidden('只能修改自己的评论');
-      const body = input.body.trim();
-      if (body === '') throw AppError.validation('评论内容不能为空');
-      if (body.length > COMMENT_BODY_MAX_LENGTH) {
-        throw AppError.validation(`评论不能超过 ${String(COMMENT_BODY_MAX_LENGTH)} 个字符`);
-      }
+    if (existing.userId !== operator.id) {
+      throw AppError.forbidden('只能修改自己的评论');
     }
 
-    if (input.status !== undefined && !canModerateAny) {
-      throw AppError.forbidden('标记他人的评论需要是该节点的所有者或上级所有者');
-    }
-
-    if (input.body === undefined && input.status === undefined) {
-      throw AppError.validation('没有要修改的内容');
+    const body = input.body.trim();
+    if (body === '') throw AppError.validation('评论内容不能为空');
+    if (body.length > COMMENT_BODY_MAX_LENGTH) {
+      throw AppError.validation(`评论不能超过 ${String(COMMENT_BODY_MAX_LENGTH)} 个字符`);
     }
 
     const row = await this.prisma.comment.update({
       where: { id: commentId },
-      data: {
-        ...(input.body === undefined ? {} : { body: input.body.trim() }),
-        ...(input.status === undefined ? {} : { status: input.status }),
-      },
+      data: { body },
       select: COMMENT_SELECT,
     });
 
@@ -223,13 +214,10 @@ export class CommentService {
       action: 'comment.update',
       targetType: 'comment',
       targetId: commentId,
-      detail: {
-        nodeId: existing.nodeId,
-        ...(input.status === undefined ? {} : { status: input.status }),
-      },
+      detail: { nodeId: existing.nodeId },
     });
 
-    return this.toViewOwn(row, canModerateAny);
+    return this.toViewOwn(row);
   }
 
   /** 删除评论。作者本人,或该节点的任一祖先所有者。回复跟着删(外键级联)。 */
@@ -258,17 +246,17 @@ export class CommentService {
   }
 
   /**
-   * 一批节点的未解决评论数 —— 节点树角标用。
+   * 一批节点的**评论总数** —— 节点树角标用。
    *
-   * 签名从 `(operator, spaceId)` 改成 `(nodeIds)`:
-   * 树现在一次返回全公司,角标要跟着节点列表走,而不是跟着空间走。
+   * 数的是"有几条评论",不是"有几个待解决问题":这个系统里没有"问题"这个概念。
+   * (原来这里带 `status: 'open'` 过滤,那套语义已整体移除。)
    */
-  async openCounts(nodeIds: readonly string[]): Promise<Record<string, number>> {
+  async commentCounts(nodeIds: readonly string[]): Promise<Record<string, number>> {
     if (nodeIds.length === 0) return {};
 
     const rows = await this.prisma.comment.groupBy({
       by: ['nodeId'],
-      where: { status: 'open', nodeId: { in: [...nodeIds] } },
+      where: { nodeId: { in: [...nodeIds] } },
       _count: { _all: true },
     });
 
@@ -283,7 +271,13 @@ export class CommentService {
     if (node === null || node.deletedAt !== null) throw AppError.notFound();
   }
 
-  private toViewOwn(row: CommentRow, canModerateAny = true): CommentView {
+  /**
+   * 单条评论的视图。
+   *
+   * ⚠️ 只在**作者本人**的路径上调用(`create` 与 `update`)——
+   * 所以 `canEdit` / `canDelete` 恒为真。这是调用前提,不是巧合。
+   */
+  private toViewOwn(row: CommentRow): CommentView {
     return {
       id: row.id,
       nodeId: row.nodeId,
@@ -295,11 +289,10 @@ export class CommentService {
         departed: row.user.status === 'departed',
       },
       body: row.body,
-      status: row.status === 'resolved' ? 'resolved' : 'open',
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
-      canResolve: canModerateAny,
-      canDelete: canModerateAny,
+      canEdit: true,
+      canDelete: true,
       replies: [],
     };
   }

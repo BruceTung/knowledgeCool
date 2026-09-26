@@ -25,7 +25,7 @@ function node(id: string, parentId: string | null, position: number, title = id)
     version: 1,
     ownerId: 'u-1',
     ownerName: '某人',
-    openCommentCount: 0,
+    commentCount: 0,
   };
 }
 

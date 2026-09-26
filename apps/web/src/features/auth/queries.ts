@@ -2,7 +2,15 @@
  * 认证相关的服务端状态(DESIGN.md §7.3:服务端状态交给 TanStack Query)。
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { AuthUser, ChangePasswordInput, CredentialsInput, MeResponse, SetupInput } from '@knowledgecool/shared';
+import type {
+  AuthUser,
+  ChangePasswordInput,
+  CredentialsInput,
+  InitialPasswordInput,
+  LoginResponse,
+  MeResponse,
+  SetupInput,
+} from '@knowledgecool/shared';
 
 import { ApiError, apiFetch, apiSend } from '../../lib/api';
 
@@ -44,21 +52,24 @@ export function isUnauthorized(error: unknown): boolean {
 }
 
 /**
- * 是否卡在"必须先改密"上。
+ * 登录。
  *
- * 服务端**已经**把所有其他接口挡住了(403 `PASSWORD_CHANGE_REQUIRED`),
- * 前端这一层只是为了不让人看到一个满屏报错的界面。
- * 别把它当成安全边界 —— 边界在服务端守卫里。
+ * ⚠️ **返回的是两种情况**,不是"一个用户"(v2.4):
+ *   - `kind: 'session'` → 服务端已写 Cookie,正常进工作台
+ *   - `kind: 'password-change-required'` → **服务端没有写 Cookie**,
+ *     只给了一张 10 分钟的一次性凭证,前端要跳改密页
+ *
+ * 所以缓存失效**只在真正建立会话时做** —— 首登那条路径下
+ * `me` 必然 401,去 invalidate 它只是白跑一趟请求。
  */
-export function needsPasswordChange(me: MeResponse | undefined): boolean {
-  return me?.user.mustChangePassword === true;
-}
-
 export function useLogin() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (input: CredentialsInput) => apiSend<AuthUser>('POST', '/auth/login', input),
-    onSuccess: () => {
+    mutationFn: (input: CredentialsInput) =>
+      apiSend<LoginResponse>('POST', '/auth/login', input),
+    onSuccess: (result) => {
+      if (result.kind === 'password-change-required') return;
+
       // 清掉上一个身份残留的缓存再取新的。只 invalidate ['me'] 是不够的:
       // 组织树里带着"我能不能改"的标记,换了人就全错了。
       queryClient.clear();
@@ -82,19 +93,29 @@ export function useSetup() {
 }
 
 /**
- * 改密。首次强制改密与主动改密走同一个接口。
+ * **首次改密** —— 凭登录时拿到的一次性凭证,**不要原密码**。
  *
- * 成功后必须重取 `me` —— `mustChangePassword` 在服务端翻转成 false 了,
- * 不重取的话前端会一直卡在改密页上。
+ * 成功后**不会**有会话:用户得用新密码重新登录一次。
+ * 所以这里没有 `invalidateQueries(['me'])` 之类的东西 ——
+ * 改完那一刻系统里没有"当前用户"。
+ */
+export function useSetInitialPassword() {
+  return useMutation({
+    mutationFn: (input: InitialPasswordInput) =>
+      apiSend<void>('POST', '/auth/initial-password', input),
+  });
+}
+
+/**
+ * **已登录用户**主动改密(顶栏那个「改密」入口)。需要当前密码。
+ *
+ * 成功后必须重取 `me` 之类的缓存吗?不必 —— 会话不受影响,
+ * 用户画像里的字段也没变(密码不在画像里)。
  */
 export function useChangePassword() {
-  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (input: ChangePasswordInput) =>
       apiSend<void>('POST', '/auth/change-password', input),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['me'] });
-    },
   });
 }
 

@@ -9,6 +9,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { AuthService } from './auth.service.js';
+import { signSetupToken } from './setup-token.js';
 
 const ACTIVE_USER = {
   id: 'u-1',
@@ -56,8 +57,19 @@ function createService(overrides: { userCount?: number } = {}) {
   sessions.revokeAllForUser.mockResolvedValue(1);
   sessions.purgeExpired.mockResolvedValue(0);
 
-  const service = new AuthService(prisma as never, passwords as never, sessions as never);
-  return { service, prisma, passwords, sessions };
+  // 首登改密要签一次性凭证,所以 service 现在依赖 ConfigService。
+  // 这只桩只需回答一个问题:密钥是什么。
+  const config = {
+    get: vi.fn((key: string) => (key === 'sessionSecret' ? 'test-secret' : undefined)),
+  };
+
+  const service = new AuthService(
+    prisma as never,
+    passwords as never,
+    sessions as never,
+    config as never,
+  );
+  return { service, prisma, passwords, sessions, config };
 }
 
 describe('AuthService.setup —— 首次初始化', () => {
@@ -110,7 +122,10 @@ describe('AuthService.login —— 不给账号枚举留口子', () => {
 
     const result = await service.login({ employeeNo: ACTIVE_USER.employeeNo, password: 'right' }, {});
 
-    expect(result.user.employeeNo).toBe(ACTIVE_USER.employeeNo);
+    expect(result.response).toMatchObject({
+      kind: 'session',
+      user: { employeeNo: ACTIVE_USER.employeeNo },
+    });
     expect(sessions.issue).toHaveBeenCalledTimes(1);
   });
 
@@ -169,13 +184,123 @@ describe('AuthService.login —— 不给账号枚举留口子', () => {
     expect(sessions.issue).not.toHaveBeenCalled();
   });
 
-  it('邮箱原样交给数据库,由 citext 做大小写折叠', async () => {
+  it('工号**原样**交给数据库 —— 大小写敏感,不做折叠', async () => {
+    // v2.2 起登录标识是工号(text),不再是 citext 邮箱 ——
+    // `KC001` 与 `kc001` 是**两个不同的账号**,这里钉住这个行为。
     const { service, prisma } = createService();
     prisma.user.findUnique.mockResolvedValueOnce(ACTIVE_USER);
 
-    await service.login({ employeeNo: 'ADMIN@Example.COM', password: 'right' }, {});
+    await service.login({ employeeNo: 'KC-Admin', password: 'right' }, {});
 
-    expect(prisma.user.findUnique.mock.calls[0]?.[0].where.employeeNo).toBe('ADMIN@Example.COM');
+    expect(prisma.user.findUnique.mock.calls[0]?.[0].where.employeeNo).toBe('KC-Admin');
+  });
+});
+
+/**
+ * v2.4 重做了首次登录这一块。
+ *
+ * 旧行为:首登照常签发会话,再由守卫拦住所有业务接口 ——
+ * 结果是用户卡在一个"半登录态":进不去系统,也退不出去。
+ * 现在的语义是干净的:**改密之前没有登录状态**,只有一张 10 分钟的凭证。
+ */
+describe('AuthService.login —— 首次登录**不建立会话**(v2.4)', () => {
+  const FIRST_LOGIN_USER = { ...ACTIVE_USER, mustChangePassword: true };
+
+  it('需要改密时 → 不签发会话,只给一次性凭证', async () => {
+    const { service, prisma, sessions } = createService();
+    prisma.user.findUnique.mockResolvedValueOnce(FIRST_LOGIN_USER);
+
+    const result = await service.login(
+      { employeeNo: ACTIVE_USER.employeeNo, password: '123456' },
+      {},
+    );
+
+    expect(result.response.kind).toBe('password-change-required');
+    expect(result.session).toBeUndefined();
+    expect(sessions.issue).not.toHaveBeenCalled();
+
+    if (result.response.kind === 'password-change-required') {
+      // 凭证是「payload.签名」两段式
+      expect(result.response.setupToken.split('.')).toHaveLength(2);
+      expect(result.response.employeeNo).toBe(ACTIVE_USER.employeeNo);
+    }
+  });
+
+  it('需要改密时**不写** `last_login_at` —— 他还没进过系统', async () => {
+    const { service, prisma } = createService();
+    prisma.user.findUnique.mockResolvedValueOnce(FIRST_LOGIN_USER);
+
+    await service.login({ employeeNo: ACTIVE_USER.employeeNo, password: '123456' }, {});
+
+    expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
+  it('未配置 SESSION_SECRET → 明确报错,而**不是**降级放行', async () => {
+    // 用空密钥去签等于任何人都能伪造凭证 —— 那比"首登改密暂时不可用"严重得多。
+    const { service, prisma, config } = createService();
+    config.get.mockReturnValue(undefined);
+    prisma.user.findUnique.mockResolvedValueOnce(FIRST_LOGIN_USER);
+
+    await expect(
+      service.login({ employeeNo: ACTIVE_USER.employeeNo, password: '123456' }, {}),
+    ).rejects.toMatchObject({ code: 'INTERNAL_ERROR' });
+  });
+});
+
+describe('AuthService.setInitialPassword —— 首次改密', () => {
+  const PENDING = { id: 'u-1', status: 'active', mustChangePassword: true };
+
+  it('凭证有效 → 写入新密码并清掉待改密标记', async () => {
+    const { service, prisma } = createService();
+    const { token } = signSetupToken('u-1', 'test-secret');
+    prisma.user.findUnique.mockResolvedValueOnce(PENDING);
+
+    await service.setInitialPassword({ setupToken: token, newPassword: 'a-strong-passw0rd' });
+
+    const update = prisma.user.update.mock.calls[0]?.[0];
+    expect(update.where).toEqual({ id: 'u-1' });
+    expect(update.data.mustChangePassword).toBe(false);
+    // 存的是哈希,不是明文
+    expect(update.data.passwordHash).toBe('$2b$12$hashed');
+    expect(JSON.stringify(update)).not.toContain('a-strong-passw0rd');
+  });
+
+  it('伪造的凭证 → 401', async () => {
+    const { service } = createService();
+    await expect(
+      service.setInitialPassword({ setupToken: 'fake.payload', newPassword: 'a-strong-passw0rd' }),
+    ).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+  });
+
+  it('用别的密钥签的凭证 → 401', async () => {
+    const { service } = createService();
+    const { token } = signSetupToken('u-1', 'attacker-secret');
+    await expect(
+      service.setInitialPassword({ setupToken: token, newPassword: 'a-strong-passw0rd' }),
+    ).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+  });
+
+  it('已经改过密 → 凭证作废(这就是"一次性"的落地方式)', async () => {
+    // 不需要服务端记"这张用过了" —— 用户状态本身就把凭证作废了。
+    const { service, prisma } = createService();
+    const { token } = signSetupToken('u-1', 'test-secret');
+    prisma.user.findUnique.mockResolvedValueOnce({ ...PENDING, mustChangePassword: false });
+
+    await expect(
+      service.setInitialPassword({ setupToken: token, newPassword: 'a-strong-passw0rd' }),
+    ).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+    expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
+  it('新密码太弱 → 400(强度规则与主动改密完全一致)', async () => {
+    const { service, prisma } = createService();
+    const { token } = signSetupToken('u-1', 'test-secret');
+    prisma.user.findUnique.mockResolvedValueOnce(PENDING);
+
+    await expect(
+      service.setInitialPassword({ setupToken: token, newPassword: '12345678' }),
+    ).rejects.toMatchObject({ code: 'VALIDATION_FAILED' });
+    expect(prisma.user.update).not.toHaveBeenCalled();
   });
 });
 

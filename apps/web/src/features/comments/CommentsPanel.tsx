@@ -148,11 +148,6 @@ function CommentCard({
         <span className="text-[11px] text-slate-400">
           {new Date(comment.createdAt).toLocaleString('zh-CN')}
         </span>
-        {comment.status === 'resolved' && (
-          <span className="rounded bg-emerald-50 px-1 text-[10px] text-emerald-700 ring-1 ring-emerald-200">
-            已解决
-          </span>
-        )}
       </div>
 
       {editing ? (
@@ -200,37 +195,25 @@ function CommentCard({
             回复
           </button>
         )}
-        {comment.canResolve && (
-          <button
-            type="button"
-            className="hover:text-slate-600"
-            onClick={() => {
-              update.mutate({
-                commentId: comment.id,
-                status: comment.status === 'resolved' ? 'open' : 'resolved',
-              });
-            }}
-          >
-            {comment.status === 'resolved' ? '重新打开' : '标记已解决'}
+        {/* ⚠️ 「编辑」只认作者本人;「删除」还多一类:该节点的所有者(版务清理)。
+            两者刻意分开 —— 所有者能删别人的评论,但不能改别人说的话。 */}
+        {comment.canEdit && (
+          <button type="button" className="hover:text-slate-600" onClick={() => setEditing(true)}>
+            编辑
           </button>
         )}
         {comment.canDelete && (
-          <>
-            <button type="button" className="hover:text-slate-600" onClick={() => setEditing(true)}>
-              编辑
-            </button>
-            <button
-              type="button"
-              className="hover:text-red-600"
-              onClick={() => {
-                if (window.confirm('删除这条评论?回复会一并删除。')) {
-                  remove.mutate(comment.id);
-                }
-              }}
-            >
-              删除
-            </button>
-          </>
+          <button
+            type="button"
+            className="hover:text-red-600"
+            onClick={() => {
+              if (window.confirm('删除这条评论?回复会一并删除。')) {
+                remove.mutate(comment.id);
+              }
+            }}
+          >
+            删除
+          </button>
         )}
       </div>
     </div>

@@ -78,7 +78,8 @@ function NodeDetailView({ nodeId }: { nodeId: string }) {
     setEditorRef(instance);
   }, []);
 
-  const openCount = comments.data?.openCount ?? 0;
+  // ⚠️ 取的是**评论总数**,不是"待解决数" —— 这个系统里没有"问题"这个概念。
+  const commentCount = comments.data?.total ?? 0;
   const tabs = useMemo(
     () =>
       [
@@ -86,9 +87,12 @@ function NodeDetailView({ nodeId }: { nodeId: string }) {
           key: 'outline' as const,
           label: `目录${outline.length > 0 ? ` (${String(outline.length)})` : ''}`,
         },
-        { key: 'comments' as const, label: `评论${openCount > 0 ? ` (${String(openCount)})` : ''}` },
+        {
+          key: 'comments' as const,
+          label: `评论${commentCount > 0 ? ` (${String(commentCount)})` : ''}`,
+        },
       ] satisfies { key: RightTab; label: string }[],
-    [outline.length, openCount],
+    [outline.length, commentCount],
   );
 
   if (detail.isPending || content.isPending) {
@@ -158,7 +162,9 @@ function NodeDetailView({ nodeId }: { nodeId: string }) {
                 />
               ) : (
                 <h1
-                  className={`text-2xl font-semibold text-slate-900 ${
+                  // `text-xl`(20px)而不是 `text-2xl`(24px):下面那行元信息是 12px,
+                  // 24px 配 12px 落差太大,标题像是"贴"在页面上而不是长在页面里。
+                  className={`text-xl font-semibold text-slate-900 ${
                     canEdit ? 'cursor-text rounded-md px-2 py-1 hover:bg-slate-50' : 'px-2 py-1'
                   }`}
                   title={canEdit ? '点击可改名' : undefined}

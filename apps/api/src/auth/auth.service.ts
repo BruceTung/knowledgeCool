@@ -1,6 +1,9 @@
 import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import {
   type AuthUser,
+  type InitialPasswordInput,
+  type LoginResponse,
   type MeResponse,
   type MyScope,
   checkPasswordStrength,
@@ -16,8 +19,9 @@ import type { LoginDto } from './dto/login.dto.js';
 import type { SetupDto } from './dto/setup.dto.js';
 import { PasswordService } from './password.service.js';
 import { SessionService, type SessionMeta } from './session.service.js';
+import { signSetupToken, verifySetupToken } from './setup-token.js';
 
-/** 对外可见的用户字段。**不含** passwordHash。 */
+/** 对外可见的用户字段。**不含** passwordHash,也不含 mustChangePassword。 */
 const USER_PUBLIC_SELECT = {
   id: true,
   employeeNo: true,
@@ -25,21 +29,47 @@ const USER_PUBLIC_SELECT = {
   avatarColor: true,
   isSuperAdmin: true,
   status: true,
-  mustChangePassword: true,
 } satisfies Prisma.UserSelect;
 
-/** 认证内部才需要的字段(多一个密码哈希)。 */
+/** 认证内部才需要的字段(多一个密码哈希 + 待改密标记)。 */
 const USER_AUTH_SELECT = {
   ...USER_PUBLIC_SELECT,
   passwordHash: true,
+  mustChangePassword: true,
 } satisfies Prisma.UserSelect;
 
 type UserRow = Prisma.UserGetPayload<{ select: typeof USER_PUBLIC_SELECT }>;
+
+/**
+ * 守卫用的用户画像 —— 比 `AuthUser` 多一个"是否待改密"。
+ *
+ * ⚠️ 这个字段**只在服务端有意义**:能拿到 `AuthUser` 的前端,
+ * 手里必然已经有会话,而首登不发会话 —— 所以前端看到的它恒为 false。
+ * 放到 `AuthUser` 里等于给前端一个永远为假的字段。
+ */
+export interface SessionUser extends AuthUser {
+  mustChangePassword: boolean;
+}
 
 export interface IssuedAuth {
   user: AuthUser;
   token: string;
   expiresAt: Date;
+}
+
+/**
+ * 登录的**服务端**结果。
+ *
+ * 为什么不让 service 直接返回 `LoginResponse`:会话 token 只应该走
+ * HttpOnly Cookie,**绝不能出现在响应体里**。把它放在 `session` 这个
+ * 独立字段上,controller 一眼就能看出"这个值不进 JSON"——
+ * 而如果把它塞进 `response` 里,某天有人加个 `console.log(response)` 就漏了。
+ */
+export interface LoginOutcome {
+  /** 要返回给前端的响应体 */
+  response: LoginResponse;
+  /** 只有**真正建立了会话**时才有。首登改密那条路径没有。 */
+  session?: { token: string; expiresAt: Date };
 }
 
 /**
@@ -53,8 +83,9 @@ export interface IssuedAuth {
  * 2. **工号不存在时也跑一次 bcrypt 校验** —— 否则"响应很快"本身就等于
  *    "这个工号没注册",时序侧信道同样能枚举账号。
  * 3. **账号被停用 / 离职时顺手吊销其全部会话** —— status 改掉后,已发的会话不能继续用。
- * 4. **强制改密的拦截在守卫里,不在这里** —— 登录本身**允许**成功(否则用户
- *    连改密页都进不去)。拦截发生在后续每个请求上(§6.1.2)。
+ * 4. **首次登录不建立会话**(v2.4 重做)—— 只签一张 10 分钟的一次性凭证。
+ *    改密之前这个人**没有登录状态**,所以不存在"已登录但未改密"这种
+ *    半登录态;守卫里那套"改密白名单"也一并删掉了(§6.1.2)。
  */
 @Injectable()
 export class AuthService {
@@ -65,6 +96,7 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly passwords: PasswordService,
     private readonly sessions: SessionService,
+    private readonly config: ConfigService,
   ) {}
 
   /** 库中是否已有用户。`/auth/setup` 与前端引导页都靠它判断。 */
@@ -124,10 +156,22 @@ export class AuthService {
   /**
    * 登录。
    *
-   * ⚠️ 登录**允许**在 `mustChangePassword` 为真时成功 —— 否则用户连改密页都进不去。
-   * 真正的拦截在 `AuthGuard` 里(§6.1.2)。
+   * ## ⚠️ 首次登录**不建立会话**(v2.4 重做)
+   *
+   * `mustChangePassword` 为真时:不写 Cookie、不产生 `sessions` 行,
+   * 只返回一个一次性 `setupToken` 让前端去走改密页。
+   *
+   * 旧实现是"先发会话、再由守卫拦住所有业务接口",结果是这个人卡在一个
+   * **半登录态**:进不去系统,也退不出去(连登录页都回不去)。
+   * 用户的原话:「用户第一次登录,不应该记录登录状态,
+   * 重置完密码以后,应该要用户重新登录才对」。
+   *
+   * 现在改密之前**没有登录状态**可言 —— 只有一张 10 分钟的一次性凭证。
+   *
+   * 顺带的好处:守卫里那套"改密白名单"整个不需要了
+   * (见 `AuthGuard` —— 不再存在"已登录但未改密"这种状态)。
    */
-  async login(input: LoginDto, meta: SessionMeta): Promise<IssuedAuth> {
+  async login(input: LoginDto, meta: SessionMeta): Promise<LoginOutcome> {
     const user = await this.prisma.user.findUnique({
       where: { employeeNo: input.employeeNo },
       select: USER_AUTH_SELECT,
@@ -142,6 +186,32 @@ export class AuthService {
       throw new AppError('UNAUTHORIZED', '工号或密码不正确');
     }
 
+    if (user.mustChangePassword) {
+      const { token, expiresAt } = signSetupToken(user.id, this.requireSessionSecret());
+
+      await recordAudit(this.prisma, {
+        actorId: user.id,
+        action: 'auth.login',
+        targetType: 'user',
+        targetId: user.id,
+        detail: { employeeNo: user.employeeNo, passwordChangeRequired: true },
+        ip: meta.ip ?? null,
+      });
+
+      // 刻意**不**记 `lastLoginAt`:他还没进过系统。
+      // 那个字段的语义是"上次真正进入系统的时间",把"验证了初始密码"算进去
+      // 会让"这批人到底有没有登录过"这个问题失去意义。
+      return {
+        response: {
+          kind: 'password-change-required',
+          employeeNo: user.employeeNo,
+          name: user.name,
+          setupToken: token,
+          setupTokenExpiresAt: expiresAt.toISOString(),
+        },
+      };
+    }
+
     const session = await this.sessions.issue(user.id, meta);
     await this.touchLastLogin(user.id);
     await recordAudit(this.prisma, {
@@ -152,18 +222,81 @@ export class AuthService {
       detail: { employeeNo: user.employeeNo },
       ip: meta.ip ?? null,
     });
-    return { user: toAuthUser(user), token: session.token, expiresAt: session.expiresAt };
+    return {
+      response: {
+        kind: 'session',
+        user: toAuthUser(user),
+        expiresAt: session.expiresAt.toISOString(),
+      },
+      // token 走这个字段 → controller 拿去写 Cookie,**不进响应体**
+      session: { token: session.token, expiresAt: session.expiresAt },
+    };
   }
 
   /**
-   * 改密(首登强制改密与主动改密共用)。
+   * 首次改密 —— 凭登录时拿到的一次性凭证,**不要当前密码**。
+   *
+   * 不要当前密码是刻意的:登录那一步已经用初始密码验过身份,再要一次是重复。
+   * 凭证本身一次性、10 分钟过期、只对签发它的用户有效。
+   *
+   * 三道校验,少一道都不行:
+   *   1. 凭证签名有效且未过期
+   *   2. 用户**仍然**处于"需要改密"状态 —— 已经改过就不该再用
+   *      (这就是"一次性"的落地方式:不需要服务端记录"用过了",
+   *       状态本身已经把凭证作废了)
+   *   3. 新密码过强度校验
+   *
+   * ⚠️ **改完不建立会话。** 用户必须用新密码重新登录一次 ——
+   * 这样"我设的密码真的能用"是当场验证的,而不是等他下次来才发现打错了。
+   */
+  async setInitialPassword(input: InitialPasswordInput): Promise<void> {
+    const userId = verifySetupToken(input.setupToken, this.requireSessionSecret());
+    if (userId === null) {
+      throw new AppError('UNAUTHORIZED', '改密凭证无效或已过期,请重新登录');
+    }
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, status: true, mustChangePassword: true },
+    });
+    if (user === null || user.status !== 'active') {
+      throw new AppError('UNAUTHORIZED', '账号状态异常,请联系管理员');
+    }
+    if (!user.mustChangePassword) {
+      throw new AppError('UNAUTHORIZED', '密码已经修改过,请直接用新密码登录');
+    }
+
+    const problem = checkPasswordStrength(input.newPassword);
+    if (problem !== null) throw AppError.validation(problem);
+
+    const passwordHash = await this.passwords.hash(input.newPassword);
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { passwordHash, mustChangePassword: false },
+    });
+
+    await recordAudit(this.prisma, {
+      actorId: userId,
+      action: 'auth.password.change',
+      targetType: 'user',
+      targetId: userId,
+      detail: { forced: true, method: 'initial-token' },
+    });
+  }
+
+  /**
+   * 已登录用户主动改密。
+   *
+   * ⚠️ 与首次改密(`setInitialPassword`)是**两条不同的路径**:
+   *   - 这条:已登录 + 提供当前密码(会话可能被他人接管,多要一次密码能挡住一部分)
+   *   - 首登:未登录 + 提供一次性凭证(见 `setInitialPassword`)
    *
    * 三条约束:
-   *   - 必须提供当前密码(会话可能被接管)
+   *   - 必须提供当前密码
    *   - 新密码要过 `checkPasswordStrength`(≥8 位 + 字母数字)
-   *   - 新密码不能与当前密码相同(否则"强制改密"等于没改)
+   *   - 新密码不能与当前密码相同
    *
-   * **不吊销其他会话**:首登改密后如果被踢回登录页,用户会以为是故障。
+   * **不吊销其他会话**:用户主动改密之后如果被踢回登录页,他会以为是故障。
    * 要"改密即下线所有设备"是一个独立的安全开关,不放在这里顺手做掉。
    */
   async changePassword(userId: string, input: ChangePasswordDto): Promise<void> {
@@ -218,10 +351,24 @@ export class AuthService {
   }
 
   /**
+   * 只吊销会话,不写审计。
+   *
+   * 用途:`AuthGuard` 的纵深防御分支 —— 遇到"有会话但还待改密"的异常状态时
+   * 把会话清掉。那条路径**不是**用户主动登出,记成 `auth.logout` 会让审计里
+   * 多出一批莫名其妙的登出记录,反而掩盖真实情况。
+   */
+  async revokeSession(token: string): Promise<void> {
+    await this.sessions.revoke(token);
+  }
+
+  /**
    * 由会话 token 还原出当前用户。守卫每个请求都会走这里。
    * 返回 null 一律按「未登录」处理。
+   *
+   * 返回的是 `SessionUser`(比 `AuthUser` 多一个 `mustChangePassword`)——
+   * 守卫要用它做纵深防御检查,但**不会**把这个字段交给前端。
    */
-  async resolveUserBySessionToken(token: string): Promise<AuthUser | null> {
+  async resolveUserBySessionToken(token: string): Promise<SessionUser | null> {
     const session = await this.sessions.resolve(token);
     if (session === null) return null;
 
@@ -237,7 +384,7 @@ export class AuthService {
       return null;
     }
 
-    return toAuthUser(user);
+    return { ...toAuthUser(user), mustChangePassword: user.mustChangePassword };
   }
 
   /**
@@ -308,6 +455,23 @@ export class AuthService {
     this.dummyHash ??= this.passwords.hash('kc::timing-equalization::not-a-real-password');
     return this.dummyHash;
   }
+
+  /**
+   * 取凭证签名密钥。**未配置时不降级,直接报错。**
+   *
+   * 用空字符串当密钥去签,等于任何人都能伪造凭证 ——
+   * 那比"首登改密暂时不可用"严重得多。宁可让它显式失败、让运维去补配置。
+   */
+  private requireSessionSecret(): string {
+    const secret = this.config.get<string>('sessionSecret') ?? '';
+    if (secret === '') {
+      throw new AppError(
+        'INTERNAL_ERROR',
+        '服务端未配置 SESSION_SECRET,首次改密暂时不可用,请联系管理员',
+      );
+    }
+    return secret;
+  }
 }
 
 function toAuthUser(row: UserRow): AuthUser {
@@ -318,7 +482,6 @@ function toAuthUser(row: UserRow): AuthUser {
     avatarColor: row.avatarColor,
     isSuperAdmin: row.isSuperAdmin,
     status: toUserStatus(row.status),
-    mustChangePassword: row.mustChangePassword,
   };
 }
 

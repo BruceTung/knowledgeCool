@@ -54,6 +54,20 @@ function kindBadge(node: OrgTreeNode): string {
   return '页';
 }
 
+/**
+ * 行内操作按钮的统一规格。
+ *
+ * ⚠️ 这几个按钮原来是**各写各的** —— 有的带 `text-[11px]`,有的不写
+ * (于是继承父级的 14px),于是一行里 6 个按钮出现两种字号。
+ * 这就是「图标、字体大小、字样都不对称」最直接的来源(用户 2026-09-27 反馈)。
+ *
+ * 收敛成常量之后,新增按钮不会再各写一份规格。
+ */
+const ROW_ACTION_CLASS =
+  'flex h-5 w-5 flex-none items-center justify-center rounded text-[13px] text-slate-400 hover:bg-slate-100 hover:text-slate-700';
+const ROW_ACTION_DANGER_CLASS =
+  'flex h-5 w-5 flex-none items-center justify-center rounded text-[13px] text-slate-400 hover:bg-red-50 hover:text-red-600';
+
 export function OrgTreePanel({
   tree,
   scopes,
@@ -207,7 +221,9 @@ export function OrgTreePanel({
     const nodeManageable = manageable.has(node.id) || (isSuperAdmin && node.depth === 0);
 
     const rowClass = [
-      'group relative flex items-center gap-1 rounded-md pr-1 text-sm transition-colors',
+      // `h-7` 是为了**统一行高**:原来靠内容自己撑开,带展开箭头的行、
+      // 带角标的行、带重命名输入框的行高度各不相同,一列看过去就是歪的。
+      'group relative flex h-7 items-center gap-1 rounded-md pr-1 text-[13px] transition-colors',
       isActive ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:bg-white/70',
       forbidden && dragId !== null ? 'opacity-40' : '',
       target === 'into' ? 'ring-2 ring-blue-400' : '',
@@ -221,7 +237,15 @@ export function OrgTreePanel({
           tabIndex={0}
           draggable={nodeEditable && renamingId !== node.id}
           className={rowClass}
-          style={{ paddingLeft: `${String((node.depth > 2 ? 2 : node.depth) * 12 + 4)}px` }}
+          style={{
+            // ⚠️ 缩进必须**跟着 depth 走**。
+            //
+            // 原来这里写的是 `(node.depth > 2 ? 2 : node.depth) * 12 + 4` ——
+            // depth 超过 2 就被钳成 2,于是「第三级组下面的页面」与它的父节点
+            // 缩进完全相同,一列看下去看不出谁属于谁(用户 2026-09-27 反馈)。
+            // 现在只在一个很深的层级封顶,纯粹是为了防止整行被推到看不见。
+            paddingLeft: `${String(Math.min(node.depth, 8) * 13 + 6)}px`,
+          }}
           onClick={() => void navigate(`/n/${node.id}`)}
           onKeyDown={(event) => {
             if (event.key === 'Enter') void navigate(`/n/${node.id}`);
@@ -282,7 +306,7 @@ export function OrgTreePanel({
           )}
 
           <span
-            className={`flex h-4 w-4 flex-none items-center justify-center rounded text-[9px] ${
+            className={`flex h-4 w-4 flex-none items-center justify-center rounded text-[10px] font-medium ${
               node.depth === 0
                 ? 'bg-blue-50 text-blue-700'
                 : node.kind === 'space'
@@ -311,12 +335,15 @@ export function OrgTreePanel({
             </span>
           )}
 
-          {node.openCommentCount > 0 && renamingId !== node.id && (
+          {node.commentCount > 0 && renamingId !== node.id && (
             <span
-              className="flex-none rounded-full bg-amber-50 px-1.5 text-[10px] text-amber-700 ring-1 ring-amber-200"
-              title={`${String(node.openCommentCount)} 条未解决评论`}
+              // ⚠️ 颜色刻意是**中性灰**,不是琥珀色。
+              // 琥珀色等于暗示"有待处理的事",而评论只是评论 ——
+              // 这个角标数的是"有几条评论",不是"有几个待解决问题"。
+              className="flex-none rounded-full bg-slate-100 px-1.5 text-[10px] tabular-nums text-slate-500"
+              title={`${String(node.commentCount)} 条评论`}
             >
-              {node.openCommentCount}
+              {node.commentCount}
             </span>
           )}
 
@@ -327,13 +354,13 @@ export function OrgTreePanel({
           )}
 
           {renamingId !== node.id && (
-            <span className="flex flex-none items-center opacity-0 transition-opacity group-hover:opacity-100">
+            <span className="flex flex-none items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
               {canCreateUnder(node) && (
                 <>
                   <button
                     type="button"
                     title="在此新建页面"
-                    className="h-5 w-5 rounded text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                    className={ROW_ACTION_CLASS}
                     onClick={(event) => {
                       event.stopPropagation();
                       handleCreate(node.id, 'document');
@@ -344,7 +371,7 @@ export function OrgTreePanel({
                   <button
                     type="button"
                     title="在此新建子空间 / 组"
-                    className="h-5 w-5 rounded text-[11px] text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                    className={ROW_ACTION_CLASS}
                     onClick={(event) => {
                       event.stopPropagation();
                       handleCreate(node.id, 'space');
@@ -358,7 +385,7 @@ export function OrgTreePanel({
                 <button
                   type="button"
                   title="权限设置"
-                  className="h-5 w-5 rounded text-[11px] text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                  className={ROW_ACTION_CLASS}
                   onClick={(event) => {
                     event.stopPropagation();
                     onOpenGrants(node.id, node.title);
@@ -371,7 +398,7 @@ export function OrgTreePanel({
                 <button
                   type="button"
                   title="成员(组织归属):这个节点下都有谁"
-                  className="h-5 w-5 rounded text-[11px] text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                  className={ROW_ACTION_CLASS}
                   onClick={(event) => {
                     event.stopPropagation();
                     onOpenMembers(node.id, node.title);
@@ -384,7 +411,7 @@ export function OrgTreePanel({
                 <button
                   type="button"
                   title="重命名"
-                  className="h-5 w-5 rounded text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                  className={ROW_ACTION_CLASS}
                   onClick={(event) => {
                     event.stopPropagation();
                     setRenamingId(node.id);
@@ -397,7 +424,7 @@ export function OrgTreePanel({
                 <button
                   type="button"
                   title="移入回收站"
-                  className="h-5 w-5 rounded text-slate-400 hover:bg-red-50 hover:text-red-600"
+                  className={ROW_ACTION_DANGER_CLASS}
                   onClick={(event) => {
                     event.stopPropagation();
                     handleDelete(node);
@@ -421,15 +448,15 @@ export function OrgTreePanel({
 
   return (
     <div className="flex h-full w-72 flex-none flex-col border-r border-slate-200 bg-slate-50">
-      <div className="flex flex-none items-center gap-2 px-3 py-2">
-        <span className="flex-1 text-[11px] font-medium tracking-wide text-slate-400">
+      <div className="flex flex-none items-center gap-2 border-b border-slate-200 px-3 py-2">
+        <span className="flex-1 text-xs font-medium text-slate-500">
           组织结构 · {countNodes(nodes)}
         </span>
         <button
           type="button"
           title="新建页面(不挂在任何部门下,只有管理员可以)"
           disabled={createNode.isPending}
-          className="rounded px-1.5 text-xs text-slate-500 hover:bg-white hover:text-slate-800 disabled:opacity-50"
+          className="rounded px-1.5 py-0.5 text-xs text-slate-500 hover:bg-white hover:text-slate-800 disabled:opacity-50"
           onClick={() => handleCreate(null, 'document')}
         >
           + 顶层
@@ -475,7 +502,7 @@ export function OrgTreePanel({
         )}
       </div>
 
-      <div className="flex-none space-y-1 border-t border-slate-200 p-2">
+      <div className="flex-none space-y-0.5 border-t border-slate-200 p-2">
         <button
           type="button"
           className="block w-full rounded-md px-2 py-1 text-left text-xs text-slate-500 hover:bg-white hover:text-slate-800"
@@ -493,7 +520,7 @@ export function OrgTreePanel({
         <ErrorNote
           error={moveNode.error ?? createNode.error ?? updateNode.error ?? deleteNode.error}
         />
-        <p className="px-2 text-[10px] leading-relaxed text-slate-400">
+        <p className="px-2 pt-1 text-[11px] leading-relaxed text-slate-400">
           可直接拖拽调整层级与顺序:上/下四分之一是"排到前/后",中间是"成为子节点"。
           悬停节点行可见 ⚙(权限 · 谁能改)与 ☰(成员 · 归属在哪)。
         </p>

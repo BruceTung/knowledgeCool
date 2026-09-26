@@ -5,14 +5,14 @@ import { BCRYPT_MAX_PASSWORD_BYTES } from '../password.service.js';
 import type { ChangePasswordInput } from '@knowledgecool/shared';
 
 /**
- * 改密请求(首次强制改密与主动改密共用)。
+ * **已登录用户**主动改密。
  *
- * ⚠️ 这里**不校验新密码的强度** —— 那条规则在 `checkPasswordStrength`
- * (shared)里,由 service 调用。理由:D + T + O 各写一份正则迟早漂移,
- * 而"两处规则不一致"的表现是**某个入口能设出不合规的密码**,不会报错。
+ * ⚠️ 首次强制改密**不走这里** —— 它走 `InitialPasswordDto`(凭一次性凭证,
+ * 不要当前密码)。两条路径分开是刻意的:它们的身份依据完全不同,
+ * 混在一个 DTO 里会让"首登到底要不要当前密码"变成一个要靠 if 分支回答的问题。
  *
- * `currentPassword` 必填,即便是首登强制改也必须提供:
- * 会话有可能被他人接管,多要一次密码能挡住一部分。
+ * `currentPassword` 必填的理由是**会话可能被他人接管**(比如电脑没锁屏),
+ * 多要一次密码能挡住一部分。
  */
 export class ChangePasswordDto implements ChangePasswordInput {
   @IsString()

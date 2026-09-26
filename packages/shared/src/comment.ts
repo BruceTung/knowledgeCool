@@ -5,14 +5,17 @@
  * 原因见 DESIGN.md §9 的 M5 说明 —— 锚点绑在正文结构上,
  * 阶段二正文模型一改锚点全废。所以列刻意**不加**,
  * 免得后来人顺手实现一个"半锚定"版本。
+ *
+ * ⚠️ **评论就是评论,不是"问题单"。**(2026-09-27 用户明确纠正)
+ *
+ * 此前这里有一套 `open` / `resolved` 状态,界面上表现为「标记已解决」按钮
+ * 与节点树上的「未解决评论」角标 —— 那等于把评论当缺陷跟踪用。
+ * 用户的原话是:「评论只是评论,不是问题,你不要擅自赋予评论额外的含义」。
+ *
+ * 那套语义已**整体移除**(连数据库列一起),角标改为显示**评论总数**。
+ * 不要再以"将来可能会用"为理由把状态字段加回来 —— 一个没人要求的状态机
+ * 会让每条评论都背上"它解决了没有"这个问题。
  */
-
-export const COMMENT_STATUSES = ['open', 'resolved'] as const;
-export type CommentStatus = (typeof COMMENT_STATUSES)[number];
-
-export function isCommentStatus(value: unknown): value is CommentStatus {
-  return typeof value === 'string' && (COMMENT_STATUSES as readonly string[]).includes(value);
-}
 
 /** 评论正文长度上限(与数据库列宽无关,是产品约束)。 */
 export const COMMENT_BODY_MAX_LENGTH = 4000;
@@ -23,7 +26,7 @@ export interface CommentAuthor {
   name: string;
   avatarColor: string;
   /**
-   * 已离职 —— 用户明确要求"离职人员在他留下的内容上也要标出来"(v2.2)。
+   * 已离职 —— 离职人员在他留下的内容上也要标出来(v2.2)。
    * 与节点一样:历史记录不抹掉,只在名字旁注明。
    */
   departed: boolean;
@@ -36,11 +39,18 @@ export interface CommentView {
   parentId: string | null;
   author: CommentAuthor;
   body: string;
-  status: CommentStatus;
   createdAt: string;
   updatedAt: string;
-  /** 当前用户能否把它标为已解决(自己的、或该节点的任一祖先所有者)。用于前端显示按钮。 */
-  canResolve: boolean;
+  /**
+   * 我能否改这条的正文 —— **只有作者本人**。
+   *
+   * ⚠️ 它和 `canDelete` 不是一回事:该节点的所有者能删别人的评论(属于版务),
+   * 但**不能改**(改别人的话是篡改他人言论)。
+   * 之前界面上两个按钮共用一个 `canDelete`,结果是所有者能看到「编辑」按钮、
+   * 点了却 403。分开之后按钮与服务端的判定才一致。
+   */
+  canEdit: boolean;
+  /** 我能否删这条 —— 作者本人,或该节点的任一级所有者。 */
   canDelete: boolean;
   replies: CommentView[];
 }
@@ -48,9 +58,8 @@ export interface CommentView {
 /** `GET /nodes/:id/comments` 的响应体。 */
 export interface CommentListResponse {
   nodeId: string;
-  /** 扁平总数(含回复),前端用于页面树角标。 */
+  /** 扁平总数(含回复),前端用于节点树角标。 */
   total: number;
-  openCount: number;
   threads: CommentView[];
 }
 
@@ -61,8 +70,7 @@ export interface CreateCommentInput {
   parentId?: string | null;
 }
 
-/** 编辑正文 / 切换解决状态。 */
+/** 编辑评论正文。 */
 export interface UpdateCommentInput {
-  body?: string;
-  status?: CommentStatus;
+  body: string;
 }

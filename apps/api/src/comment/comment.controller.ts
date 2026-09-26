@@ -71,7 +71,7 @@ export class CommentController {
   }
 
   /**
-   * 一批节点的未解决评论数 —— 节点树角标。
+   * 一批节点的**评论总数** —— 节点树角标。
    *
    * 用查询串而不是路径参数,是因为调用方(树)手里**本来就有**这批 id,
    * 不必为了取角标再要求它按某个"空间"去分组。
@@ -79,7 +79,7 @@ export class CommentController {
   @Get('comment-counts')
   @HttpCode(HttpStatus.OK)
   counts(@Query('ids') ids: string | undefined): Promise<Record<string, number>> {
-    return this.comments.openCounts(parseIdList(ids));
+    return this.comments.commentCounts(parseIdList(ids));
   }
 }
 

@@ -56,7 +56,9 @@ const REQUIRED_CHECKS = [
   'users_status_check',
   'nodes_kind_check',
   'nodes_status_check',
-  'comments_status_check',
+  // ⚠️ 这里**没有** `comments_status_check` —— 评论的 `status` 列(v2.4)已被删除。
+  // 评论就是评论,不是"问题单":那套 open/resolved 的语义连同列一起去掉了。
+  // 详见 DESIGN §8.4 与 `packages/shared/src/comment.ts` 的说明。
 ];
 
 const connectionString = process.env.DATABASE_URL;

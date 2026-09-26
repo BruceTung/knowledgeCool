@@ -183,7 +183,7 @@ export class NodeService {
         where: { nodeId: { in: nodeIds } },
         select: { nodeId: true, userId: true },
       }),
-      this.openCommentCounts(nodeIds),
+      this.commentCounts(nodeIds),
       this.userBriefMap(rows.flatMap((row) => [row.ownerId, row.createdBy])),
     ]);
 
@@ -232,7 +232,7 @@ export class NodeService {
         version: row.version,
         ownerId: row.ownerId,
         ownerName: briefs.get(row.ownerId)?.name ?? '未知',
-        openCommentCount: commentCounts.get(row.id) ?? 0,
+        commentCount: commentCounts.get(row.id) ?? 0,
       })),
       editableNodeIds,
       manageableNodeIds,
@@ -707,13 +707,18 @@ export class NodeService {
       .map((id) => ({ id, title: titles.get(id) ?? '' }));
   }
 
-  /** 批量取未解决评论数。直接查表,不走 CommentService(避免模块环)。 */
-  private async openCommentCounts(nodeIds: readonly string[]): Promise<Map<string, number>> {
+  /**
+   * 批量取**评论总数**。直接查表,不走 CommentService(避免模块环)。
+   *
+   * 数的是"有几条评论",不是"有几个待解决问题" —— 这个系统里没有"问题"
+   * 这个概念(2026-09-27 用户纠正)。原来这里带 `status: 'open'` 过滤。
+   */
+  private async commentCounts(nodeIds: readonly string[]): Promise<Map<string, number>> {
     if (nodeIds.length === 0) return new Map();
 
     const rows = await this.prisma.comment.groupBy({
       by: ['nodeId'],
-      where: { nodeId: { in: [...nodeIds] }, status: 'open' },
+      where: { nodeId: { in: [...nodeIds] } },
       _count: { _all: true },
     });
     return new Map(rows.map((row) => [row.nodeId, row._count._all]));
