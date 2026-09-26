@@ -71,7 +71,8 @@ POSTGRES_PASSWORD=$(openssl rand -hex 24)
 SESSION_SECRET=$(openssl rand -hex 32)
 
 # 3) 对外访问的地址。前端与 API 同源,这里填最终用户看到的地址
-WEB_ORIGIN=http://<服务器IP或域名>:8080
+#    可以写多个,用逗号分隔(例如同时保留内网地址与 localhost 供调试)
+WEB_ORIGIN=http://<服务器IP或域名>
 ```
 
 ### ⚠️ `SESSION_COOKIE_SECURE` 必须和访问协议匹配
@@ -118,6 +119,44 @@ TRASH_PURGE_INTERVAL_HOURS=6
 ---
 
 ## 3. 启动
+
+### ⚠️ 先确认云安全组放行了哪个端口
+
+**这是实际部署时第一个卡住人的地方。** 容器映射了端口 ≠ 公网能访问 ——
+云厂商的**安全组**是另一道闸,和服务器上的 iptables / ufw 都不是一回事,
+而且它只能在云控制台(或云 API)改,**在服务器里改不了**。
+
+本项目的构建服务器(`43.134.60.6`)只放行了 **22 与 80**。从公网侧探测的结果:
+
+| 端口 | 结果 |
+|---|---|
+| 22 | 通(SSH) |
+| 80 | **通** ← 用它 |
+| 8080 | 超时(被安全组丢弃,不是 refuse) |
+| 443 | ECONNREFUSED(没服务在听) |
+
+所以这台机器的 `.env` 里是:
+
+```bash
+WEB_PORT=80
+WEB_ORIGIN=http://43.134.60.6,http://localhost:8080
+```
+
+换一台机器时,先探一遍再定 `WEB_PORT`:
+
+```bash
+# 在**你自己的机器**上跑,不是在服务器上
+curl -m 8 http://<公网IP>/api/v1/health        # 期望 200
+```
+
+> **服务器上 `curl localhost:8080/api/v1/health` 通,不能说明公网能访问。**
+> 那只说明容器活着 —— 公网那道闸在云安全组上。
+> 这两件事很容易混为一谈,而表现是"我明明本地能开,别人打不开"。
+
+> `docker-compose.override.yml`(部署侧、不进仓库)在这台机器上额外映射了
+> 宿主机 `8080:80`,只供**服务器本机与内网**调试 —— 公网访问 8080 是不通的。
+
+### 启动
 
 ```bash
 docker compose up -d --build
