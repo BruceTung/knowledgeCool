@@ -1,13 +1,16 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
+import { BrowserRouter } from 'react-router-dom';
 
 import { App } from './App';
 import './styles.css';
 
 /**
- * 服务端状态交给 TanStack Query(DESIGN.md §7.3)。
- * 本地 UI 状态用 Zustand,等 M2 有真实交互状态再接入 —— 现在引入是空架子。
+ * 服务端状态交给 TanStack Query,本地 UI 状态用 Zustand(DESIGN.md §7.3)。
+ *
+ * Zustand 目前仍未接入:M2 的界面状态(表单草稿、折叠)都由组件自己 useState
+ * 就够了,引入一个全局 store 是空架子。等 M3 的页面树有了跨组件的选中态再上。
  */
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -28,7 +31,9 @@ if (container === null) {
 createRoot(container).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <App />
+      <BrowserRouter>
+        <App />
+      </BrowserRouter>
     </QueryClientProvider>
   </StrictMode>,
 );

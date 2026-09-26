@@ -39,3 +39,12 @@ export interface CredentialsInput {
 export interface SetupInput extends CredentialsInput {
   name: string;
 }
+
+/**
+ * 权限判定所需的「操作者」最小画像。
+ *
+ * 刻意只取这两个字段:服务端做权限检查时不需要更多,而且单测可以直接
+ * 构造一个字面量对象,不必伪造整个 `AuthUser`(`AuthUser` 天然满足本类型)。
+ */
+export type Actor = Pick<AuthUser, 'id' | 'isSuperAdmin'>;
+

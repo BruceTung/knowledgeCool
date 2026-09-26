@@ -345,6 +345,17 @@ docContent["p-req"] = {
 
 var ROLECOLOR = {admin:"amber",editor:"teal",commenter:"purple",viewer:"blue"};
 
+// 页面级规则的选项。注意最后一项目:DESIGN.md §5.3 v1.5 定稿 ——
+// 界面里的「拒绝访问」写的是 deny=true(沿链立即短路、下层无法推翻),
+// 而不是 role=none(那个可被更具体的层覆盖,阶段一界面不暴露)。
+var RULE_ROLES = ["editor","commenter","viewer"];
+function ruleOptions(current){
+  return RULE_ROLES.map(function(x){
+      return '<option value="'+x+'"'+(x===current?" selected":"")+'>'+ROLE[x]+'</option>';
+    }).join("")
+    + '<option value="deny"'+(current==="deny"?" selected":"")+'>拒绝访问(deny)</option>';
+}
+
 /* ============ 状态 ============ */
 var S = {
   authed:false,
@@ -359,7 +370,7 @@ var S = {
   cmdkQ:"",
   cmdkIdx:0,
   collab:false,
-  perm:{inherit:true,rules:[{s:"陈默",t:"user",r:"editor"},{s:"设计部",t:"group",r:"commenter"}]},
+  perm:{rules:[{s:"陈默",t:"user",r:"editor",deny:false},{s:"设计部",t:"group",r:"commenter",deny:false}]},
   share:{on:true,scope:"space",pwd:false,expire:"never"}
 };
 
@@ -812,10 +823,8 @@ function modalPerm(){
       return '<div class="rulerow">'
         + '<div class="av '+(r.t==="group"?"purple":"teal")+'">'+esc(r.s.slice(0,1))+'</div>'
         + '<div class="g"><div class="n">'+esc(r.s)+'</div><div class="s">'+(r.t==="user"?"单个用户":"部门 / 用户组")+'</div></div>'
-        + '<select data-act="prule" data-i="'+i+'" style="max-width:130px">'
-          + Object.keys(ROLE).filter(function(x){return x!=="owner";}).map(function(x){
-              return '<option value="'+x+'"'+(r.r===x?" selected":"")+'>'+ROLE[x]+'</option>';
-            }).join("")
+        + '<select data-act="prule" data-i="'+i+'" style="max-width:150px">'
+          + ruleOptions(r.deny ? "deny" : r.r)
         + '</select>'
         + '<button class="btn sm ghost" style="color:var(--red)" data-act="prm-rule" data-i="'+i+'">移除</button>'
       + '</div>';
@@ -824,18 +833,12 @@ function modalPerm(){
     + '<div class="mh"><span style="color:var(--tx3)">'+IC.doc+'</span><h2>权限设置 · '+esc(p?p.title:"")+'</h2>'
       + '<button class="btn ghost sm" data-act="close-modal">✕</button></div>'
     + '<div class="mb">'
-      + '<div class="row" style="justify-content:space-between;margin-bottom:14px">'
-        + '<div><div style="font-size:12.5px">继承父页面权限</div><div class="hint">关闭后本页只按下面的规则判定</div></div>'
-        + '<div class="sw'+(S.perm.inherit?" on":"")+'" data-act="perm-inherit"></div>'
-      + '</div>'
       + '<div class="field"><label>有效权限推导链</label>'+chain+'</div>'
       + '<div class="field"><label>显式规则</label>'
+        + '<div class="hint" style="margin-bottom:10px">「拒绝访问」写的是 <code>deny=true</code> —— 沿链立即短路,下层页面无法推翻。只想「本页不给、子页可再授」是另一回事(接口层用 <code>role=none</code>,阶段一界面不暴露)。</div>'
         + '<div class="row" style="margin-bottom:10px">'
           + '<input id="pm-subject" placeholder="输入姓名或部门,如:陈默 / 技术部" style="flex:1">'
-          + '<select id="pm-role" style="max-width:120px">'
-            + '<option value="editor">编辑者</option><option value="commenter">评论者</option>'
-            + '<option value="viewer">只读成员</option><option value="none">拒绝访问</option>'
-          + '</select>'
+          + '<select id="pm-role" style="max-width:150px">'+ruleOptions("editor")+'</select>'
           + '<button class="btn" data-act="pw-add">添加</button>'
         + '</div>'
         + '<div style="border-top:1px solid var(--bd)">'+rules+'</div>'
@@ -1063,14 +1066,23 @@ document.addEventListener("click",function(e){
       S.pageId=t.getAttribute("data-id");S.view="doc";S.cmdk=false;render();break;
     case "collab":
       S.collab=!S.collab;render();startCollab();break;
-    case "perm-inherit":
-      S.perm.inherit=!S.perm.inherit;renderModal();break;
     case "pw-add":
       var sub=$("#pm-subject").value.trim();
       if(!sub){tip("请输入姓名或部门");break;}
-      var rl=$("#pm-role").value;
-      S.perm.rules.push({s:sub,t:sub.indexOf("部")>0?"group":"user",r:rl});
-      renderModal();tip("规则已添加,保存后生效");break;
+      var picked=$("#pm-role").value;
+      S.perm.rules.push({
+        s:sub,
+        t:sub.indexOf("部")>0?"group":"user",
+        // 「拒绝访问」落到数据上是 role=none + deny=true:
+        // 前者是取值合法性,后者才是「绝对否决」这个语义(DESIGN §5.3 v1.5)
+        r:picked==="deny"?"none":picked,
+        deny:picked==="deny"
+      });
+      renderModal();
+      tip(picked==="deny"
+        ? "已添加「拒绝访问」—— 写入的是 deny=true,下层页面无法推翻"
+        : "规则已添加,保存后生效");
+      break;
     case "prm-rule":
       S.perm.rules.splice(parseInt(t.getAttribute("data-i"),10),1);renderModal();break;
     case "save-perm":
@@ -1142,7 +1154,12 @@ document.addEventListener("change",function(e){
     tip("已更新 "+u.name+" 的空间角色为「"+ROLE[t.value]+"」");render();
   }
   if(t.getAttribute&&t.getAttribute("data-act")==="prule"){
-    S.perm.rules[parseInt(t.getAttribute("data-i"),10)].r=t.value;
+    var edited=S.perm.rules[parseInt(t.getAttribute("data-i"),10)];
+    if(edited){
+      edited.r = t.value==="deny" ? "none" : t.value;
+      edited.deny = t.value==="deny";
+    }
+    renderModal();
   }
   if(t.getAttribute&&t.getAttribute("data-act")==="share-scope")S.share.scope=t.value;
 });

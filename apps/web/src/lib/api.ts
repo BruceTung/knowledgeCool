@@ -43,12 +43,17 @@ export function isApiErrorBody(value: unknown): value is ApiErrorBody {
  *
  * `credentials: 'include'` 是必须的 —— 会话走 HttpOnly Cookie(§6.1),
  * 而前后端在开发期不同端口,不带这个字段浏览器不会带 Cookie。
+ *
+ * ⚠️ 展开顺序很重要:`...init` 必须在 `headers` **之前**。
+ * 反过来写的话,`init.headers` 会把整个合并后的 headers 覆盖掉,
+ * `Accept: application/json` 就悄悄丢了 —— 这是个不会报错、
+ * 只在特定服务端才发作的坑。
  */
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
+    ...init,
     credentials: 'include',
     headers: { Accept: 'application/json', ...init?.headers },
-    ...init,
   });
 
   if (response.status === 204) {
@@ -69,4 +74,26 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
   }
 
   return payload as T;
+}
+
+/**
+ * 发送带 JSON 请求体的写操作。
+ *
+ * 写操作一律显式走这里,而不是让每个调用点自己拼 `method` / `headers` / `body` ——
+ * 那样总有一天会漏掉 `Content-Type`,而 Express 收到没有该头的 body 时
+ * 不会解析,`@Body()` 拿到的是 undefined,报错信息还很难懂。
+ */
+export async function apiSend<T>(
+  method: 'POST' | 'PATCH' | 'PUT' | 'DELETE',
+  path: string,
+  body?: unknown,
+): Promise<T> {
+  if (body === undefined) {
+    return apiFetch<T>(path, { method });
+  }
+  return apiFetch<T>(path, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
 }

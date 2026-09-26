@@ -23,13 +23,16 @@ const ACTIVE_USER = {
 
 function createService(overrides: { userCount?: number } = {}) {
   const prisma = {
-    user: { count: vi.fn(), findUnique: vi.fn(), create: vi.fn() },
+    // update 是服务写 last_login_at 用的。桩必须跟着服务走 ——
+    // 少了它,服务里那次写会以 TypeError 崩掉,而不是"静默失败"。
+    user: { count: vi.fn(), findUnique: vi.fn(), create: vi.fn(), update: vi.fn() },
     spaceMember: { findMany: vi.fn() },
     $transaction: vi.fn(),
   };
   prisma.user.count.mockResolvedValue(overrides.userCount ?? 0);
   prisma.user.findUnique.mockResolvedValue(null);
   prisma.user.create.mockResolvedValue(ACTIVE_USER);
+  prisma.user.update.mockResolvedValue(ACTIVE_USER);
   prisma.spaceMember.findMany.mockResolvedValue([]);
   // 事务桩:把同一套桩当 tx 传进回调,便于断言事务内的行为
   prisma.$transaction.mockImplementation(async (cb: (tx: unknown) => unknown) => cb(prisma));
@@ -256,5 +259,41 @@ describe('AuthService.isInitialized', () => {
   it('有用户 → true', async () => {
     const { service } = createService({ userCount: 2 });
     await expect(service.isInitialized()).resolves.toBe(true);
+  });
+});
+
+describe('last_login_at 写入(此前是死字段)', () => {
+  it('登录成功后写入 lastLoginAt', async () => {
+    const { service, prisma } = createService();
+    prisma.user.findUnique.mockResolvedValueOnce(ACTIVE_USER);
+
+    await service.login({ email: ACTIVE_USER.email, password: 'right' }, {});
+
+    expect(prisma.user.update).toHaveBeenCalledTimes(1);
+    const call = prisma.user.update.mock.calls[0]?.[0];
+    expect(call.where).toEqual({ id: 'u-1' });
+    expect(call.data.lastLoginAt).toBeInstanceOf(Date);
+  });
+
+  it('首次初始化也写入 —— 初始化本身就是一次登录', async () => {
+    const { service, prisma } = createService({ userCount: 0 });
+
+    await service.setup(
+      { email: 'admin@example.com', name: '管理员', password: 'a-strong-password' },
+      {},
+    );
+
+    expect(prisma.user.update).toHaveBeenCalledTimes(1);
+  });
+
+  it('写失败不影响登录成功 —— 它只是审计元数据,不该把一次正常登录变成 500', async () => {
+    const { service, prisma, sessions } = createService();
+    prisma.user.findUnique.mockResolvedValueOnce(ACTIVE_USER);
+    prisma.user.update.mockRejectedValueOnce(new Error('数据库写失败'));
+
+    await expect(
+      service.login({ email: ACTIVE_USER.email, password: 'right' }, {}),
+    ).resolves.toBeDefined();
+    expect(sessions.issue).toHaveBeenCalledTimes(1);
   });
 });

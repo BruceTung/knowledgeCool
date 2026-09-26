@@ -1,52 +1,85 @@
-import { useQuery } from '@tanstack/react-query';
+import type { ReactNode } from 'react';
+import { Navigate, Route, Routes } from 'react-router-dom';
 
-import type { HealthResponse } from '@knowledgecool/shared';
-
-import { apiFetch } from './lib/api';
+import { ErrorNote, FullScreenNote } from './components/ui';
+import { isUnauthorized, useMe, useSetupState } from './features/auth/queries';
+import { AppLayout } from './routes/AppLayout';
+import { LoginPage } from './routes/LoginPage';
+import { MembersPage } from './routes/MembersPage';
+import { SetupPage } from './routes/SetupPage';
+import { SpaceOverviewPage } from './routes/SpaceOverviewPage';
+import { SpacesHome } from './routes/SpacesHome';
 
 /**
- * M1 的占位首页。
+ * 路由表(DESIGN.md §7.2)。
  *
- * 刻意做成「真的去打后端」而不是一张静态图:
- * 它一次性验证了整条链路 —— Vite 代理 → NestJS 全局前缀 → 健康检查接口 → 共享类型。
- * 阶段一的主工作面(页面树 + 编辑器 + 右栏)从 M2 起逐步替换掉这里。
+ * M2 落地:`/setup`、`/login`、`/spaces`、`/s/:spaceId`(概览)、`/s/:spaceId/members`。
+ * M3 起 `/s/:spaceId` 会换成「页面树 + 编辑器」,但那只换组件、不动路由结构。
+ *
+ * `/setup` 与 `/login` 刻意放在外层(不套 RequireAuth)——
+ * 它们存在的意义就是「还没登录」这个状态,套上守卫会变成死循环重定向。
  */
 export function App() {
-  const health = useQuery({
-    queryKey: ['health'],
-    queryFn: () => apiFetch<HealthResponse>('/health'),
-    retry: false,
-  });
-
   return (
-    <main className="flex min-h-full items-center justify-center bg-slate-50 p-8">
-      <section className="w-full max-w-lg rounded-xl border border-slate-200 bg-white p-8 shadow-sm">
-        <h1 className="text-2xl font-semibold text-slate-900">知源 KnowledgeCool</h1>
-        <p className="mt-1 text-sm text-slate-500">内网自托管 · 企业内部知识库</p>
+    <Routes>
+      <Route path="/setup" element={<SetupPage />} />
+      <Route path="/login" element={<LoginPage />} />
 
-        <div className="mt-6 rounded-lg bg-slate-50 p-4 text-sm">
-          <div className="font-medium text-slate-700">后端连通性</div>
+      <Route
+        element={
+          <RequireAuth>
+            <AppLayout />
+          </RequireAuth>
+        }
+      >
+        <Route path="/" element={<Navigate to="/spaces" replace />} />
+        <Route path="/spaces" element={<SpacesHome />} />
+        <Route path="/s/:spaceId" element={<SpaceOverviewPage />} />
+        <Route path="/s/:spaceId/members" element={<MembersPage />} />
+        <Route path="*" element={<NotFound />} />
+      </Route>
+    </Routes>
+  );
+}
 
-          {health.isPending ? (
-            <p className="mt-1 text-slate-500">检查中…</p>
-          ) : health.isError ? (
-            <p className="mt-1 text-red-600">未连通:{health.error.message}</p>
-          ) : (
-            <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-slate-600">
-              <dt>状态</dt>
-              <dd className="font-mono text-emerald-600">{health.data.status}</dd>
-              <dt>版本</dt>
-              <dd className="font-mono">{health.data.version}</dd>
-              <dt>已运行</dt>
-              <dd className="font-mono">{health.data.uptime} 秒</dd>
-            </dl>
-          )}
-        </div>
+/**
+ * 登录守卫。
+ *
+ * 关键区分:401 代表「还没登录」这个**正常状态**,要静默送去登录页;
+ * 其他错误(500、网络不通)是**故障**,必须显式告诉用户,
+ * 否则一次后端崩溃会表现成「反复跳回登录页,怎么登都进不去」。
+ */
+function RequireAuth({ children }: { children: ReactNode }) {
+  const me = useMe();
+  const setupState = useSetupState();
 
-        <p className="mt-4 text-xs text-slate-400">
-          M1 基础设施骨架。登录、空间、页面树与编辑器自 M2 起接入。
-        </p>
-      </section>
-    </main>
+  if (me.isPending || setupState.isPending) {
+    return <FullScreenNote>正在加载…</FullScreenNote>;
+  }
+
+  if (isUnauthorized(me.error)) {
+    return <Navigate to={setupState.data?.required === true ? '/setup' : '/login'} replace />;
+  }
+
+  if (me.isError) {
+    return (
+      <FullScreenNote>
+        <span className="block text-slate-700">无法连接到服务</span>
+        <span className="mt-2 block max-w-sm">
+          <ErrorNote error={me.error} />
+        </span>
+      </FullScreenNote>
+    );
+  }
+
+  return <>{children}</>;
+}
+
+function NotFound() {
+  return (
+    <div className="p-8">
+      <h1 className="text-lg font-medium text-slate-900">页面不存在</h1>
+      <p className="mt-1 text-sm text-slate-500">检查一下地址,或从左侧空间列表重新进入。</p>
+    </div>
   );
 }

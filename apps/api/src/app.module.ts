@@ -6,6 +6,7 @@ import { AuthModule } from './auth/auth.module.js';
 import { HealthModule } from './health/health.module.js';
 import { PrismaModule } from './prisma/prisma.module.js';
 import { RedisModule } from './redis/redis.module.js';
+import { SpaceModule } from './space/space.module.js';
 
 /**
  * 应用根模块。
@@ -23,6 +24,7 @@ import { RedisModule } from './redis/redis.module.js';
     PrismaModule,
     RedisModule,
     AuthModule,
+    SpaceModule,
     HealthModule,
   ],
 })

@@ -440,6 +440,26 @@ export async function effectiveRole(
 
 这两条实现在 `packages/shared/src/permission.ts` 的 `resolveRoleAlongChain()`,并在 `packages/shared/test/permission.spec.ts` 中有对应用例 —— 其中包含「把规则顺序颠倒结果不变」的测试,确保结论不依赖规则在数据库里的物理顺序。
 
+#### `deny` 与 `role='none'` 的分工(v1.5 定稿)
+
+`page_permissions` 同时有 `role='none'` 与 `deny` 两个字段,读起来像冗余,其实**语义不同** —— 这一点必须在实现前说清,否则会把两者写反,而写反了不会报错:
+
+| 表达 | 含义 | 能否被更具体的层推翻 |
+|---|---|---|
+| `deny = true` | **绝对否决**。沿链遍历时立即短路 | ❌ 不能。这就是「铁律:拒绝优先」 |
+| `role = 'none'`(且 `deny=false`) | 本层**不给**权限,但更深的层可以再给 | ✅ 能。这就是「铁律:就近覆盖」 |
+
+**两者都必要,不是冗余:**
+
+- 只有 `deny` 的话,「整棵子树关掉、但其中一篇对某人放开」做不到 —— deny 会一路短路。
+- 只有 `role='none'` 的话,「这个人绝对不能看」做不到 —— 子页面一条 allow 就能推翻。
+
+**UI 约定(v1.5 定稿):权限弹窗里的「拒绝访问」一律写 `deny = true`,不写 `role='none'`。**
+
+理由是管理员的直觉:点了「拒绝访问」就应该真的拒绝,不该被下层某条规则悄悄推翻。`role='none'`(可被覆盖的那个)仍保留在接口层,留给「整块关掉、个别放开」这类需求,但**阶段一的界面不暴露它**。
+
+对应实现:`resolveRoleAlongChain()`(见本节开头的同层次序约定);测试在 `permission.spec.ts`,含「自身节点的 deny 压过自身节点的 allow」与「页面规则里的 none(非 deny)也能显式降权」两个用例。
+
 ### 5.4 权限矩阵
 
 | 动作 | 只读 | 评论者 | 编辑者 | 空间管理员 |
@@ -693,12 +713,21 @@ POST /pages/:id/comments  { body, parentId? }
 
 ### M2 · 身份与空间(4 天)
 
-- [ ] users / spaces / space_members 表与迁移
-- [ ] bcrypt 密码哈希 + 会话 Cookie + 鉴权守卫
-- [ ] `/auth/setup` 首次初始化向导(库为空时才可用)
-- [ ] 空间列表、创建空间、成员增删改角色
-- [ ] 前端登录页、空间切换、成员管理页
-- **验收**:全新数据库启动后能创建管理员并建出第一个空间
+- [x] users / spaces / space_members 表与迁移
+- [x] 密码哈希 + 会话 Cookie + 鉴权守卫(实现为**不透明会话 token**,不是 JWT —— 见 §6.1.1)
+- [x] `/auth/setup` 首次初始化(另新增公开接口 `GET /auth/setup-state`)
+- [x] 空间列表、创建空间、成员增删改角色
+- [x] 前端引导页、登录页、空间列表、空间概览、成员管理页
+- **验收**:全新数据库启动后能创建管理员**并建出第一个空间**
+  —— **已达成(2026-09-26)**。实测口径:`docker compose down -v` 清空数据卷 → `up -d --build`
+  → 走完整链路 **41 项断言全通过**,且**覆盖失败路径**:未登录 401、重复初始化 403、
+  缺参与非法 slug 400、非成员得到 `NOT_FOUND`(而非 `FORBIDDEN`)、commenter 越权 403、
+  所有者不可降级 / 不可移除、畸形 spaceId 400、移除非成员 404。
+  单测:api 104 项 + shared 59 项 + web 10 项。前端四个页面已用无头浏览器实渲染确认。
+- **本阶段额外的两处修补**(不属原计划,但发现即修):
+  1. `users.last_login_at` 原为**死字段**(schema 有、全代码库无写入),现于签发会话后写入,写失败不影响登录成功。
+  2. 前端 `apiFetch` 的 **header 覆盖 bug**:`...init` 原先展开在 `headers` 之后,调用方一旦传 headers,
+     `Accept: application/json` 就被整块顶掉。已调整展开顺序。
 
 ### M3 · 页面树(5 天)
 
@@ -805,3 +834,4 @@ POST /pages/:id/comments  { body, parentId? }
 | 2026-09-26 | v1.2 | 开工实测后回写,共三处:①**§2.5 新增** —— NestJS 12 是 ESM-only 且官方新项目默认 ESM,故本项目采用 ESM;实测 esbuild 即使开 `emitDecoratorMetadata` 也不产出 `design:paramtypes`,故 Vitest 必须配 `unplugin-swc`;Prisma 7 的生成器 / 配置文件 / driver adapter 三处破坏性变化,以及 `importFileExtension` 这个 ESM 专属坑。连带把 Node 20 → **22 LTS**、TypeScript → **6.0.x**(均给出依赖下限依据)。②**§4.2** `audit_logs.ip` 由 `inet` 改为 `text`(Prisma 无 inet 标量)。③**§5.3** 补充同层多规则命中次序(user 强于 group;deny 先于一切)—— 原伪代码未定义该情形。 |
 | 2026-09-26 | v1.3 | M1 完成并**实测验收通过**(装上 Docker Desktop 后补跑):`docker compose down -v` 清空数据卷 → `up -d` → 6.5 秒四容器就绪;经 Nginx 反代 `/api/v1/health` 返回 200、`/api/v1/health/ready` 报 database 与 redis 均 up;全新建库迁移自动执行,扩展与三个手写索引均就位。同步修正两处实现缺陷:①`pnpm-lock.yaml` 与 package.json 的 typescript 版本不一致(`--frozen-lockfile` 会失败,影响任何全新克隆与 CI);②api 镜像原用 `pnpm exec` 调 prisma,导致每次容器启动都去外网下载 pnpm 并 relink 依赖(启动 39s+ 且耦合外网),改为直调 `./node_modules/.bin/prisma` 后降到 6.5s。§9 的 M1 任务项已勾选完成。 |
 | 2026-09-26 | v1.4 | ①**§6.1.1 新增**:定死会话机制 —— 不透明会话 id + PG `sessions` 表(库里只存 token 的 SHA-256),并说明为何不用 JWT(可吊销 / 符合 §3.2「Redis 不作为唯一数据源」/ `SESSION_SECRET` 留给阶段二签短期 JWT);同时给出与 §3.1「同一套 JWT」的衔接路径与 `SESSION_COOKIE_SECURE` 的运维注意。②**§4.3 补充**:实测发现三个"手写索引"中有两个可以表达进 schema(`pages_path_idx` 用 `ops: raw("text_pattern_ops")`、`page_contents_trgm_idx` 用 `type: Gin` + `ops: raw("gin_trgm_ops")`)—— 这一点很要紧,因为 schema 里没声明的索引会被 `migrate dev` 生成 `DROP INDEX` 删掉,而删掉三元组索引会让中文检索**静默**退化成全表扫描。③**§6.2 新增接口** `GET /auth/setup-state`(公开):§7.2 的 `/setup` 路由需要它才能判断该显示引导页还是登录页。④**M2 进度**:认证后端已完成并端到端实测(初始化 / 登录 / 登出 / 守卫 / 会话吊销),另新增 72 字节密码上限校验以规避 bcrypt 静默截断。 |
+| 2026-09-26 | v1.5 | ①**§5.3 新增**「`deny` 与 `role='none'` 的分工」小节 —— 两者语义不同且**都必要**(deny 是绝对否决、`role='none'` 可被更具体的层推翻),并定死 UI 约定:「拒绝访问」写 `deny=true`,原型的对应交互同步修改。②**§9 的 M2 全部勾选完成**并补齐实测口径(41 项端到端断言 + 各包单测数)。③**修复死字段**:`users.last_login_at` 此前 schema 有、全代码库无写入,现于登录与初始化时写入。④**去重**:`toSpaceRole` 由 auth / space 两处私有副本上提到 `packages/shared/src/roles.ts`。⑤**修复前端请求封装的 header 覆盖 bug**:`apiFetch` 原先把 `...init` 展开在 `headers` 之后,导致调用方一旦传 headers,`Accept: application/json` 被整块顶掉。⑥修正 `packages/shared/src/index.ts` 的模块制式注释 —— 它是 **ESM**(`"type": "module"`),原注释误写为「编译为 CommonJS」。 |

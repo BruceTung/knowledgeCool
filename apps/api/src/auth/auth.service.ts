@@ -3,8 +3,7 @@ import {
   type AuthUser,
   type MeResponse,
   type VisibleSpace,
-  isSpaceRole,
-  type SpaceRole,
+  toSpaceRole,
 } from '@knowledgecool/shared';
 
 import { AppError } from '../common/errors/app-error.js';
@@ -104,6 +103,7 @@ export class AuthService {
     });
 
     const session = await this.sessions.issue(user.id, meta);
+    await this.touchLastLogin(user.id);
     return { user: toAuthUser(user), token: session.token, expiresAt: session.expiresAt };
   }
 
@@ -123,6 +123,7 @@ export class AuthService {
     }
 
     const session = await this.sessions.issue(user.id, meta);
+    await this.touchLastLogin(user.id);
     return { user: toAuthUser(user), token: session.token, expiresAt: session.expiresAt };
   }
 
@@ -185,6 +186,21 @@ export class AuthService {
     return { user: toAuthUser(user), spaces };
   }
 
+  /**
+   * 记录本次登录时间。
+   *
+   * 这个字段此前是「死字段」:schema 里有,但没有任何一处写入。
+   * 它在安全审计里有用(发现异常时间的登录),而且 M5 的审计日志会用到。
+   *
+   * **写失败不应该让登录失败** —— 它只是审计元数据,不是认证的必要条件,
+   * 所以这里吞掉异常而不是把一次成功登录变成 500。
+   */
+  private async touchLastLogin(userId: string): Promise<void> {
+    await this.prisma.user
+      .update({ where: { id: userId }, data: { lastLoginAt: new Date() } })
+      .catch(() => undefined);
+  }
+
   private getDummyHash(): Promise<string> {
     this.dummyHash ??= this.passwords.hash('kc::timing-equalization::not-a-real-password');
     return this.dummyHash;
@@ -200,9 +216,4 @@ function toAuthUser(row: UserRow): AuthUser {
     avatarColor: row.avatarColor,
     isSuperAdmin: row.isSuperAdmin,
   };
-}
-
-/** 把库里的字符串收敛成合法空间角色;未知值返回 null(由调用方跳过)。 */
-function toSpaceRole(value: string): SpaceRole | null {
-  return isSpaceRole(value) ? value : null;
 }

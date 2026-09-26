@@ -90,6 +90,17 @@ export function toEffectiveRole(value: string | null | undefined): EffectiveRole
   return isEffectiveRole(value) ? value : 'none';
 }
 
+/**
+ * 运行时校验:把库里的字符串收敛成合法**空间**角色;未知值返回 `null`。
+ *
+ * 与 `toEffectiveRole` 的差别很关键:后者兜底成 `none`(偏「不给」),
+ * 而空间角色没有 `none` 这个取值。所以这里**不兜底**,返回 `null`
+ * 让调用方自己决定(跳过该行 / 报 notFound),而不是猜一个角色授予出去。
+ */
+export function toSpaceRole(value: string | null | undefined): SpaceRole | null {
+  return isSpaceRole(value) ? value : null;
+}
+
 export function isEffectiveRole(value: unknown): value is EffectiveRole {
   return typeof value === 'string' && (EFFECTIVE_ROLES as readonly string[]).includes(value);
 }
