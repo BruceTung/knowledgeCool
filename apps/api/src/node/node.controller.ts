@@ -10,6 +10,7 @@ import {
   Patch,
   Post,
   Put,
+  Query,
   Res,
 } from '@nestjs/common';
 import type {
@@ -18,14 +19,18 @@ import type {
   NodeDetail,
   NodeTreeResponse,
   TrashItem,
+  TrashPolicy,
+  TrashPurgeResult,
 } from '@knowledgecool/shared';
 import type { Response } from 'express';
 
 import { CurrentUser } from '../auth/current-user.decorator.js';
+import { AppError } from '../common/errors/app-error.js';
 import { ContentService } from './content.service.js';
 import { CreateNodeDto, MoveNodeDto, UpdateNodeDto } from './dto/node.dto.js';
 import { SaveContentDto } from './dto/save-content.dto.js';
 import { NodeService } from './node.service.js';
+import { RetentionService } from './retention.service.js';
 
 /**
  * 节点接口(空间与页面合并后的统一资源)。
@@ -44,23 +49,64 @@ export class NodeController {
   constructor(
     private readonly nodes: NodeService,
     private readonly contents: ContentService,
+    private readonly retention: RetentionService,
   ) {}
 
   /**
-   * 整棵组织与内容树。**全员可读,不做权限过滤**(§5.3 规则一)。
+   * 组织与内容树。**全员可读,不做权限过滤**(§5.3 规则一)。
    *
    * 响应里额外带 `editableNodeIds` / `manageableNodeIds`,前端据此**隐藏**按钮。
    * 那不是安全边界 —— 服务端每个写接口仍各自判定。
+   *
+   * `?root=<nodeId>` 只返回那棵子树(v2.4)。留这个口子是因为"全员开放读 +
+   * 一棵大树"在公司到几千人时会很大 —— 但**不要把接口做成只能返回全部**,
+   * 否则将来改成按需加载要动接口形状(§11.3)。根不存在或已删 → 404。
    */
   @Get('org/tree')
-  tree(@CurrentUser() user: AuthUser): Promise<NodeTreeResponse> {
-    return this.nodes.tree(user);
+  tree(
+    @CurrentUser() user: AuthUser,
+    @Query('root', new ParseUUIDPipe({ optional: true })) root?: string,
+  ): Promise<NodeTreeResponse> {
+    return this.nodes.tree(user, root);
+  }
+
+  /**
+   * 回收站保留策略(只读,登录即可)。
+   *
+   * ⚠️ 必须注册在 `trash` **之前**?—— 不必:两者是精确路径,`trash` 不会
+   * 匹配 `trash/policy`。但放在前面读起来更顺(更具体的先写)。
+   */
+  @Get('trash/policy')
+  trashPolicy(): TrashPolicy {
+    return this.retention.policy();
   }
 
   /** 回收站:只列我 `canEdit` 的已删子树根。 */
   @Get('trash')
   trash(@CurrentUser() user: AuthUser): Promise<TrashItem[]> {
     return this.nodes.trash(user);
+  }
+
+  /**
+   * 按保留策略清理回收站(v2.4)。**超管**。
+   *
+   * 平时由 `RetentionService` 定时自动跑;这条是给运维的显式入口 ——
+   * 首次上线时清掉历史积压、或临时调整保留天数之后立刻生效。
+   *
+   * `?dryRun=true` 只列不删:一个会删数据的任务必须能先空跑一次。
+   */
+  @Post('admin/maintenance/trash-purge')
+  @HttpCode(HttpStatus.OK)
+  trashPurge(
+    @CurrentUser() user: AuthUser,
+    @Query('dryRun') dryRun?: string,
+  ): Promise<TrashPurgeResult> {
+    // ⚠️ 权限判断放在最前 —— 不要等解析完参数再说(§9.3 踩过:顺序错了
+    // 会让"参数不对"的 400 先于 403 返回,等于确认了这个接口存在)。
+    if (!user.isSuperAdmin) {
+      throw AppError.forbidden('只有管理员能手动清理回收站');
+    }
+    return this.retention.run({ dryRun: dryRun === 'true' });
   }
 
   @Post('nodes')

@@ -43,6 +43,8 @@ interface OrgTreePanelProps {
   /** 当前打开的节点,高亮并自动展开到它 */
   activeNodeId: string | undefined;
   onOpenGrants: (nodeId: string, title: string) => void;
+  /** 成员弹窗(v2.4)—— 管组织归属,与权限弹窗是两个入口 */
+  onOpenMembers: (nodeId: string, title: string) => void;
 }
 
 /** 节点类型的中文短标。 */
@@ -58,6 +60,7 @@ export function OrgTreePanel({
   isSuperAdmin,
   activeNodeId,
   onOpenGrants,
+  onOpenMembers,
 }: OrgTreePanelProps) {
   const navigate = useNavigate();
   const createNode = useCreateNode();
@@ -364,6 +367,19 @@ export function OrgTreePanel({
                   ⚙
                 </button>
               )}
+              {nodeManageable && (
+                <button
+                  type="button"
+                  title="成员(组织归属):这个节点下都有谁"
+                  className="h-5 w-5 rounded text-[11px] text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onOpenMembers(node.id, node.title);
+                  }}
+                >
+                  ☰
+                </button>
+              )}
               {nodeEditable && (
                 <button
                   type="button"
@@ -479,6 +495,7 @@ export function OrgTreePanel({
         />
         <p className="px-2 text-[10px] leading-relaxed text-slate-400">
           可直接拖拽调整层级与顺序:上/下四分之一是"排到前/后",中间是"成为子节点"。
+          悬停节点行可见 ⚙(权限 · 谁能改)与 ☰(成员 · 归属在哪)。
         </p>
       </div>
     </div>

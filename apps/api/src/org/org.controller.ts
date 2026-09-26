@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Header,
   HttpCode,
@@ -18,6 +19,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import type {
   AuthUser,
   GrantCandidate,
+  NodeMembersResponse,
   OrgImportResponse,
   OrgScopeOption,
   OrgUserView,
@@ -28,6 +30,7 @@ import { memoryStorage } from 'multer';
 import { CurrentUser } from '../auth/current-user.decorator.js';
 import { AppError } from '../common/errors/app-error.js';
 import {
+  AddNodeMemberDto,
   CreateOrgNodeDto,
   CreateUserDto,
   SetAssignmentsDto,
@@ -99,6 +102,62 @@ export class OrgController {
     @Body() body: SetOwnerDto,
   ): Promise<void> {
     return this.org.setOwner(user, nodeId, body.ownerId);
+  }
+
+  // ---------------- 节点成员(v2.4) ----------------
+
+  /**
+   * 这个节点下都有谁。
+   *
+   * **读全员开放** —— 与整棵树一致(§5.3 规则一):组织架构本来就是公开的。
+   * 写操作才需要 `canManage`,`canManage` 也在响应里给前端。
+   */
+  @Get('nodes/:nodeId/members')
+  members(
+    @CurrentUser() user: AuthUser,
+    @Param('nodeId', ParseUUIDPipe) nodeId: string,
+  ): Promise<NodeMembersResponse> {
+    return this.org.members(user, nodeId);
+  }
+
+  /**
+   * 能加到该节点下的人(已按操作者组织范围过滤)。
+   *
+   * ⚠️ 与授权候选人(`/nodes/:id/grant-candidates`)是**两条接口**,
+   * 因为门槛不同:授权要求 `canManage`,成员维护对超管放行。见 `OrgService`。
+   */
+  @Get('nodes/:nodeId/member-candidates')
+  memberCandidates(
+    @CurrentUser() user: AuthUser,
+    @Param('nodeId', ParseUUIDPipe) nodeId: string,
+  ): Promise<GrantCandidate[]> {
+    return this.org.memberCandidates(user, nodeId);
+  }
+
+  /**
+   * 把某人加到该节点下(**追加**一条归属,不是整表替换)。
+   *
+   * 返回 200 而不是 201:响应体是整个成员视图(前端直接用它刷新列表),
+   * 而不是"新建出来的那个资源"。
+   */
+  @Post('nodes/:nodeId/members')
+  @HttpCode(HttpStatus.OK)
+  addMember(
+    @CurrentUser() user: AuthUser,
+    @Param('nodeId', ParseUUIDPipe) nodeId: string,
+    @Body() body: AddNodeMemberDto,
+  ): Promise<NodeMembersResponse> {
+    return this.org.addMember(user, nodeId, body.userId);
+  }
+
+  /** 把某人从该节点**移出** —— 调岗两步里的第二步。 */
+  @Delete('nodes/:nodeId/members/:userId')
+  removeMember(
+    @CurrentUser() user: AuthUser,
+    @Param('nodeId', ParseUUIDPipe) nodeId: string,
+    @Param('userId', ParseUUIDPipe) userId: string,
+  ): Promise<NodeMembersResponse> {
+    return this.org.removeMember(user, nodeId, userId);
   }
 
   // ---------------- 人员(超管) ----------------

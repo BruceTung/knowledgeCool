@@ -19,17 +19,26 @@ import {
   type Actor,
   type CreateUserInput,
   type GrantCandidate,
+  type NodeMembersResponse,
+  type NodeMemberView,
   type OrgScopeOption,
   type OrgUserView,
   type SetUserAssignmentsInput,
   type UpdateUserInput,
+  canManage as canManagePure,
   isWithinSubtree,
 } from '@knowledgecool/shared';
 
 import { recordAudit } from '../audit/record.js';
 import { PasswordService } from '../auth/password.service.js';
 import { AppError } from '../common/errors/app-error.js';
-import { idsOfPath, pathOfChild, pathOfRoot, renderPath } from '../common/node-path.js';
+import {
+  idsOfPath,
+  pathOfChild,
+  pathOfRoot,
+  renderPath,
+  subtreePrefix,
+} from '../common/node-path.js';
 import { Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { PermissionService } from '../permission/permission.service.js';
@@ -327,6 +336,253 @@ export class OrgService {
   }
 
   // ================================================================
+  // 节点成员(组织归属)· v2.4
+  // ================================================================
+
+  /**
+   * 一个节点下都有谁。
+   *
+   * ## 为什么需要它
+   *
+   * Excel 导入是**增量**语义(§8.5):表格里没写与"要删掉归属"无法区分,
+   * 所以调岗必须两步 —— 导入新归属 + 界面移出旧归属。而在 v2.4 之前,
+   * 第二步只能到「人员管理 → 设置归属」里整表替换,**看不到"这个节点下都有谁"**。
+   * 这个接口就是补上那一步。
+   *
+   * ## 两条刻意的设计
+   *
+   * 1. **读全员开放** —— 与整棵树一致(§5.3 规则一)。组织架构本来就是公开的,
+   *    把"这个部门有谁"藏起来在这个系统里没有意义(树本身就全员可见)。
+   *    写操作才需要 `canManage`。
+   *
+   * 2. **分成 `direct` / `inherited` 两段** —— 只有**直接**归属在这个节点上的人
+   *    能从这里移出;归属在子孙节点上的人要移出,得到对应子孙上去操作。
+   *    不分段的话,管理员会试图"从技术部移出后端组的人" —— 而那件事
+   *    应该在后端组那一层做。
+   */
+  async members(operator: Actor, nodeId: string): Promise<NodeMembersResponse> {
+    const { chain, row } = await this.permissions.chainOf(nodeId);
+    const prefix = subtreePrefix(row.materializedPath);
+
+    // ① 这棵子树内的全部归属行
+    const inside = await this.prisma.orgAssignment.findMany({
+      where: { OR: [{ nodeId }, { node: { materializedPath: { startsWith: prefix } } }] },
+      select: { userId: true, node: { select: { id: true, materializedPath: true } } },
+    });
+
+    const userIds = [...new Set(inside.map((item) => item.userId))];
+
+    // ② 这些人的**全部**归属(不止这棵子树)
+    //    用来回答"把他从这儿移出之后,他还剩下什么身份" —— 这个问题不回答清楚,
+    //    管理员会以为移出一条归属等于把人清出了公司。
+    const allRows =
+      userIds.length === 0
+        ? []
+        : await this.prisma.orgAssignment.findMany({
+            where: { userId: { in: userIds } },
+            select: { userId: true, node: { select: { id: true, materializedPath: true } } },
+          });
+
+    const [users, titles] = await Promise.all([
+      this.prisma.user.findMany({
+        where: { id: { in: userIds } },
+        select: USER_VIEW_SELECT,
+        orderBy: [{ employeeNo: 'asc' }],
+      }),
+      this.titleMapOf([...inside, ...allRows].map((item) => item.node.materializedPath)),
+    ]);
+
+    const groupByUser = (
+      rows: readonly { userId: string; node: { id: string; materializedPath: string } }[],
+    ): Map<string, { id: string; materializedPath: string }[]> => {
+      const map = new Map<string, { id: string; materializedPath: string }[]>();
+      for (const item of rows) {
+        const bucket = map.get(item.userId) ?? [];
+        bucket.push(item.node);
+        map.set(item.userId, bucket);
+      }
+      return map;
+    };
+
+    const insideByUser = groupByUser(inside);
+    const allByUser = groupByUser(allRows);
+
+    const views: NodeMemberView[] = users.map((user) => {
+      const insideNodes = insideByUser.get(user.id) ?? [];
+      const insideIds = new Set(insideNodes.map((node) => node.id));
+      return {
+        userId: user.id,
+        name: user.name,
+        employeeNo: user.employeeNo,
+        status: toUserStatus(user.status),
+        memberNodeIds: insideNodes.map((node) => node.id),
+        memberPaths: insideNodes.map((node) => renderPath(node.materializedPath, titles)),
+        otherPaths: (allByUser.get(user.id) ?? [])
+          .filter((node) => !insideIds.has(node.id))
+          .map((node) => renderPath(node.materializedPath, titles)),
+        isOwnerHere: row.ownerId === user.id,
+        isAncestorOwner: chain.ancestors.some((ancestor) => ancestor.ownerId === user.id),
+      };
+    });
+
+    // 直接归属在这个节点上的人 —— 只有他们能从这里移出
+    const directIds = new Set(
+      inside.filter((item) => item.node.id === nodeId).map((item) => item.userId),
+    );
+
+    return {
+      nodeId,
+      title: row.title,
+      direct: views.filter((view) => directIds.has(view.userId)),
+      inherited: views.filter((view) => !directIds.has(view.userId)),
+      canManage: operator.isSuperAdmin || canManagePure(operator, chain),
+    };
+  }
+
+  /**
+   * 能加到这个节点下的人 —— **已按操作者的组织范围过滤**。
+   *
+   * 为什么不复用授权候选人(`PermissionService.candidates`):两者的**门槛不同**。
+   * 授权的要求是 `canManage`(超管不在此列 —— 他改不了别人的内容权限),
+   * 而成员维护对**超管是放行的**(组织架构本来就归他管,何况他的组织归属
+   * 可能是空的,过不了范围检查)。
+   * 复用的话会出现「超管能改成员、但候选列表是空的」这种自相矛盾的界面。
+   *
+   * 规则与 `ownerCandidates` 一致:门槛用同一套,候选人用同一套过滤。
+   */
+  async memberCandidates(operator: Actor, nodeId: string): Promise<GrantCandidate[]> {
+    const { chain } = await this.permissions.chainOf(nodeId);
+    this.requireManageMember(operator, chain);
+
+    const rows = await this.prisma.user.findMany({
+      // 只列在职的:把人加进组织,却给他一个已离职/已停用的账号,没有意义
+      where: { status: 'active' },
+      select: {
+        id: true,
+        name: true,
+        employeeNo: true,
+        assignments: { select: { node: { select: { materializedPath: true } } } },
+      },
+      orderBy: [{ employeeNo: 'asc' }],
+    });
+
+    const toCandidate = (row: (typeof rows)[number]): GrantCandidate => ({
+      userId: row.id,
+      name: row.name,
+      employeeNo: row.employeeNo,
+      scopePaths: row.assignments.map((assignment) => assignment.node.materializedPath),
+    });
+
+    // 超管不受组织范围约束 —— 见方法注释。
+    if (operator.isSuperAdmin) return rows.map(toCandidate);
+
+    const myScopes = await this.permissions.scopePathsOf(operator.id);
+    if (myScopes.length === 0) return [];
+
+    return rows
+      .filter((row) =>
+        row.assignments.some((assignment) =>
+          myScopes.some((scopePath) =>
+            isWithinSubtree(assignment.node.materializedPath, scopePath),
+          ),
+        ),
+      )
+      .map(toCandidate);
+  }
+
+  /**
+   * 把某人加到某个节点下(**追加**一条归属,不是整表替换)。
+   *
+   * 与授权一样受**组织范围约束**(§5.3 规则三):组长不该能把别的部门的人
+   * 拉进自己组。超管豁免 —— 他的组织归属可能是空的,而且组织架构维护本就是他的职责。
+   *
+   * ⚠️ 这里**不做"移出旧归属"** —— 调岗是两步,第二步由管理员显式选择在哪一层移出。
+   * 顺手替人删归属会让"他到底还在不在原部门"变得不可预测。
+   */
+  async addMember(operator: Actor, nodeId: string, userId: string): Promise<NodeMembersResponse> {
+    const { chain, row } = await this.permissions.chainOf(nodeId);
+    this.requireManageMember(operator, chain);
+
+    await this.assertActiveUser(userId);
+
+    if (!operator.isSuperAdmin && !(await this.permissions.isInOperatorScope(operator.id, userId))) {
+      const who = await this.pluckUser(userId);
+      throw AppError.forbidden(`不能把「${who.name}」加到这里 —— 他不在你的组织范围内`);
+    }
+
+    const existing = await this.prisma.orgAssignment.findUnique({
+      where: { userId_nodeId: { userId, nodeId } },
+      select: { userId: true },
+    });
+    // 幂等:已经是成员就什么都不做(也不要重复记审计,否则日志会被刷屏)
+    if (existing !== null) return this.members(operator, nodeId);
+
+    await this.prisma.orgAssignment.create({ data: { userId, nodeId } });
+
+    // 归属变了 → 授权范围跟着变 → 缓存必须失效(与 setAssignments 同理)
+    await this.invalidateAllGenerations();
+
+    const who = await this.pluckUser(userId);
+    await recordAudit(this.prisma, {
+      actorId: operator.id,
+      action: 'org.member.add',
+      targetType: 'node',
+      targetId: nodeId,
+      detail: { title: row.title, userId, name: who.name, employeeNo: who.employeeNo },
+    });
+
+    return this.members(operator, nodeId);
+  }
+
+  /**
+   * 把某人从某个节点**移出**(删掉这一条归属)。
+   *
+   * ⚠️ **移出归属不改变所有权。** 若他正是这个节点的所有者(组长),移出之后
+   * 他仍然是所有者 —— 两件事是分开的。界面上会提示,服务端不拦:
+   * 人事上"调岗但还没换组长"是真实存在的过渡状态,替管理员拦下来反而办不成事。
+   *
+   * 真正会变的是他的**组织范围**:范围缩小后,他能授权的对象变少。
+   * 这一点也写在界面的提示里。
+   */
+  async removeMember(operator: Actor, nodeId: string, userId: string): Promise<NodeMembersResponse> {
+    const { chain, row } = await this.permissions.chainOf(nodeId);
+    this.requireManageMember(operator, chain);
+
+    const removed = await this.prisma.orgAssignment.deleteMany({ where: { userId, nodeId } });
+    if (removed.count === 0) {
+      throw AppError.validation('这个人并没有直接归属在这个节点上');
+    }
+
+    await this.invalidateAllGenerations();
+
+    const who = await this.pluckUser(userId);
+    await recordAudit(this.prisma, {
+      actorId: operator.id,
+      action: 'org.member.remove',
+      targetType: 'node',
+      targetId: nodeId,
+      detail: {
+        title: row.title,
+        userId,
+        name: who.name,
+        employeeNo: who.employeeNo,
+        // 他是不是这个节点的所有者 —— 追责时这一条最要紧
+        wasOwner: row.ownerId === userId,
+      },
+    });
+
+    return this.members(operator, nodeId);
+  }
+
+  /** 谁能改这个节点的成员 —— 该节点或其上级的所有者,以及超管。 */
+  private requireManageMember(operator: Actor, chain: Parameters<typeof canManagePure>[1]): void {
+    if (operator.isSuperAdmin) return;
+    if (!canManagePure(operator, chain)) {
+      throw AppError.forbidden('只有该节点或其上级的所有者才能调整成员');
+    }
+  }
+
+  // ================================================================
   // 辅助
   // ================================================================
 
@@ -480,23 +736,30 @@ export class OrgService {
       assignments: { node: { id: string; materializedPath: string } }[];
     })[],
   ): Promise<OrgUserView[]> {
-    const ids = new Set<string>();
-    for (const row of rows) {
-      for (const assignment of row.assignments) {
-        for (const id of idsOfPath(assignment.node.materializedPath)) ids.add(id);
-      }
-    }
-
-    const nodes =
-      ids.size === 0
-        ? []
-        : await this.prisma.node.findMany({
-            where: { id: { in: [...ids] } },
-            select: { id: true, title: true },
-          });
-    const titles = new Map(nodes.map((node) => [node.id, node.title]));
-
+    const titles = await this.titleMapOf(
+      rows.flatMap((row) => row.assignments.map((assignment) => assignment.node.materializedPath)),
+    );
     return rows.map((row) => toView(row, row.assignments.map((a) => a.node), titles));
+  }
+
+  /**
+   * 从一组物化路径收集涉及的节点 id,一次查出 `id → 标题`。
+   *
+   * 路径里已经含全部祖先 id,所以调用方**不需要**额外补祖先 ——
+   * 这一点让 `members()` 只查一次就能渲染出 `技术部 / 后端组` 这样的完整路径。
+   */
+  private async titleMapOf(paths: readonly string[]): Promise<Map<string, string>> {
+    const ids = new Set<string>();
+    for (const path of paths) {
+      for (const id of idsOfPath(path)) ids.add(id);
+    }
+    if (ids.size === 0) return new Map();
+
+    const nodes = await this.prisma.node.findMany({
+      where: { id: { in: [...ids] } },
+      select: { id: true, title: true },
+    });
+    return new Map(nodes.map((node) => [node.id, node.title]));
   }
 }
 

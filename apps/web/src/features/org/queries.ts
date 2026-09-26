@@ -21,6 +21,8 @@ import type {
   NodeTreeResponse,
   SaveContentInput,
   TrashItem,
+  TrashPolicy,
+  TrashPurgeResult,
   UpdateNodeInput,
 } from '@knowledgecool/shared';
 
@@ -60,6 +62,45 @@ export function useTrash() {
   return useQuery({
     queryKey: ['trash'],
     queryFn: () => apiFetch<TrashItem[]>('/trash'),
+  });
+}
+
+/**
+ * 回收站保留策略(v2.4)。
+ *
+ * 天数来自服务端而**不是写死在前端** —— 运维把环境变量改掉之后,
+ * 界面上的提示必须跟着改。见 `RetentionService.policy()` 的注释。
+ */
+export function useTrashPolicy() {
+  return useQuery({
+    queryKey: ['trash', 'policy'],
+    queryFn: () => apiFetch<TrashPolicy>('/trash/policy'),
+    // 这是配置,不是数据 —— 几分钟内不会变
+    staleTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
+  });
+}
+
+/**
+ * 按保留策略清理回收站(超管)。
+ *
+ * `dryRun` 与真删走的是**同一个接口的两个模式** —— 与 Excel 导入同一套思路:
+ * 拆成两条路径的话,预览与实际删除迟早算出不同结果,而超管是照着预览点确认的。
+ */
+export function useRunTrashPurge() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (dryRun: boolean) =>
+      apiSend<TrashPurgeResult>(
+        'POST',
+        `/admin/maintenance/trash-purge?dryRun=${String(dryRun)}`,
+      ),
+    onSuccess: (result) => {
+      if (result.purgedNodes > 0) {
+        void queryClient.invalidateQueries({ queryKey: ['trash'] });
+        void queryClient.invalidateQueries({ queryKey: ['org', 'tree'] });
+      }
+    },
   });
 }
 

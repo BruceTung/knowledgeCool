@@ -3,6 +3,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 
 import { Button, ErrorNote } from '../components/ui';
+import { useMe } from '../features/auth/queries';
 import { CommentsPanel } from '../features/comments/CommentsPanel';
 import { useComments } from '../features/comments/queries';
 import {
@@ -12,6 +13,7 @@ import {
   type SaveState,
 } from '../features/content/PageEditor';
 import { useGrantDialog } from '../features/grants/dialog-store';
+import { useMembersDialog } from '../features/members/dialog-store';
 import { useExportMarkdown, useNodeContent, useNodeDetail, useUpdateNode } from '../features/org/queries';
 
 type RightTab = 'outline' | 'comments';
@@ -54,6 +56,8 @@ function NodeDetailView({ nodeId }: { nodeId: string }) {
   const comments = useComments(nodeId);
   const exportMd = useExportMarkdown();
   const openGrants = useGrantDialog((state) => state.open);
+  const openMembers = useMembersDialog((state) => state.open);
+  const me = useMe();
 
   // 切换节点要重建编辑器(见 PageEditor 顶部关于「content 只在挂载时读一次」的说明)。
   // 用 `key` 控制重建,而不是靠 props 更新 —— 后者会把正在输入的内容重置掉。
@@ -179,6 +183,22 @@ function NodeDetailView({ nodeId }: { nodeId: string }) {
             </div>
 
             <div className="flex flex-none items-center gap-2 pt-1">
+              {/*
+                「成员」只出现在空间 / 组这类节点上。文档页面上也有"归属"这个概念,
+                但在那里加人没有实际意义(没人会"归属于某篇文档"),
+                多一个入口只会让界面变吵。
+                超管对一级部门不是内容所有者(canManage 为假),但组织架构归他管 —— 单独放行。
+              */}
+              {node.kind === 'space' && (node.canManage || me.data?.user.isSuperAdmin === true) && (
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    openMembers(node.id, node.title);
+                  }}
+                >
+                  成员
+                </Button>
+              )}
               {node.canManage && (
                 <Button
                   variant="secondary"

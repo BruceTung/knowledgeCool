@@ -16,6 +16,7 @@ import type { SearchHit } from '@knowledgecool/shared';
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
+import { useModalOpen } from '../../lib/modal-store';
 import { useSearch } from './queries';
 
 export function CommandPalette({ onClose }: { onClose: () => void }) {
@@ -23,6 +24,9 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
   const [activeIndex, setActiveIndex] = useState(0);
   const navigate = useNavigate();
   const inputRef = useRef<HTMLInputElement | null>(null);
+
+  // 登记为"有一个模态开着"—— 全局的 Ctrl/Cmd + K 靠它避免重复叠加。
+  useModalOpen();
 
   const search = useSearch(query);
   const hits: SearchHit[] = search.data?.hits ?? [];

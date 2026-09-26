@@ -15,6 +15,7 @@ import type { GrantCandidate, NodeGrantView } from '@knowledgecool/shared';
 import { useState } from 'react';
 
 import { Button, ErrorNote, SelectField } from '../../components/ui';
+import { useModalOpen } from '../../lib/modal-store';
 import { useMe } from '../auth/queries';
 import { useOwnerCandidates, useSetOwner } from '../admin/queries';
 import { useGrantCandidates, useNodeGrants, useSaveGrants } from './queries';
@@ -79,6 +80,10 @@ export function GrantDialog({
 }) {
   const me = useMe();
   const grants = useNodeGrants(nodeId);
+
+  // 登记为"有一个模态开着"—— 全局的 Ctrl/Cmd + K 靠它避免重复叠加。
+  useModalOpen();
+
   /** 能不能改这份授权名单 —— 只有所有者与祖先链上的所有者可以,被授权者不行。 */
   const canManage = grants.data?.canManage === true;
   /**

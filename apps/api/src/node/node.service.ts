@@ -17,7 +17,7 @@ import {
 import { recordAudit } from '../audit/record.js';
 import { runSerializable } from '../common/db/serializable.js';
 import { AppError } from '../common/errors/app-error.js';
-import { idsOfPath, pathOfChild, pathOfRoot, subtreePrefix } from '../common/node-path.js';
+import { idsOfPath, pathOfChild, pathOfRoot, rootIdOfPath, subtreePrefix } from '../common/node-path.js';
 import { Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { PermissionService } from '../permission/permission.service.js';
@@ -93,6 +93,13 @@ type UserBrief = Prisma.UserGetPayload<{ select: typeof USER_BRIEF_SELECT }>;
 /** 祖先链向上走的防御上限。正常组织深度不过十几层,这是防数据损坏成环。 */
 const CHAIN_GUARD = 200;
 
+/**
+ * 判权只要这三个字段。刻意单独定义一个窄类型:
+ * 取"祖先"时它不在返回集里(只用于内存向上走),用 `TREE_SELECT` 的完整形状
+ * 会逼着查询多取一堆用不上的列。
+ */
+type ChainLookup = { id: string; parentId: string | null; ownerId: string };
+
 @Injectable()
 export class NodeService {
   constructor(
@@ -105,7 +112,7 @@ export class NodeService {
   // ==================================================================
 
   /**
-   * 整棵树(不含回收站)。
+   * 整棵树(不含回收站)。给 `rootId` 时只返回**那棵子树**。
    *
    * **不做权限过滤** —— 所有节点对所有登录用户可见(§5.3 规则一)。
    * 但会额外算出「我哪些能改、我哪些能管」交给前端**隐藏按钮**。
@@ -113,16 +120,61 @@ export class NodeService {
    *
    * 权限标记是**在内存里算的**:逐节点调 `permissions.access()` 会退化成
    * N+1 查询,而树的规模是几千个节点。
+   *
+   * ## `rootId`(v2.4)
+   *
+   * 全员开放读 + 一棵大树,公司到几千人时"一次性返回全量"会很大。
+   * 接口形状先留出来(§11.3 明确要求「不要做成只能返回全部」)。
+   *
+   * ⚠️ 只返回子树时,**祖先**仍然要查出来参与判权 —— 它们不在响应里,
+   * 但"我能不能改这个节点"取决于祖先链上的所有者。少了这一步,
+   * 子树里的每个节点都会算成"我改不了"。
    */
-  async tree(operator: Actor): Promise<NodeTreeResponse> {
+  async tree(operator: Actor, rootId?: string): Promise<NodeTreeResponse> {
+    let scopePath: string | null = null;
+    if (rootId !== undefined) {
+      const root = await this.prisma.node.findUnique({
+        where: { id: rootId },
+        select: { materializedPath: true, deletedAt: true },
+      });
+      // 不存在或已删就 404,**不要静默返回空树** —— 调用方会把空树
+      // 读成"这个子树下面什么都没有",而那是个完全不同的事实。
+      if (root === null || root.deletedAt !== null) throw AppError.notFound();
+      scopePath = root.materializedPath;
+    }
+
     const rows = await this.prisma.node.findMany({
-      where: { deletedAt: null },
+      where:
+        scopePath === null
+          ? { deletedAt: null }
+          : {
+              deletedAt: null,
+              OR: [
+                { id: rootId },
+                { materializedPath: { startsWith: subtreePrefix(scopePath) } },
+              ],
+            },
       orderBy: [{ position: 'asc' }, { createdAt: 'asc' }],
       select: TREE_SELECT,
     });
 
     if (rows.length === 0) {
       return { nodes: [], editableNodeIds: [], manageableNodeIds: [] };
+    }
+
+    const byId = new Map<string, ChainLookup>();
+    for (const row of rows) byId.set(row.id, row);
+
+    // 指定 root 时补上祖先链 —— 只用于判权,不进响应
+    if (scopePath !== null) {
+      const missing = idsOfPath(scopePath).filter((id) => !byId.has(id));
+      if (missing.length > 0) {
+        const ancestors = await this.prisma.node.findMany({
+          where: { id: { in: missing }, deletedAt: null },
+          select: { id: true, parentId: true, ownerId: true },
+        });
+        for (const ancestor of ancestors) byId.set(ancestor.id, ancestor);
+      }
     }
 
     const nodeIds = rows.map((row) => row.id);
@@ -142,7 +194,6 @@ export class NodeService {
       grantsByNode.set(grant.nodeId, bucket);
     }
 
-    const byId = new Map(rows.map((row) => [row.id, row]));
     const editableNodeIds: string[] = [];
     const manageableNodeIds: string[] = [];
 
@@ -566,19 +617,45 @@ export class NodeService {
       throw AppError.validation('只能彻底删除回收站里的节点,请先移入回收站');
     }
 
-    const subtree = subtreePrefix(row.materializedPath);
+    await this.purgeSubtree({ id: row.id, materializedPath: row.materializedPath });
 
-    await runSerializable(this.prisma, async (tx) => {
+    // ⚠️ 用**删除前**记下的路径算部门 id。节点此刻已经不在库里了,
+    // `invalidateByNode` 会查不到路径然后静默跳过失效 —— 缓存会一直残留到 TTL。
+    await this.permissions.invalidate(rootIdOfPath(row.materializedPath));
+
+    await recordAudit(this.prisma, {
+      actorId: operator.id,
+      action: 'node.purge',
+      targetType: 'node',
+      targetId: nodeId,
+      detail: { title: row.title },
+    });
+  }
+
+  /**
+   * 物理删除一棵**已删子树**,返回删掉的节点总数。
+   *
+   * ⚠️ **不含任何权限判定** —— 判权由调用方负责。抽出来的理由是让两条路径
+   * 共用同一份删除逻辑:手工「彻底删除」走 `canManage`,回收站到期清理走
+   * "保留期已过"。写两份的话,总有一天其中一份会漏掉下面那条外键约束的坑,
+   * 而那个坑的表现是"偶尔删不掉",极难复现。
+   */
+  async purgeSubtree(input: { id: string; materializedPath: string }): Promise<number> {
+    const subtree = subtreePrefix(input.materializedPath);
+
+    return runSerializable(this.prisma, async (tx) => {
+      let removed = 0;
+
       // ⚠️ nodes.parent_id 是 `onDelete: Restrict`(§4.3),而 DELETE 不支持 ORDER BY,
       // 所以不能一条语句删整棵子树:外键检查是**即时**触发的,
       // 处理到父行时子行还在,直接撞约束。
       // 按深度从大到小逐层删 —— 叶子先走。循环上限纯属防御。
       for (let guard = 0; guard < CHAIN_GUARD; guard += 1) {
         const remaining = await tx.node.findMany({
-          where: { OR: [{ id: nodeId }, { materializedPath: { startsWith: subtree } }] },
+          where: { OR: [{ id: input.id }, { materializedPath: { startsWith: subtree } }] },
           select: { id: true, depth: true },
         });
-        if (remaining.length === 0) return;
+        if (remaining.length === 0) return removed;
 
         // 自己找最深的一层,**不依赖数据库的返回顺序**。
         // 靠 orderBy 的话,排序一旦失效(或被后人删掉)这段逻辑会静默退化成
@@ -590,18 +667,9 @@ export class NodeService {
 
         const ids = remaining.filter((item) => item.depth === maxDepth).map((item) => item.id);
         await tx.node.deleteMany({ where: { id: { in: ids } } });
+        removed += ids.length;
       }
       throw AppError.validation('节点层级异常,彻底删除已中止');
-    });
-
-    await this.permissions.invalidateByNode(nodeId);
-
-    await recordAudit(this.prisma, {
-      actorId: operator.id,
-      action: 'node.purge',
-      targetType: 'node',
-      targetId: nodeId,
-      detail: { title: row.title },
     });
   }
 

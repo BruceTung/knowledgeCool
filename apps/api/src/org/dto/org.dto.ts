@@ -78,3 +78,14 @@ export class SetAssignmentsDto implements SetUserAssignmentsInput {
   @IsUUID('4', { each: true })
   nodeIds!: string[];
 }
+
+/**
+ * 把某人加到某个节点下(v2.4)。
+ *
+ * ⚠️ 这里**只有 `userId`** —— 节点在路径参数里。因为这是**追加一条归属**,
+ * 不是整表替换:目标节点是明确的,不需要一个数组。
+ */
+export class AddNodeMemberDto {
+  @IsUUID('4', { message: '请选择一位在职成员' })
+  userId!: string;
+}

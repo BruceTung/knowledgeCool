@@ -90,6 +90,69 @@ export interface OrgScopeOption {
   memberCount: number;
 }
 
+// ---------------- 节点成员管理(v2.4) ----------------
+
+/**
+ * 一个节点的成员视图。
+ *
+ * ⚠️ 这里说的「成员」是**组织归属**(`org_assignments`),不是权限。
+ * 归属是组织事实(他在哪个部门 / 组),权限是判定结果(他能改什么)——
+ * 两者刻意不混在一个界面里,所以成员弹窗与权限弹窗是两个入口。
+ *
+ * 之所以需要这个视图:增量导入无法表达「调岗」(§8.5 已知限制),
+ * 而在这之前要"把某人移出某个组"只能到「人员管理 → 设置归属」整表替换,
+ * 看不到"这个节点下都有谁"。
+ */
+export interface NodeMemberView {
+  userId: string;
+  name: string;
+  employeeNo: string;
+  status: UserStatus;
+  /** 这个人在**这个节点子树内**的归属节点 id(通常只有一条) */
+  memberNodeIds: string[];
+  /** 他在这个子树内的归属路径,如 `技术部 / 后端组` */
+  memberPaths: string[];
+  /**
+   * 他在**别处**还有的归属(子树之外),如 `市场部 / CRM 项目`。
+   *
+   * 必须显示出来:移出这里的一条归属**不会**让他失去全部归属,
+   * 界面上不写清楚的话,管理员会以为把他"踢出公司"了。
+   */
+  otherPaths: string[];
+  /**
+   * 他就是这个节点的所有者(组长 / 部长)。
+   *
+   * ⚠️ **移出归属不改变所有权** —— 这是刻意的(归属与所有权是两件事),
+   * 但界面上必须提示,否则管理员会以为"移出组长"就换掉了组长。
+   */
+  isOwnerHere: boolean;
+  /**
+   * 他是祖先链上的所有者 —— 也就是"他本来就能管这个节点"。
+   * 这类人通常**不该**被移出(他是部长),界面给出更强的提示。
+   */
+  isAncestorOwner: boolean;
+}
+
+/** `GET /nodes/:nodeId/members` 的响应。 */
+export interface NodeMembersResponse {
+  nodeId: string;
+  title: string;
+  /**
+   * 直接归属在这个节点上的人 —— **只有这些人能从这里移出**。
+   * 子孙节点上的人要移出,得到对应的子孙节点上去操作。
+   */
+  direct: NodeMemberView[];
+  /** 归属在子孙节点上的人(含上面那批人的路径)。只读展示,用于回答"这个部门下都有谁" */
+  inherited: NodeMemberView[];
+  /** 我能否增删这里的归属 —— 前端据此隐藏按钮,服务端仍是唯一裁判 */
+  canManage: boolean;
+}
+
+/** 把某人加入某节点(追加一条归属,**不是整表替换**)。 */
+export interface AddNodeMemberInput {
+  userId: string;
+}
+
 // ---------------- Excel 导入(§8.5) ----------------
 
 /**

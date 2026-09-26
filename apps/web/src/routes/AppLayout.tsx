@@ -5,9 +5,12 @@ import { Button } from '../components/ui';
 import { useLogout, useMe } from '../features/auth/queries';
 import { GrantDialog } from '../features/grants/GrantDialog';
 import { useGrantDialog } from '../features/grants/dialog-store';
+import { MembersDialog } from '../features/members/MembersDialog';
+import { useMembersDialog } from '../features/members/dialog-store';
 import { OrgTreePanel } from '../features/org/OrgTreePanel';
 import { useOrgTree } from '../features/org/queries';
 import { CommandPalette } from '../features/search/CommandPalette';
+import { hasOpenModal } from '../lib/modal-store';
 
 /** 从路径里取出当前节点 id(`/n/:nodeId`)。 */
 function activeNodeIdOf(pathname: string): string | undefined {
@@ -24,6 +27,10 @@ function activeNodeIdOf(pathname: string): string | undefined {
  *   2. **权限弹窗挂在这里** —— 它由树上的齿轮按钮打开,而树就在这一层,
  *      所以状态放在这一层。放到路由页面里会导致"从树点开的弹窗
  *      要等页面切过去才出现"。
+ *
+ * v2.4 起这里挂的是**两个**弹窗:权限(能改什么)与成员(归属在哪)。
+ * 两者刻意不合并 —— 归属是组织事实,权限是判定结果,混在一起会让
+ * "移出成员 = 收回权限"变成一种反复出现的误解。
  */
 export function AppLayout() {
   const me = useMe();
@@ -36,6 +43,9 @@ export function AppLayout() {
   const grantTarget = useGrantDialog((state) => state.target);
   const openGrants = useGrantDialog((state) => state.open);
   const closeGrants = useGrantDialog((state) => state.close);
+  const membersTarget = useMembersDialog((state) => state.target);
+  const openMembers = useMembersDialog((state) => state.open);
+  const closeMembers = useMembersDialog((state) => state.close);
 
   // Ctrl / Cmd + K 打开命令面板。全局快捷键挂在 window 上,
   // 因为用户可能正把焦点放在正文里 —— 那种时候也要能唤起搜索。
@@ -43,6 +53,10 @@ export function AppLayout() {
     function onKeyDown(event: KeyboardEvent): void {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault();
+        // 已有模态盖在上面时不再叠加。少了这一句,权限 / 成员弹窗开着的时候
+        // 按 Cmd+K 会在弹窗里再冒出一个搜索框(两者 z-index 不同,视觉上很乱)。
+        // 这是全局快捷键必须知道"现在有没有模态"的唯一理由。
+        if (hasOpenModal()) return;
         setPaletteOpen(true);
       }
     }
@@ -132,6 +146,7 @@ export function AppLayout() {
             isSuperAdmin={user?.isSuperAdmin === true}
             activeNodeId={activeNodeId}
             onOpenGrants={openGrants}
+            onOpenMembers={openMembers}
           />
         ) : (
           <div className="flex h-full w-72 flex-none items-center justify-center border-r border-slate-200 bg-slate-50">
@@ -159,6 +174,14 @@ export function AppLayout() {
           nodeId={grantTarget.nodeId}
           title={grantTarget.title}
           onClose={closeGrants}
+        />
+      )}
+
+      {membersTarget !== null && (
+        <MembersDialog
+          nodeId={membersTarget.nodeId}
+          title={membersTarget.title}
+          onClose={closeMembers}
         />
       )}
     </div>

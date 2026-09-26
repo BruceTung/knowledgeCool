@@ -23,6 +23,8 @@ export const AUDIT_ACTIONS = [
   'node.delete',
   'node.restore',
   'node.purge',
+  /** 保留期到点后由定时任务清理回收站 —— `actor` 为空,是系统自己做的 */
+  'node.purge.auto',
   'node.content.update',
   /** 任命 / 变更所有者 —— 直接改变"谁能改什么",是最该留痕的一类 */
   'node.owner.update',
@@ -33,6 +35,9 @@ export const AUDIT_ACTIONS = [
   'org.user.create',
   'org.user.update',
   'org.assignment.set',
+  /** 在某个节点上单独加人 / 移出人(v2.4 节点成员管理入口) */
+  'org.member.add',
+  'org.member.remove',
   // 评论
   'comment.create',
   'comment.update',
@@ -52,6 +57,7 @@ export const AUDIT_ACTION_LABELS: Readonly<Record<string, string>> = Object.free
   'node.delete': '移入回收站',
   'node.restore': '从回收站恢复',
   'node.purge': '彻底删除',
+  'node.purge.auto': '回收站过期自动清理',
   'node.content.update': '保存正文',
   'node.owner.update': '变更所有者',
   'grant.replace': '调整授权名单',
@@ -59,6 +65,8 @@ export const AUDIT_ACTION_LABELS: Readonly<Record<string, string>> = Object.free
   'org.user.create': '新建人员',
   'org.user.update': '修改人员',
   'org.assignment.set': '调整组织归属',
+  'org.member.add': '节点添加成员',
+  'org.member.remove': '节点移出成员',
   'comment.create': '发表评论',
   'comment.update': '修改评论',
   'comment.delete': '删除评论',

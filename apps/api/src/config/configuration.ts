@@ -27,6 +27,16 @@ export interface AppConfiguration {
    * 必须显式设 SESSION_COOKIE_SECURE=false,否则浏览器不会回传 Cookie。
    */
   sessionCookieSecure: boolean;
+  /**
+   * 回收站保留天数(v2.4)。
+   *
+   * **`<= 0` 表示关闭自动清理** —— 回收站里的东西不会自己消失。
+   * 这是刻意的:自动删除用户数据这类行为必须能被明确关掉,
+   * 而不是"把天数设得很大"来代替。
+   */
+  trashRetentionDays: number;
+  /** 自动清理的扫描间隔(小时)。`<= 0` 同样表示关闭。 */
+  trashPurgeIntervalHours: number;
 }
 
 function toInt(value: string | undefined, fallback: number): number {
@@ -56,5 +66,10 @@ export function loadConfiguration(): AppConfiguration {
     appVersion: process.env.APP_VERSION ?? '0.1.0',
     sessionTtlHours: toInt(process.env.SESSION_TTL_HOURS, 24 * 30),
     sessionCookieSecure: toBool(process.env.SESSION_COOKIE_SECURE, isProduction),
+    // 默认 30 天。设 0(或负数)即关闭 —— 见接口上的说明。
+    trashRetentionDays: toInt(process.env.TRASH_RETENTION_DAYS, 30),
+    // 默认 6 小时扫一次。清理本身很轻(一个走索引的查询),
+    // 但没必要更频繁 —— 回收站里的东西早一小时晚一小时消失,没人会察觉。
+    trashPurgeIntervalHours: toInt(process.env.TRASH_PURGE_INTERVAL_HOURS, 6),
   };
 }

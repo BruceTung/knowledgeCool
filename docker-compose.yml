@@ -64,6 +64,11 @@ services:
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
       SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-720}
       UPLOAD_DIR: /data/uploads
+      # 回收站保留策略(v2.4)。**保留天数 <=0 表示关闭自动清理** ——
+      # 回收站里的东西不会自己消失,只能手动彻底删除。
+      # 这是刻意的:自动删除用户数据必须能被明确关掉,而不是靠"把天数设得很大"来绕。
+      TRASH_RETENTION_DAYS: ${TRASH_RETENTION_DAYS:-30}
+      TRASH_PURGE_INTERVAL_HOURS: ${TRASH_PURGE_INTERVAL_HOURS:-6}
     volumes:
       # 附件走本地卷(DESIGN.md §2.1),预留 MinIO 接口
       - uploads:/data/uploads

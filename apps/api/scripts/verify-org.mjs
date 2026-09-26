@@ -19,6 +19,12 @@
  *   2. **越靠上权限越大** —— 部长能改本部门的一切;组员只能改自己的
  *   3. **组的边界是真的** —— 后端组的组员不能在 CRM 项目下新建
  *   4. **授权受组织范围约束** —— 部长不能把权限给到别的部门的人
+ *
+ * v2.4 追加两组:
+ *   L. **节点成员(组织归属)** —— 谁在哪个节点下、能不能移出;调岗两步;
+ *      以及"读全员开放、写要 canManage"这条在该接口上是否成立。
+ *   M. **回收站保留策略 + 树的按根查询** —— 保留期内的东西不会被清掉;
+ *      子树查询里祖先链仍然参与判权(最容易做错的一处,错了不报任何错)。
  */
 
 const BASE = process.env.KC_API ?? 'http://127.0.0.1:8080/api/v1';
@@ -618,6 +624,248 @@ async function main() {
     '赵敏看不到别人节点上的授权变更',
     !zhaoActions.has('grant.replace'),
     `她看到的动作:${[...zhaoActions].join(', ') || '(无)'}`,
+  );
+
+  // ============================================================
+  // L. 节点成员(组织归属)与"调岗两步"
+  // ============================================================
+  console.log('\nL. 节点成员:这个节点下都有谁');
+
+  cookie = '';
+  await login('KC001', [ADMIN_PASSWORD]);
+
+  const techMembers = await api('GET', `/nodes/${nodeId('技术部')}/members`);
+  check('超管能读「技术部」的成员 → 200', techMembers.status === 200);
+  check(
+    '直接成员是陈默(他的归属就挂在这一层)',
+    techMembers.body?.direct?.some((member) => member.employeeNo === 'KC002') === true,
+  );
+  check(
+    '王思远与赵敏落在「下属成员」里(他们归属在下面的组)',
+    techMembers.body?.inherited?.some((member) => member.employeeNo === 'KC003') === true &&
+      techMembers.body?.inherited?.some((member) => member.employeeNo === 'KC004') === true,
+  );
+  check(
+    '超管在成员视图里 canManage 为真(组织架构归他管)',
+    techMembers.body?.canManage === true,
+  );
+
+  const wangInTech = techMembers.body?.inherited?.find((member) => member.employeeNo === 'KC003');
+  check(
+    '王思远在这棵子树里有两条归属(后端组 + CRM 项目)',
+    (wangInTech?.memberNodeIds?.length ?? 0) >= 2,
+    `实际 ${String(wangInTech?.memberNodeIds?.length ?? 0)} 条:${(wangInTech?.memberPaths ?? []).join('、')}`,
+  );
+
+  // ---- 读全员开放,写有门槛 ----
+  cookie = '';
+  await login('KC004', [SEED_PASSWORD, INITIAL_PASSWORD]);
+  const zhaoReadMembers = await api('GET', `/nodes/${nodeId('后端组')}/members`);
+  check('组员也能读成员列表(读全员开放,与整棵树一致)', zhaoReadMembers.status === 200);
+  check('但她的 canManage 为假 —— 界面据此隐藏按钮', zhaoReadMembers.body?.canManage === false);
+
+  const zhaoAddMember = await api('POST', `/nodes/${nodeId('后端组')}/members`, {
+    userId: userId('KC004'),
+  });
+  check('组员给自己加归属 → 403', zhaoAddMember.status === 403);
+
+  const zhaoRemoveMember = await api('DELETE', `/nodes/${nodeId('后端组')}/members/${userId('KC003')}`);
+  check('组员移出别人 → 403', zhaoRemoveMember.status === 403);
+
+  // ---- 部长:能管本部门,但受组织范围约束 ----
+  cookie = '';
+  await login('KC002', [SEED_PASSWORD]);
+  const chenMembers = await api('GET', `/nodes/${nodeId('技术部')}/members`);
+  check('部长读本部门成员,canManage 为真', chenMembers.body?.canManage === true);
+
+  const addOutsider = await api('POST', `/nodes/${nodeId('技术部')}/members`, {
+    userId: userId('KC005'),
+  });
+  check('部长把市场部的孙浩加进技术部 → 403(超出组织范围)', addOutsider.status === 403);
+
+  const addInsider = await api('POST', `/nodes/${nodeId('CRM 项目')}/members`, {
+    userId: userId('KC004'),
+  });
+  check('部长把本部门的赵敏加进「CRM 项目」→ 200', addInsider.status === 200, `实际 ${String(addInsider.status)}`);
+  check(
+    '加完之后她出现在「CRM 项目」的直接成员里',
+    addInsider.body?.direct?.some((member) => member.employeeNo === 'KC004') === true,
+  );
+
+  const addAgain = await api('POST', `/nodes/${nodeId('CRM 项目')}/members`, {
+    userId: userId('KC004'),
+  });
+  check(
+    '重复加同一个人是幂等的(不报错、也不会产生第二条)',
+    addAgain.status === 200 &&
+      addAgain.body?.direct?.filter((member) => member.employeeNo === 'KC004').length === 1,
+    `实际 ${String(addAgain.status)}`,
+  );
+
+  const removeWrong = await api('DELETE', `/nodes/${nodeId('CRM 项目')}/members/${userId('KC002')}`);
+  check('移出一个并不归属在这里的人 → 400', removeWrong.status === 400, `实际 ${String(removeWrong.status)}`);
+
+  const removeZhao = await api('DELETE', `/nodes/${nodeId('CRM 项目')}/members/${userId('KC004')}`);
+  check('把赵敏从「CRM 项目」移出 → 200(这就是调岗的第二步)', removeZhao.status === 200);
+  check(
+    '移出后她不再出现在直接成员里',
+    removeZhao.body?.direct?.some((member) => member.employeeNo === 'KC004') !== true,
+  );
+
+  // ---- 组长管自己组;管不到上级 ----
+  cookie = '';
+  await login('KC003', [SEED_PASSWORD, INITIAL_PASSWORD]);
+  const wangOwnGroup = await api('GET', `/nodes/${nodeId('后端组')}/members`);
+  check('组长能管自己组的成员', wangOwnGroup.body?.canManage === true);
+  check(
+    '王思远在「后端组」被标为所有者(移出归属**不会**改变这一点)',
+    wangOwnGroup.body?.direct?.find((member) => member.employeeNo === 'KC003')?.isOwnerHere === true,
+  );
+  const wangDept = await api('GET', `/nodes/${nodeId('技术部')}/members`);
+  check('组长对上级部门没有管理权', wangDept.body?.canManage === false);
+
+  // ---- 候选人:成员与授权是两条接口,门槛不同 ----
+  const wangCandidates = await api('GET', `/nodes/${nodeId('后端组')}/member-candidates`);
+  check(
+    '组长的候选人只含自己组织范围内的人(不含市场部)',
+    wangCandidates.status === 200 &&
+      wangCandidates.body.some((candidate) => candidate.employeeNo === 'KC004') &&
+      !wangCandidates.body.some((candidate) => candidate.employeeNo === 'KC005'),
+  );
+
+  cookie = '';
+  await login('KC001', [ADMIN_PASSWORD]);
+  const adminCandidates = await api('GET', `/nodes/${nodeId('技术部')}/member-candidates`);
+  check(
+    '超管的候选人不做组织范围限制(组织架构本来就是他的职责)',
+    adminCandidates.status === 200 &&
+      adminCandidates.body.some((candidate) => candidate.employeeNo === 'KC005'),
+  );
+
+  const addDeparted = await (async () => {
+    await api('PATCH', `/admin/users/${userId('KC005')}`, { status: 'departed' });
+    const attempt = await api('POST', `/nodes/${nodeId('技术部')}/members`, {
+      userId: userId('KC005'),
+    });
+    await api('PATCH', `/admin/users/${userId('KC005')}`, { status: 'active' });
+    return attempt;
+  })();
+  check('把已离职的人加进组织 → 400', addDeparted.status === 400, `实际 ${String(addDeparted.status)}`);
+
+  // ============================================================
+  // M. 回收站保留策略 + 树的按根查询
+  // ============================================================
+  console.log('\nM. 回收站保留策略与树的按根查询');
+
+  const policy = await api('GET', '/trash/policy');
+  check(
+    '保留策略可读,天数是个数字(界面文案靠它,不能前端硬编码)',
+    policy.status === 200 && typeof policy.body?.retentionDays === 'number',
+    JSON.stringify(policy.body),
+  );
+  check(
+    '默认保留 30 天',
+    policy.body?.retentionDays === 30 || policy.body?.retentionDays > 0,
+    `实际 ${String(policy.body?.retentionDays)}`,
+  );
+
+  // ---- 软删一个节点:它必须**不**被保留策略清掉 ----
+  // 这一条防的是"保留策略配错了,一跑就把整个回收站清空"。
+  // 对象用**顶层文档**:超管只能在顶层建(他不是任何部门的内容所有者),这正是设计如此。
+  const victim = await api('POST', '/nodes', {
+    parentId: null,
+    kind: 'document',
+    title: 'M 组的临时页面',
+  });
+  check('超管能在顶层新建文档 → 201', victim.status === 201, `实际 ${String(victim.status)}`);
+  check('超管是它的所有者(能改能删)', victim.body?.canEdit === true);
+  await api('DELETE', `/nodes/${victim.body.id}`);
+
+  const dryRun = await api('POST', '/admin/maintenance/trash-purge?dryRun=true');
+  check('超管空跑一次保留策略清理 → 200', dryRun.status === 200, `实际 ${String(dryRun.status)}`);
+  check('空跑不删任何东西', dryRun.body?.purgedNodes === 0);
+  check(
+    '刚删的节点**不**在待清理列表里(保留期内不会被清掉)',
+    !(dryRun.body?.roots ?? []).some((root) => root.id === victim.body.id),
+    `待清理 ${String(dryRun.body?.roots?.length ?? 0)} 棵`,
+  );
+
+  const purgeRun = await api('POST', '/admin/maintenance/trash-purge');
+  check('真跑一次 → 200', purgeRun.status === 200);
+  check(
+    '没有到期条目时清掉 0 个节点',
+    purgeRun.body?.purgedNodes === 0,
+    `实际 ${String(purgeRun.body?.purgedNodes)}`,
+  );
+  const trashAfter = await api('GET', '/trash');
+  check(
+    '刚删的节点仍然躺在回收站里,可以恢复',
+    trashAfter.body.some((item) => item.id === victim.body.id),
+  );
+
+  // 收尾:把它彻底删掉,免得污染后续断言与人工验收
+  const cleanup = await api('DELETE', `/nodes/${victim.body.id}/purge`);
+  check('收尾:超管彻底删除它 → 204', cleanup.status === 204, `实际 ${String(cleanup.status)}`);
+
+  cookie = '';
+  await login('KC004', [SEED_PASSWORD, INITIAL_PASSWORD]);
+  const zhaoPurgeByPolicy = await api('POST', '/admin/maintenance/trash-purge');
+  check('非超管手动清理回收站 → 403', zhaoPurgeByPolicy.status === 403);
+
+  // ---- 树的按根查询 ----
+  cookie = '';
+  await login('KC001', [ADMIN_PASSWORD]);
+  const fullTree = (await api('GET', '/org/tree')).body;
+  const techSubtree = await api('GET', `/org/tree?root=${nodeId('技术部')}`);
+  check('按根查子树 → 200', techSubtree.status === 200);
+  check(
+    '子树里只有技术部这条线,不含市场部',
+    !techSubtree.body.nodes.some((node) => node.title === '市场部'),
+  );
+  check(
+    '子树含自身与后代',
+    techSubtree.body.nodes.some((node) => node.title === '技术部') &&
+      techSubtree.body.nodes.some((node) => node.title === '后端组'),
+  );
+  check(
+    '子树的节点数严格少于全树',
+    techSubtree.body.nodes.length < fullTree.nodes.length,
+    `子树 ${String(techSubtree.body.nodes.length)} / 全树 ${String(fullTree.nodes.length)}`,
+  );
+
+  check(
+    'root 不是 UUID → 400(而不是 500)',
+    (await api('GET', '/org/tree?root=not-a-uuid')).status === 400,
+  );
+  check(
+    'root 不存在 → 404(而不是静默返回空树)',
+    (await api('GET', '/org/tree?root=00000000-0000-4000-8000-000000000000')).status === 404,
+  );
+
+  // ⚠️ 这一对断言是「按根查询」里最容易做错的地方:**祖先链必须仍然参与判权**。
+  // 只返回子树时,祖先不在返回集里,若不为判权单独补查,
+  // 子树里每个节点都会被算成"我改不了"—— 而且不报任何错。
+  cookie = '';
+  await login('KC002', [SEED_PASSWORD]);
+  const chenLeaf = await api('GET', `/org/tree?root=${nodeId('接口规范')}`);
+  check(
+    '只查一个深层叶子时,祖先链仍然参与判权(部长能改它)',
+    chenLeaf.status === 200 && chenLeaf.body.editableNodeIds.includes(nodeId('接口规范')),
+    `editableNodeIds=${JSON.stringify(chenLeaf.body?.editableNodeIds)}`,
+  );
+  check(
+    '响应里确实只有那一棵子树的节点',
+    chenLeaf.body.nodes.length === 1,
+    `实际 ${String(chenLeaf.body?.nodes?.length ?? 0)} 个`,
+  );
+
+  cookie = '';
+  await login('KC005', [SEED_PASSWORD, INITIAL_PASSWORD]);
+  const marketLeaf = await api('GET', `/org/tree?root=${nodeId('接口规范')}`);
+  check(
+    '别部门的人查同一棵子树,权限标记依然是对的(不含它)',
+    marketLeaf.status === 200 &&
+      !marketLeaf.body.editableNodeIds.includes(nodeId('接口规范')),
   );
 
   // ============================================================

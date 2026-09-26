@@ -137,6 +137,29 @@ export interface TrashItem {
   parentAlive: boolean;
 }
 
+/** 回收站保留策略 —— 界面用它告诉用户"东西会自己消失"(v2.4)。 */
+export interface TrashPolicy {
+  /** 保留天数。`0` 表示自动清理**已关闭** */
+  retentionDays: number;
+  /** 扫描间隔(小时)。`0` 表示关闭 */
+  purgeIntervalHours: number;
+}
+
+/**
+ * 回收站保留策略的执行结果(v2.4)。
+ *
+ * 这条策略的背景:回收站此前**不会自己清理** —— 删掉的东西一直留着,
+ * 这既吃磁盘,也让"回收站里那些陈年条目还能恢复吗"变成一个说不清的问题。
+ */
+export interface TrashPurgeResult {
+  /** 当前生效的保留天数。`0` 表示自动清理**已关闭** */
+  retentionDays: number;
+  /** 本次(或将)被清理的子树根。`dryRun` 时就靠它预览 */
+  roots: { id: string; title: string; deletedAt: string; subtreeSize: number }[];
+  /** 实际删除的节点数。`dryRun` 时恒为 `0` */
+  purgedNodes: number;
+}
+
 /** 把树形打平后按父子关系重建 —— 前端消费用。 */
 export interface FlatNode extends NodeSummary {
   children: FlatNode[];
