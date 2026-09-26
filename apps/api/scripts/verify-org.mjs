@@ -7,6 +7,10 @@
  *   KC_API=http://host:8080/api/v1 KC_ROOT=http://host:8080 \
  *   KC_SEED_PASSWORD=xxx KC_ADMIN_PASSWORD=yyy node apps/api/scripts/verify-org.mjs
  *
+ *   # 在 api 容器里跑(静态直出那一项要指到 web 容器):
+ *   docker compose exec -e KC_API=http://127.0.0.1:3000/api/v1 \
+ *     -e KC_ROOT=http://web api node scripts/verify-org.mjs
+ *
  * ⚠️ 与上一版脚本的**根本区别**:v1 的 76 项断言里有一批在新模型下是错的反的
  * (「只读成员越权 403」「检索结果按权限过滤」)—— 那些断言的存在本身就说明
  * 模型理解错了。这一版按新模型重写,重点验四件新事情:
@@ -567,8 +571,22 @@ async function main() {
   const pngBody = await pngUpload.json().catch(() => null);
   check('上传 .png → 201 且返回服务端生成的 URL', pngUpload.status === 201 && /^\/uploads\/[0-9a-f-]+\.png$/.test(pngBody?.url ?? ''), JSON.stringify(pngBody));
   if (pngBody?.url !== undefined) {
-    const served = await fetch(`${ROOT}${pngBody.url}`);
-    check('由 Nginx 直出静态文件 → 200', served.status === 200);
+    // ⚠️ 静态文件的直出方是 **Nginx(web 容器)**,不是 API 容器。
+    // 所以这一项能不能验,取决于脚本跑在哪:
+    //   - 宿主机上跑 → KC_ROOT 指到对外入口(默认 http://127.0.0.1:8080)
+    //   - 在 api 容器里跑 → KC_ROOT 要用 compose 的服务名(http://web)
+    //     因为 api 容器自己监听的是 3000,不是 8080。
+    // 不可达时**明确报"跳过"**而不是抛异常 —— 验收脚本自己崩掉,
+    // 会让"通过了几项"这个结论变得没有意义。
+    try {
+      const served = await fetch(`${ROOT}${pngBody.url}`);
+      check(`由 Nginx 直出静态文件 → 200(${ROOT})`, served.status === 200, `HTTP ${String(served.status)}`);
+    } catch (error) {
+      console.log(
+        `  · 跳过静态直出检查:${ROOT} 从这里不可达(${error instanceof Error ? error.message : '未知'})`,
+      );
+      console.log('    在 api 容器内跑时请设 KC_ROOT=http://web');
+    }
   }
 
   // ============================================================
