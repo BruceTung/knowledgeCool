@@ -50,8 +50,30 @@ model User {
   deletedPages Page[]        @relation("PageDeletedBy")
   comments     Comment[]
   auditLogs    AuditLog[]
+  sessions     Session[]
 
   @@map("users")
+}
+
+// ---------------- 会话(阶段一认证,见 DESIGN.md §6.1.1) ----------------
+model Session {
+  /// 主键是 token 的 SHA-256(64 位十六进制),**不存 token 本身** ——
+  /// 这样即使数据库被读走,也无法据此伪造登录态。
+  id         String   @id @db.Char(64)
+  userId     String   @map("user_id") @db.Uuid
+  expiresAt  DateTime @map("expires_at") @db.Timestamptz(6)
+  lastSeenAt DateTime @default(now()) @map("last_seen_at") @db.Timestamptz(6)
+  userAgent  String?  @map("user_agent")
+  ip         String?
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // 按用户批量吊销(停用账号 / 移出空间)与清理过期行都要用到
+  // 显式命名而非依赖 Prisma 自动推导,避免手写 migration SQL 时名字对不上
+  @@index([userId], map: "sessions_user_idx")
+  @@index([expiresAt], map: "sessions_expires_idx")
+  @@map("sessions")
 }
 
 // ---------------- 空间 ----------------
@@ -126,7 +148,12 @@ model Page {
   comments  Comment[]
 
   @@index([spaceId, parentId, position], map: "pages_tree_idx")
-  // pages_path_idx(text_pattern_ops)与 pages_alive_idx(部分索引)在 migration 里手写
+  // 物化路径的前缀查询('/p1/p2%')必须带 text_pattern_ops 才吃得到索引。
+  // 用 ops: raw(...) 把它表达进 schema —— 否则 Prisma 会认为这个索引是"多余的"
+  // 并在下次 migrate dev 时生成 DROP INDEX,静默废掉前缀查询。
+  @@index([materializedPath(ops: raw("text_pattern_ops"))], map: "pages_path_idx")
+  // pages_alive_idx(部分索引)与 page_contents_trgm_idx(GIN 三元组)Prisma 表达不了,
+  // 只能在 migration 里手写;由 db:check-drift 的白名单守着,见该脚本注释。
   @@map("pages")
 }
 
@@ -143,7 +170,9 @@ model PageContent {
 
   page Page @relation(fields: [pageId], references: [id], onDelete: Cascade)
 
-  // page_contents_trgm_idx(GIN + gin_trgm_ops)在 migration 里手写
+  // 中文子串检索的 GIN 三元组索引(DESIGN.md §2.3)。用 type: Gin + ops: raw 表达,
+  // 让 Prisma 认得它 —— 否则 migrate dev 会生成 DROP INDEX,静默废掉中文检索。
+  @@index([textForSearch(ops: raw("gin_trgm_ops"))], type: Gin, map: "page_contents_trgm_idx")
   @@map("page_contents")
 }
 

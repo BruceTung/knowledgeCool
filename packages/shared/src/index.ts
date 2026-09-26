@@ -12,3 +12,4 @@ export * from './roles.js';
 export * from './errors.js';
 export * from './dto.js';
 export * from './permission.js';
+export * from './auth.js';

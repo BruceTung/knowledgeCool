@@ -2,13 +2,18 @@ import { Controller, Get, HttpCode, HttpStatus, Res } from '@nestjs/common';
 import type { HealthResponse, ReadinessResponse } from '@knowledgecool/shared';
 import type { Response } from 'express';
 
+import { Public } from '../auth/public.decorator.js';
 import { HealthService } from './health.service.js';
 
 /**
- * 健康检查接口(无需登录 —— 探针不该带凭证)。
+ * 健康检查接口。**无需登录** —— 探针不带凭证,容器编排也拿不到 Cookie。
+ *
+ * 因此整个控制器标 @Public():AuthModule 把 AuthGuard 注册成了全局守卫
+ * (默认一切接口都要登录),健康检查必须显式放行。
  *
  * 注意:这两个接口受全局前缀影响,实际路径是 /api/v1/health 与 /api/v1/health/ready。
  */
+@Public()
 @Controller('health')
 export class HealthController {
   constructor(private readonly health: HealthService) {}
