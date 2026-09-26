@@ -1,0 +1,25 @@
+# ============================================================
+# 知源 KnowledgeCool · 构建上下文排除规则
+# 没有这个文件,build context 会把宿主机的 node_modules / .git / dist 一起打包上传,
+# 既慢,又可能把宿主机的 node_modules 覆盖进镜像。
+# ============================================================
+.git
+.gitignore
+.workbuddy
+prototype
+DESIGN.md
+
+node_modules
+**/node_modules
+
+**/dist
+**/coverage
+**/*.tsbuildinfo
+
+*.log
+.env
+.env.*
+!**/.env.example
+
+# 由 prisma generate 产出,镜像内会重新生成
+apps/api/src/generated

@@ -1,0 +1,101 @@
+# ============================================================
+# 知源 KnowledgeCool · 阶段一部署形态(4 个容器)
+# postgres · redis · api · web
+#
+# 用法:
+#   cp .env.example .env   # 然后填好 POSTGRES_PASSWORD 与 SESSION_SECRET
+#   docker compose up -d --build
+#   访问 http://<主机>:${WEB_PORT:-8080}/api/v1/health 应返回 200
+# ============================================================
+name: knowledgecool
+
+services:
+  # ---------------- 主库 ----------------
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-knowledgecool}
+      # `:?` 让缺失时立刻失败并打出这条消息,而不是起一个空密码的库
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在 .env 里设置 POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-knowledgecool}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      # $$ 是 compose 的转义,表示把 $POSTGRES_USER 交给容器内 shell 展开
+      test: ['CMD-SHELL', 'pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
+  # ---------------- 缓存 ----------------
+  redis:
+    image: redis:7-alpine
+    # appendonly 打开:权限缓存本身可丢,但阶段二会用来放在线态与队列,
+    # 现在就把持久化打开,免得到时忘了改。
+    command: ['redis-server', '--appendonly', 'yes']
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  # ---------------- API ----------------
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      NODE_ENV: production
+      API_PORT: '3000'
+      # 容器内主机名用服务名,不能用 localhost
+      DATABASE_URL: postgresql://${POSTGRES_USER:-knowledgecool}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-knowledgecool}?schema=public
+      REDIS_URL: redis://redis:6379
+      WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:8080}
+      SESSION_SECRET: ${SESSION_SECRET:?请在 .env 里设置 SESSION_SECRET(openssl rand -hex 32)}
+      UPLOAD_DIR: /data/uploads
+    volumes:
+      # 附件走本地卷(DESIGN.md §2.1),预留 MinIO 接口
+      - uploads:/data/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      # 存活探针:不碰外部依赖,所以不需要数据库就绪(见 health.service.ts 的说明)
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3000/api/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  # ---------------- 前端 + 反向代理 ----------------
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    ports:
+      # 默认映射到 8080,避免在开发机上占用 80 端口
+      - '${WEB_PORT:-8080}:80'
+    depends_on:
+      api:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  redis-data:
+  uploads:
