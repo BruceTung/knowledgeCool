@@ -58,6 +58,11 @@ services:
       REDIS_URL: redis://redis:6379
       WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:8080}
       SESSION_SECRET: ${SESSION_SECRET:?请在 .env 里设置 SESSION_SECRET(openssl rand -hex 32)}
+      # 会话 Cookie 的 Secure 属性。默认 true;TLS 要到 M6 才落地,
+      # 在那之前若通过 http 访问(例如本机验收),必须设为 false,否则浏览器不回传 Cookie。
+      # 详见 DESIGN.md §6.1.1。
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
+      SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-720}
       UPLOAD_DIR: /data/uploads
     volumes:
       # 附件走本地卷(DESIGN.md §2.1),预留 MinIO 接口
