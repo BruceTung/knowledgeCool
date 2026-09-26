@@ -2,9 +2,9 @@
 
 | 项 | 值 |
 |---|---|
-| 文档版本 | v1.2 |
+| 文档版本 | v1.3 |
 | 最后更新 | 2026-09-26 |
-| 状态 | 阶段一 M1 基础设施已落地并本地验证通过;compose 四容器验收待装 Docker Desktop |
+| 状态 | 阶段一 M1 已完成:**四容器 compose 已实测通过**(`down -v` 清空后一条命令 6.5 秒起来,`/api/v1/health` 返回 200) |
 | 定位 | 内网自托管 · 企业内部员工知识库 |
 
 ---
@@ -655,12 +655,17 @@ POST /pages/:id/comments  { body, parentId? }
 
 ### M1 · 基础设施(3 天)
 
-- [ ] monorepo 初始化(pnpm workspaces + tsconfig base)
-- [ ] `docker-compose.yml`:postgres / redis / api / web
-- [ ] NestJS 骨架 + Prisma 接入 + 首次 migration
-- [ ] `packages/shared` 建立,放角色枚举、错误码、DTO 类型
-- [ ] 健康检查接口 + 统一异常过滤器
+- [x] monorepo 初始化(pnpm workspaces + tsconfig base)
+- [x] `docker-compose.yml`:postgres / redis / api / web
+- [x] NestJS 骨架 + Prisma 接入 + 首次 migration
+- [x] `packages/shared` 建立,放角色枚举、错误码、DTO 类型
+- [x] 健康检查接口 + 统一异常过滤器
 - **验收**:`docker compose up` 后 `/api/v1/health` 返回 200
+  —— **已达成(2026-09-26)**。补充实测口径:先 `docker compose down -v` 清空数据卷,
+  再 `docker compose up -d`,6.5 秒全部就绪;经 Nginx 反代访问 `/api/v1/health` 得
+  `{"status":"ok",...}`;`/api/v1/health/ready` 同时报告 database 与 redis 均为 up;
+  全新建库的迁移自动执行,扩展 `citext`/`pg_trgm`、8 张业务表与三个手写索引(含部分索引与
+  GIN 三元组索引)均已就位。
 
 ### M2 · 身份与空间(4 天)
 
@@ -774,3 +779,4 @@ POST /pages/:id/comments  { body, parentId? }
 | 2026-09-26 | v1.0 | 初稿。检索方案由早期的 "PG tsvector" 修正为 "pg_trgm + ILIKE"(原因见 §2.3:tsvector 分词器对中文不可用) |
 | 2026-09-26 | v1.1 | §11.1 关闭「与既有知识库项目的关系」这一阻塞项 —— 用户已放弃该项目,不再并存。阻塞项由两项减为一项 |
 | 2026-09-26 | v1.2 | 开工实测后回写,共三处:①**§2.5 新增** —— NestJS 12 是 ESM-only 且官方新项目默认 ESM,故本项目采用 ESM;实测 esbuild 即使开 `emitDecoratorMetadata` 也不产出 `design:paramtypes`,故 Vitest 必须配 `unplugin-swc`;Prisma 7 的生成器 / 配置文件 / driver adapter 三处破坏性变化,以及 `importFileExtension` 这个 ESM 专属坑。连带把 Node 20 → **22 LTS**、TypeScript → **6.0.x**(均给出依赖下限依据)。②**§4.2** `audit_logs.ip` 由 `inet` 改为 `text`(Prisma 无 inet 标量)。③**§5.3** 补充同层多规则命中次序(user 强于 group;deny 先于一切)—— 原伪代码未定义该情形。 |
+| 2026-09-26 | v1.3 | M1 完成并**实测验收通过**(装上 Docker Desktop 后补跑):`docker compose down -v` 清空数据卷 → `up -d` → 6.5 秒四容器就绪;经 Nginx 反代 `/api/v1/health` 返回 200、`/api/v1/health/ready` 报 database 与 redis 均 up;全新建库迁移自动执行,扩展与三个手写索引均就位。同步修正两处实现缺陷:①`pnpm-lock.yaml` 与 package.json 的 typescript 版本不一致(`--frozen-lockfile` 会失败,影响任何全新克隆与 CI);②api 镜像原用 `pnpm exec` 调 prisma,导致每次容器启动都去外网下载 pnpm 并 relink 依赖(启动 39s+ 且耦合外网),改为直调 `./node_modules/.bin/prisma` 后降到 6.5s。§9 的 M1 任务项已勾选完成。 |
