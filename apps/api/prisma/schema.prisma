@@ -1,17 +1,28 @@
 // 知源 KnowledgeCool · 数据模型
 // 逐字对应 DESIGN.md §4.2 的建表 DDL。
 //
-// ⚠️ Prisma 7 的三处重要变化(首次开工时实测确认,已回写 DESIGN.md):
+// ⚠️ v2.0(2026-09-26)模型重做 —— 空间与页面**合并为一棵 `nodes` 树**:
+//   - 作废:`spaces` / `space_members` / `page_permissions`
+//   - 改名:`pages` → `nodes`(加 `kind` / `owner_id`),`page_contents` → `node_contents`
+//   - 新增:`org_assignments`(组织归属)、`node_grants`(授权名单)
+//   理由见 DESIGN.md §1.5;权限判定见 §5.2。
+//
+// ⚠️ v2.2(2026-09-26)—— 登录标识由邮箱改为**工号**:
+//   - `users.email`(citext) → `users.employee_no`(text)
+//   - 新增 `users.must_change_password`(新账号一律 true,首登强制改密,见 §6.1.2)
+//   - `citext` 扩展不再需要
+//
+// Prisma 7 的三处重要变化(首次开工时实测确认):
 //   1. 生成器是 `prisma-client`(不是 prisma-client-js),`output` 为必填,
 //      且产出的是 **TypeScript 源码**(带 @ts-nocheck),由本项目的 tsc 一起编译。
 //   2. datasource 不再写 `url` —— 连接串移到 prisma7.config.ts。
 //   3. 连接数据库**必须**经由 driver adapter(@prisma/adapter-pg),见 prisma.service.ts。
 //
-// Prisma schema 表达不了的三类东西,在首次 migration 的 SQL 里手写补齐(见该文件注释):
+// Prisma schema 表达不了的东西,在 migration 的 SQL 里手写补齐:
 //   - CHECK 约束(状态枚举用 text + check,刻意不用 PG enum:enum 增删值很痛)
-//   - 部分索引 pages_alive_idx(... where deleted_at is null)
-//   - pg_trgm 的 GIN 索引
-//   - audit_logs.ip 的类型(DESIGN v1.1 原写 inet,Prisma 不支持该标量,已改 text)
+//   - 部分索引 nodes_alive_idx(... where deleted_at is null)
+//   - pg_trgm 的 GIN 索引(node_contents_trgm_idx,已用 type/ops 表达进 schema)
+//   - audit_logs.ip 的类型(Prisma 不支持 inet 标量,用 text)
 
 generator client {
   provider        = "prisma-client"
@@ -25,37 +36,47 @@ generator client {
 
 datasource db {
   provider   = "postgresql"
-  extensions = [citext, pg_trgm]
+  extensions = [pg_trgm]
 }
 
 // ---------------- 用户 ----------------
 model User {
   id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  email        String    @unique @db.Citext
+  /// 工号(v2.2)。**登录标识就是它**,不是邮箱。
+  /// 用 text 而非数字:工号常带字母前缀或前导零(如 KC2026001),当数字存会丢信息。
+  employeeNo   String    @unique @map("employee_no")
   name         String
   passwordHash String    @map("password_hash")
-  /// 阶段一的「用户组」就取这个字段(DESIGN.md §4.2)
-  department   String?
+  /// 首次登录必须改密(v2.2)。新账号统一初始密码 123456(内置,不进模板),
+  /// 所以必须有这个开关 —— 且它是**服务端拦截**的依据,不是纯前端状态(§6.1.2)。
+  mustChangePassword Boolean @default(true) @map("must_change_password")
   avatarColor  String    @default("gray") @map("avatar_color")
+  /// active 在职 | disabled 账号被停用 | departed 已离职 —— check 约束在 migration 里
   status       String    @default("active")
   isSuperAdmin Boolean   @default(false) @map("is_super_admin")
   lastLoginAt  DateTime? @map("last_login_at") @db.Timestamptz(6)
   createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt    DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  ownedSpaces  Space[]       @relation("SpaceOwner")
-  memberships  SpaceMember[]
-  createdPages Page[]        @relation("PageCreatedBy")
-  updatedPages Page[]        @relation("PageUpdatedBy")
-  deletedPages Page[]        @relation("PageDeletedBy")
-  comments     Comment[]
-  auditLogs    AuditLog[]
-  sessions     Session[]
+  /// 我拥有所有权的节点(部门 / 组 / 页面)
+  ownedNodes     Node[]          @relation("NodeOwner")
+  createdNodes   Node[]          @relation("NodeCreatedBy")
+  updatedNodes   Node[]          @relation("NodeUpdatedBy")
+  deletedNodes   Node[]          @relation("NodeDeletedBy")
+  /// 组织归属(多归属)
+  assignments    OrgAssignment[]
+  /// 我授予别人的编辑权
+  grantedGrants  NodeGrant[]     @relation("GrantGrantedBy")
+  /// 别人授予我的编辑权
+  receivedGrants NodeGrant[]     @relation("GrantUser")
+  comments       Comment[]
+  auditLogs      AuditLog[]
+  sessions       Session[]
 
   @@map("users")
 }
 
-// ---------------- 会话(阶段一认证,见 DESIGN.md §6.1.1) ----------------
+// ---------------- 会话(见 DESIGN.md §6.1.1) ----------------
 model Session {
   /// 主键是 token 的 SHA-256(64 位十六进制),**不存 token 本身** ——
   /// 这样即使数据库被读走,也无法据此伪造登录态。
@@ -69,64 +90,39 @@ model Session {
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  // 按用户批量吊销(停用账号 / 移出空间)与清理过期行都要用到
-  // 显式命名而非依赖 Prisma 自动推导,避免手写 migration SQL 时名字对不上
+  // 按用户批量吊销(停用账号)与清理过期行都要用到。
+  // 显式命名而非依赖 Prisma 自动推导,避免手写 migration SQL 时名字对不上。
   @@index([userId], map: "sessions_user_idx")
   @@index([expiresAt], map: "sessions_expires_idx")
   @@map("sessions")
 }
 
-// ---------------- 空间 ----------------
-model Space {
-  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  name      String
-  slug      String   @unique
-  /// 侧边栏展示用的单字
-  letter    String
-  color     String   @default("blue")
-  ownerId   String   @map("owner_id") @db.Uuid
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
-
-  owner   User          @relation("SpaceOwner", fields: [ownerId], references: [id])
-  members SpaceMember[]
-  pages   Page[]
-
-  @@map("spaces")
-}
-
-// ---------------- 空间成员(权限判定的兜底层) ----------------
-model SpaceMember {
-  spaceId   String   @map("space_id") @db.Uuid
-  userId    String   @map("user_id") @db.Uuid
-  /// admin | editor | commenter | viewer —— check 约束在 migration 里
-  role      String
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-
-  space Space @relation(fields: [spaceId], references: [id], onDelete: Cascade)
-  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@id([spaceId, userId])
-  @@map("space_members")
-}
-
-// ---------------- 页面树(核心表) ----------------
-model Page {
-  id     String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  spaceId String @map("space_id") @db.Uuid
-  /// 刻意用 onDelete: Restrict —— 不允许物理删除有子节点的页面,强制走软删除流程
+// ---------------- 节点树(空间与页面合并,v2.0 核心表) ----------------
+model Node {
+  id       String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// 刻意用 onDelete: Restrict —— 不允许物理删除有子节点的节点,强制走软删除流程
   parentId String? @map("parent_id") @db.Uuid
 
-  title    String  @default("未命名页面")
+  /// space | document —— **纯展示用途,权限判定不区分 kind**。
+  /// 一个 space 节点可以有正文,一个 document 节点可以有子节点,这是刻意的(§4.1 第 2 条)。
+  /// 不要在权限代码里对 kind 做分支。
+  kind     String @default("document")
+  title    String @default("未命名")
   /// 同级排序
-  position Int     @default(0)
-  /// '/<祖先id>/.../<自身id>' —— 移动页面时必须递归重建整棵子树
+  position Int    @default(0)
+  /// '/<祖先id>/.../<自身id>' —— 移动节点时必须递归重建整棵子树。
+  /// 权限判定完全依赖它(要拿整条祖先链上的 owner),失败是**静默越权或静默失权**。
   materializedPath String @default("") @map("materialized_path")
   depth            Int    @default(0)
+
+  /// 所有者。部门 = 部长(组织架构预置);二级节点 = 部长任命;更深节点 = 创建者。
+  /// not null:没有"无主节点"这种状态。
+  ownerId String @map("owner_id") @db.Uuid
+
   /// draft | published | archived —— check 约束在 migration 里
-  status           String @default("published")
-  /// 乐观锁:结构操作(改名/移动/删除)走 REST 并校验,冲突返回 409
-  version          Int    @default(1)
+  status  String @default("published")
+  /// 乐观锁:结构操作(改名/移动/删除/改所有者)走 REST 并校验,冲突 409
+  version Int    @default(1)
 
   createdBy String  @map("created_by") @db.Uuid
   updatedBy String? @map("updated_by") @db.Uuid
@@ -137,29 +133,64 @@ model Page {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  space     Space            @relation(fields: [spaceId], references: [id], onDelete: Cascade)
-  parent    Page?            @relation("PageChildren", fields: [parentId], references: [id], onDelete: Restrict)
-  children  Page[]           @relation("PageChildren")
-  creator   User             @relation("PageCreatedBy", fields: [createdBy], references: [id])
-  updater   User?            @relation("PageUpdatedBy", fields: [updatedBy], references: [id])
-  deleter   User?            @relation("PageDeletedBy", fields: [deletedBy], references: [id])
-  content   PageContent?
-  permissions PagePermission[]
-  comments  Comment[]
+  parent      Node?            @relation("NodeChildren", fields: [parentId], references: [id], onDelete: Restrict)
+  children    Node[]           @relation("NodeChildren")
+  owner       User             @relation("NodeOwner", fields: [ownerId], references: [id])
+  creator     User             @relation("NodeCreatedBy", fields: [createdBy], references: [id])
+  updater     User?            @relation("NodeUpdatedBy", fields: [updatedBy], references: [id])
+  deleter     User?            @relation("NodeDeletedBy", fields: [deletedBy], references: [id])
+  content     NodeContent?
+  grants      NodeGrant[]
+  assignments OrgAssignment[]
+  comments    Comment[]
 
-  @@index([spaceId, parentId, position], map: "pages_tree_idx")
+  @@index([parentId, position], map: "nodes_tree_idx")
   // 物化路径的前缀查询('/p1/p2%')必须带 text_pattern_ops 才吃得到索引。
-  // 用 ops: raw(...) 把它表达进 schema —— 否则 Prisma 会认为这个索引是"多余的"
-  // 并在下次 migrate dev 时生成 DROP INDEX,静默废掉前缀查询。
-  @@index([materializedPath(ops: raw("text_pattern_ops"))], map: "pages_path_idx")
-  // pages_alive_idx(部分索引)与 page_contents_trgm_idx(GIN 三元组)Prisma 表达不了,
-  // 只能在 migration 里手写;由 db:check-drift 的白名单守着,见该脚本注释。
-  @@map("pages")
+  // 用 ops: raw(...) 把它表达进 schema —— 否则 Prisma 会认为这个索引"多余",
+  // 下次 migrate dev 生成 DROP INDEX,静默废掉前缀查询(而权限判定正靠它)。
+  @@index([materializedPath(ops: raw("text_pattern_ops"))], map: "nodes_path_idx")
+  @@index([ownerId], map: "nodes_owner_idx")
+  // nodes_alive_idx(部分索引)Prisma 表达不了,只能在 migration 里手写;
+  // 由 db:check-drift 的白名单守着,见该脚本注释。
+  @@map("nodes")
+}
+
+// ---------------- 组织归属(多归属,v2.0 新增) ----------------
+/// 一个人可以同属多个部门 / 组 / 项目。它承担两个职责:
+///   ① 展示"这个人在组织里的位置";② 界定**授权范围**(§5.3 规则三)。
+model OrgAssignment {
+  userId    String   @map("user_id") @db.Uuid
+  nodeId    String   @map("node_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  node Node @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+
+  @@id([userId, nodeId])
+  @@index([nodeId], map: "org_assignments_node_idx")
+  @@map("org_assignments")
+}
+
+// ---------------- 显式授权名单(v2.0 新增) ----------------
+/// 对应「组长想再加一个人改」。**只有加法,没有 deny** ——
+/// 收回权限 = 删掉这里的行。不要为了"对称"补一个 deny 列(§4.3)。
+model NodeGrant {
+  nodeId    String   @map("node_id") @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  grantedBy String   @map("granted_by") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  node    Node @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+  user    User @relation("GrantUser", fields: [userId], references: [id], onDelete: Cascade)
+  granter User @relation("GrantGrantedBy", fields: [grantedBy], references: [id])
+
+  @@id([nodeId, userId])
+  @@map("node_grants")
 }
 
 // ---------------- 正文 ----------------
-model PageContent {
-  pageId String @id @map("page_id") @db.Uuid
+model NodeContent {
+  nodeId String @id @map("node_id") @db.Uuid
   /// ProseMirror 文档树。**绝不允许存 Markdown 字符串**(DESIGN.md §10 硬约束 2)
   contentJson Json @default("{\"type\": \"doc\", \"content\": []}") @map("content_json")
   /// 阶段二启用,阶段一保持 null —— 字段先建好,这就是「按协同的地基写代码」
@@ -168,37 +199,18 @@ model PageContent {
   textForSearch String @default("") @map("text_for_search")
   updatedAt     DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  page Page @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  node Node @relation(fields: [nodeId], references: [id], onDelete: Cascade)
 
   // 中文子串检索的 GIN 三元组索引(DESIGN.md §2.3)。用 type: Gin + ops: raw 表达,
   // 让 Prisma 认得它 —— 否则 migrate dev 会生成 DROP INDEX,静默废掉中文检索。
-  @@index([textForSearch(ops: raw("gin_trgm_ops"))], type: Gin, map: "page_contents_trgm_idx")
-  @@map("page_contents")
+  @@index([textForSearch(ops: raw("gin_trgm_ops"))], type: Gin, map: "node_contents_trgm_idx")
+  @@map("node_contents")
 }
 
-// ---------------- 页面权限(只存显式规则,不存最终结果) ----------------
-model PagePermission {
-  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  pageId String @map("page_id") @db.Uuid
-  /// user | group —— check 约束在 migration 里
-  subjectType String @map("subject_type")
-  /// user.id,或部门名(users.department)。用 text 统一承载两种口径
-  subjectId   String @map("subject_id")
-  /// editor | commenter | viewer | none —— 页面级**不含 admin**
-  role        String
-  deny        Boolean @default(false)
-  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-
-  page Page @relation(fields: [pageId], references: [id], onDelete: Cascade)
-
-  @@unique([pageId, subjectType, subjectId])
-  @@map("page_permissions")
-}
-
-// ---------------- 页面级评论(阶段一) ----------------
+// ---------------- 评论(全员可发,v2.0) ----------------
 model Comment {
   id        String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  pageId    String  @map("page_id") @db.Uuid
+  nodeId    String  @map("node_id") @db.Uuid
   /// 一层回复
   parentId  String? @map("parent_id") @db.Uuid
   userId    String  @map("user_id") @db.Uuid
@@ -209,12 +221,12 @@ model Comment {
   updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
   // 阶段二会新增 anchor_type / anchor_text / anchor_pos 三列 —— 现在刻意不加
 
-  page    Page      @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  node    Node      @relation(fields: [nodeId], references: [id], onDelete: Cascade)
   parent  Comment?  @relation("CommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
   replies Comment[] @relation("CommentReplies")
   user    User      @relation(fields: [userId], references: [id])
 
-  @@index([pageId, createdAt], map: "comments_page_idx")
+  @@index([nodeId, createdAt], map: "comments_node_idx")
   @@map("comments")
 }
 
@@ -222,12 +234,12 @@ model Comment {
 model AuditLog {
   id         BigInt   @id @default(autoincrement())
   actorId    String?  @map("actor_id") @db.Uuid
-  /// page.create / page.move / perm.update ...
+  /// node.create / node.move / grant.add / org.import / auth.login ...
   action     String
   targetType String   @map("target_type")
   targetId   String   @map("target_id")
   detail     Json     @default("{}")
-  /// DESIGN v1.1 原写 inet;Prisma 不支持该标量,改用 text(DESIGN v1.2 已同步)
+  /// 原写 inet;Prisma 不支持该标量,改用 text(DESIGN v1.2 已同步)
   ip         String?
   createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
