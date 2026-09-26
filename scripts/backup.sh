@@ -69,8 +69,17 @@ echo "==> 记录对账快照"
   echo "db_bytes=$(wc -c < "$DEST/db.dump")"
   echo "uploads_bytes=$(wc -c < "$DEST/uploads.tar.gz")"
   echo "counts:"
-  docker compose exec -T postgres psql -U "$PG_USER" -d "$PG_DB" -X -A -t \
-    -c "select '  ' || relname || '=' || n_live_tup from pg_stat_user_tables order by relname;"
+  # 精确行数。
+  # ⚠️ 不用 pg_stat_user_tables.n_live_tup —— 那是统计估算值,由 autovacuum 更新,
+  #    恢复到一个新库之后不可比,会让 restore-drill 报出假失败(详见该脚本的注释)。
+  for t in $(docker compose exec -T postgres psql -U "$PG_USER" -d "$PG_DB" -X -A -t \
+             -c "select tablename from pg_tables where schemaname='public' order by tablename;" \
+             | tr -d '\r'); do
+    [[ -z "$t" ]] && continue
+    n=$(docker compose exec -T postgres psql -U "$PG_USER" -d "$PG_DB" -X -A -t \
+        -c "select count(*) from \"$t\";" | tr -d '[:space:]')
+    echo "  $t=$n"
+  done
 } > "$DEST/manifest.txt"
 
 cat "$DEST/manifest.txt"

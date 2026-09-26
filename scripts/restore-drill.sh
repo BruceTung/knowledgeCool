@@ -3,8 +3,8 @@
 # 知源 KnowledgeCool · 备份恢复演练(DESIGN.md §9 M6 的「恢复演练脚本」)
 #
 # 为什么必须有这个脚本:**没演练过的备份等于没有备份。**
-# 它做的是把备份恢复到一个**临时数据库**(名字带 `drill_` 前缀),
-# 逐项比对行数,然后删掉临时库 —— 全程不碰生产库。
+# 它把备份恢复到一个**临时数据库**(名字带 `drill_` 前缀),
+# 逐表精确比对行数,然后删掉临时库 —— 全程不碰生产库。
 #
 # 用法:
 #   ./scripts/restore-drill.sh                  # 演练最近一次备份
@@ -53,37 +53,49 @@ trap cleanup EXIT
 # ---------- 1. 建临时库并恢复 ----------
 "${PSQL[@]}" -d postgres -c "drop database if exists \"$DRILL_DB\";" >/dev/null
 "${PSQL[@]}" -d postgres -c "create database \"$DRILL_DB\";" >/dev/null
+# 扩展必须先在,否则 dump 里的 gin_trgm_ops 索引建不起来
+"${PSQL[@]}" -d "$DRILL_DB" -c 'create extension if not exists "citext";' >/dev/null
+"${PSQL[@]}" -d "$DRILL_DB" -c 'create extension if not exists "pg_trgm";' >/dev/null
 
 echo "==> 恢复数据"
-docker compose exec -T postgres \
+if ! docker compose exec -T postgres \
   pg_restore -U "$PG_USER" -d "$DRILL_DB" --no-owner --no-privileges \
-  < "$SRC/db.dump" >/dev/null 2>&1 || {
-    # pg_restore 对「扩展已存在」之类的警告会返回非零,不能一律当失败 ——
-    # 真正的判据是下面那一步的行数比对。
-    echo "   (pg_restore 返回了非零退出码,继续用行数比对判定)"
-  }
+  < "$SRC/db.dump" >/dev/null 2>&1; then
+  # pg_restore 对「扩展已存在」之类的警告会返回非零,不能一律当失败 ——
+  # 真正的判据是下面那一步的行数比对。
+  echo "   (pg_restore 返回了非零退出码,继续用行数比对判定)"
+fi
 
 # ---------- 2. 逐表比对行数 ----------
-echo "==> 比对行数"
-report="$(mktemp)"
-"${PSQL[@]}" -d "$PG_DB" -A -F'|' -t \
-  -c "select relname, n_live_tup from pg_stat_user_tables order by relname;" > "$report"
-"${PSQL[@]}" -d "$DRILL_DB" -A -F'|' -t \
-  -c "select relname, n_live_tup from pg_stat_user_tables order by relname;" > "${report}.drill"
+#
+# ⚠️ 必须用 `count(*)`。第一版用的是 pg_stat_user_tables.n_live_tup ——
+# 那是**统计估算值**,由 autovacuum 更新,在一次全新的恢复之后与生产库根本不可比。
+# 它会让演练报出假失败(「备份坏了」),而假失败比没有演练更糟:
+# 要么让人对好备份失去信任,要么让人对真问题麻木。
+#
+# 这个错误是被实际跑出来的:第一次在服务器上演练时报 audit_logs 生产=71 恢复后=61,
+# 而备份本身完全正常。
+echo "==> 逐表精确比对行数(count(*),不用 n_live_tup 估算值)"
+TABLES="$("${PSQL[@]}" -d "$PG_DB" -A -t \
+  -c "select tablename from pg_tables where schemaname='public' order by tablename;" | tr -d '\r')"
 
 fail=0
-while IFS='|' read -r table source_count; do
+for table in $TABLES; do
   [[ -z "$table" ]] && continue
-  drill_count="$(grep "^${table}|" "${report}.drill" | cut -d'|' -f2 || echo '缺失')"
+
+  source_count="$("${PSQL[@]}" -d "$PG_DB" -A -t \
+    -c "select count(*) from \"$table\";" | tr -d '[:space:]')"
+  drill_count="$("${PSQL[@]}" -d "$DRILL_DB" -A -t \
+    -c "select count(*) from \"$table\";" 2>/dev/null | tr -d '[:space:]')"
+  [[ -z "$drill_count" ]] && drill_count='缺失'
+
   if [[ "$drill_count" == "$source_count" ]]; then
     printf '  ✓ %-22s %s\n' "$table" "$source_count"
   else
     printf '  ✗ %-22s 生产=%s 恢复后=%s\n' "$table" "$source_count" "$drill_count"
     fail=1
   fi
-done < "$report"
-
-rm -f "$report" "${report}.drill"
+done
 
 # ---------- 3. 附件包可读性 ----------
 echo "==> 校验附件包"
