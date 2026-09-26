@@ -12,6 +12,16 @@
  *
  * 详细说明见 ~/.workbuddy/skills/pnpm-symlink-repair/。
  */
+/** 链接是否**真的**指向一个存在的目录。断链要用 realpath 判,existsSync 对断链返回 false。 */
+function resolves(path) {
+  try {
+    realpathSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * 修复本机 pnpm 未创建的 workspace 依赖符号链接。
  *
@@ -102,14 +112,7 @@ for (const [project, deps] of Object.entries(importers)) {
 
     // 已经能用就跳过(注意:断链的符号链接 existsSync 会返回 false,
     // 所以这里用 realpath 判断"是否真的指向一个存在的目录")
-    let ok = false;
-    try {
-      realpathSync(linkPath);
-      ok = true;
-    } catch {
-      ok = false;
-    }
-    if (ok) continue;
+    if (resolves(linkPath)) continue;
 
     // ⚠️ 不能按 `名字@版本` 精确匹配:pnpm 的 `virtualStoreDirMaxLength` 会把
     // store 目录名截断(`@tiptap+extension-image@3.3_<hash>`),

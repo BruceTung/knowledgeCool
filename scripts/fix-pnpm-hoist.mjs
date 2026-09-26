@@ -12,6 +12,7 @@
  *
  * 详细说明见 ~/.workbuddy/skills/pnpm-symlink-repair/。
  */
+
 /**
  * 修复 pnpm **隐藏提升层**(node_modules/.pnpm/node_modules)里缺失的符号链接。
  *
@@ -25,6 +26,16 @@
  */
 import { existsSync, mkdirSync, readdirSync, realpathSync, symlinkSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+
+/** 链接是否**真的**指向一个存在的目录。断链要用 realpath 判 —— existsSync 对断链返回 false。 */
+function resolves(path) {
+  try {
+    realpathSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 const root = resolve(process.argv[2] ?? process.cwd());
 const hoistDir = join(root, 'node_modules', '.pnpm', 'node_modules');
@@ -72,12 +83,8 @@ for (const [name, entries] of versions) {
   }
 
   const linkPath = join(hoistDir, name);
-  try {
-    realpathSync(linkPath);
-    continue; // 已经能解析
-  } catch {
-    // 断链或不存在
-  }
+  // 已经能解析(含"指向真实存在目录"的链接)就跳过
+  if (resolves(linkPath)) continue;
 
   const target = join(storeDir, entries[0], 'node_modules', name);
   if (!existsSync(target)) continue;
