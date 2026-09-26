@@ -2,9 +2,9 @@
 
 | 项 | 值 |
 |---|---|
-| 文档版本 | v1.1 |
+| 文档版本 | v1.2 |
 | 最后更新 | 2026-09-26 |
-| 状态 | 阶段一设计已定稿,待开工 |
+| 状态 | 阶段一 M1 基础设施已落地并本地验证通过;compose 四容器验收待装 Docker Desktop |
 | 定位 | 内网自托管 · 企业内部员工知识库 |
 
 ---
@@ -86,7 +86,8 @@
 |---|---|---|
 | 前端 | React 18 + TypeScript + Vite + TailwindCSS | 生态最全,Tiptap 一等支持 |
 | 编辑器 | Tiptap(ProseMirror) | 协同扩展 `y-prosemirror` 现成,阶段二只需挂上 |
-| 后端 | Node 20 + NestJS + Prisma | 与前端同语言;Prisma 迁移清晰、类型安全 |
+| 后端 | **Node 22 LTS** + **NestJS 12(ESM-only)** + **Prisma 7** | 与前端同语言;Prisma 迁移清晰、类型安全。版本与模块制式的**实测依据见 §2.5** |
+| 测试 | **Vitest**(shared / api / web 三处统一)+ 后端配 `unplugin-swc` + `@swc/core` | 见 §2.5 —— 这不是偏好,是依赖注入能否工作的硬要求 |
 | 主库 | PostgreSQL 16 | 递归查询、JSONB、模糊检索索引一个库全解决 |
 | 缓存 | Redis 7 | 权限判定缓存 + 任务队列(阶段二加在线态) |
 | 全文检索 | **阶段一 pg_trgm 子串匹配 → 阶段二 Meilisearch** | 见 §2.3 —— 中文是这里的关键约束 |
@@ -126,6 +127,57 @@
 不是安全洁癖,是功能依赖:浏览器的**非安全上下文**会限制剪贴板 API、部分 WebSocket 升级行为、Service Worker。而"粘贴图片直接上传"和阶段二的协同恰好都要用到这些。
 
 内网用自签证书或公司内部 CA 都可以,但不要图省事走 `http://`。
+
+### 2.5 模块制式与测试栈:三个实测结论(2026-09-26 开工时发现)
+
+> 本节 v1.2 新增。v1.1 只写「Node 20 + NestJS」,没锁版本、没定模块制式。开工实测后发现三个直接决定代码怎么写的事实,必须先固化,否则 M3 之后返工。
+
+**结论一:NestJS 12 是 ESM-only。**
+
+`@nestjs/common` / `@nestjs/core` / `@nestjs/config` 的 12.x 全部是 `"type": "module"`,且 `exports` 里**没有 `require` 条件**;CJS 只能靠 Node 22.12+ 的 `require(esm)` 互操作去加载它。
+
+官方对两条路都给了模板(`@nestjs/schematics` 自带 `ts` 与 `ts-esm`),但**新项目默认是 ESM**。官方 SWC 文档原文:
+
+> "New NestJS projects that use ES modules (**the default**) are already set up with Vitest."
+> "The SWC builder emits the same module format as the TypeScript compiler would: ES modules when your `package.json` sets `"type": "module"` (the default for new projects), and CommonJS otherwise."
+
+**本项目选 ESM**:官方默认路径,且不必依赖 `--experimental-vm-modules` 与 `require(esm)` 互操作(那是给存量 CJS 项目过渡用的)。
+
+**结论二:esbuild 不产出装饰器元数据 —— 所以 Vitest 必须配 SWC。**
+
+NestJS 的依赖注入靠 `emitDecoratorMetadata` 产出的 `design:paramtypes`。实测 esbuild 0.28.2:
+
+```
+tsconfigRaw { experimentalDecorators: true, emitDecoratorMetadata: true }
+→ 输出中 has 'design:paramtypes' === false,且零警告(参数被静默忽略)
+```
+
+Vite / Vitest 默认用 esbuild 转译 TS,因此**裸用 Vitest 会让「按构造函数类型注入」在测试里直接解析失败**。官方 Vitest 文档明确要求:
+
+> `npm i --save-dev vitest unplugin-swc @swc/core`
+> `plugins: [ // **This is required** to build the test files with SWC   swc.vite({ ... }) ]`
+
+故后端测试栈 = Vitest + `unplugin-swc`,并在配置里显式写 `legacyDecorator: true`、`decoratorMetadata: true`,不依赖默认值。
+
+**结论三:Prisma 7 有三处破坏性变化。**
+
+| 变化 | 影响 |
+|---|---|
+| 生成器改为 `prisma-client`,`output` **必填**,产出 **TypeScript 源码** | 生成物落 `apps/api/src/generated/prisma`,由本项目 tsc 一起编译;**必须同时进 .gitignore 与 eslint ignores** |
+| `datasource` 不再写 `url`,连接串移到 **`prisma7.config.ts`** | 该文件须 `import 'dotenv/config'` —— Prisma 7 不再自动加载 .env |
+| 连接**必须**经 driver adapter(`@prisma/adapter-pg`) | 内置引擎直连已移除,`PrismaService` 需显式传 adapter |
+
+还有一个 ESM 专属的坑:生成器默认产出 `from "./enums"`(**无扩展名**),经 tsc 编译后在 ESM 下会直接 `ERR_MODULE_NOT_FOUND`。必须显式打开:
+
+```prisma
+generator client {
+  provider            = "prisma-client"
+  moduleFormat        = "esm"
+  importFileExtension = "js"
+}
+```
+
+**连带影响:Node 20 不够用。** 三个依赖的下限是 Prisma 7 `^20.19 || ^22.12 || >=24`、Vite/Vitest `^20.19 || >=22.12`、NestJS 12 `>=20`。取交集并避开 `node:20-alpine` 的具体小版本,**本地与容器统一用 Node 22 LTS**。TypeScript 同理取 **6.0.x**(NestJS 12 官方模板锁 `^6.0.2`)。
 
 ---
 
@@ -294,7 +346,9 @@ create table audit_logs (
   target_type text not null,
   target_id   text not null,
   detail      jsonb not null default '{}'::jsonb,
-  ip          inet,
+  -- v1.2 修正:原写 inet,但 Prisma 没有 inet 标量,无法在 schema 里表达。
+  -- 阶段一不按 IP 查询/聚合,text 完全够用;将来真要网段查询再引单独的类型化列。
+  ip          text,
   created_at  timestamptz not null default now()
 );
 
@@ -373,6 +427,17 @@ export async function effectiveRole(
 | **默认继承** | 没写规则就向上取 | 不写规则 = 继承,而不是"没权限" |
 | **拒绝优先** | `deny` 一票否决,不受层级影响 | 允许"整空间可编辑,但这一篇禁止某人访问" |
 | **最小可见** | 无权限的页面在列表和检索里**根本不出现** | 不能让人知道"这里有一篇你看不到的文档" |
+
+#### 同层多规则命中时的次序(v1.2 补充)
+
+§5.2 的伪代码只规定了**层与层之间**的次序(由粗到细、后写覆盖),没有规定**同一层内**多条规则同时命中时谁赢。这一点必须在实现前定死 —— 否则同一份数据在不同遍历顺序下会得出不同权限,而这类 bug 不会立刻报错。
+
+约定两条:
+
+1. **deny 先于一切。** 本层命中的规则里只要有一条 `deny=true`,立刻返回 `none`:不再看本层其余规则,不再看更细的层,也不回退空间角色。
+2. **user 强于 group。** 都是 allow 时,`subject_type='user'`(直接授给这个人)比 `subject_type='group'`(部门)更具体,取 user 的。
+
+这两条实现在 `packages/shared/src/permission.ts` 的 `resolveRoleAlongChain()`,并在 `packages/shared/test/permission.spec.ts` 中有对应用例 —— 其中包含「把规则顺序颠倒结果不变」的测试,确保结论不依赖规则在数据库里的物理顺序。
 
 ### 5.4 权限矩阵
 
@@ -708,3 +773,4 @@ POST /pages/:id/comments  { body, parentId? }
 |---|---|---|
 | 2026-09-26 | v1.0 | 初稿。检索方案由早期的 "PG tsvector" 修正为 "pg_trgm + ILIKE"(原因见 §2.3:tsvector 分词器对中文不可用) |
 | 2026-09-26 | v1.1 | §11.1 关闭「与既有知识库项目的关系」这一阻塞项 —— 用户已放弃该项目,不再并存。阻塞项由两项减为一项 |
+| 2026-09-26 | v1.2 | 开工实测后回写,共三处:①**§2.5 新增** —— NestJS 12 是 ESM-only 且官方新项目默认 ESM,故本项目采用 ESM;实测 esbuild 即使开 `emitDecoratorMetadata` 也不产出 `design:paramtypes`,故 Vitest 必须配 `unplugin-swc`;Prisma 7 的生成器 / 配置文件 / driver adapter 三处破坏性变化,以及 `importFileExtension` 这个 ESM 专属坑。连带把 Node 20 → **22 LTS**、TypeScript → **6.0.x**(均给出依赖下限依据)。②**§4.2** `audit_logs.ip` 由 `inet` 改为 `text`(Prisma 无 inet 标量)。③**§5.3** 补充同层多规则命中次序(user 强于 group;deny 先于一切)—— 原伪代码未定义该情形。 |
