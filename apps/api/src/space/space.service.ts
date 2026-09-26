@@ -370,6 +370,49 @@ export class SpaceService {
   }
 
   /**
+   * 直接查某用户在某空间里的角色,**不抛错**。
+   *
+   * 与 `requireCapability` 的分工:`requireCapability` 回答"够不够,不够就拒绝",
+   * 这里回答"是多少" —— 页面级权限判定(M5)需要先拿到空间角色作为**兜底值**,
+   * 再叠加页面规则。非成员返回 `role: null`,由调用方决定是 404 还是别的。
+   *
+   * 这是权限判定链上唯一一处"不拒绝"的入口,刻意收得很窄:
+   * 只有 PermissionService 用它。
+   */
+  async lookupRole(
+    operator: Operator,
+    spaceId: string,
+  ): Promise<{
+    role: SpaceRole | null;
+    isSuperAdmin: boolean;
+    space: { id: string; name: string; slug: string } | null;
+  }> {
+    const space = await this.prisma.space.findUnique({
+      where: { id: spaceId },
+      select: { id: true, name: true, slug: true },
+    });
+    if (space === null) {
+      return { role: null, isSuperAdmin: operator.isSuperAdmin, space: null };
+    }
+
+    // 超管直通 —— 与 requireVisible 保持同一套语义(范围仅限按 id 访问单个空间)
+    if (operator.isSuperAdmin) {
+      return { role: 'admin', isSuperAdmin: true, space };
+    }
+
+    const membership = await this.prisma.spaceMember.findUnique({
+      where: { spaceId_userId: { spaceId, userId: operator.id } },
+      select: { role: true },
+    });
+
+    return {
+      role: membership === null ? null : toSpaceRole(membership.role),
+      isSuperAdmin: false,
+      space,
+    };
+  }
+
+  /**
    * 邮箱已注册就直接用;没注册就用 name + password 建号。
    * 建号的哈希计算刻意放在事务之外 —— bcrypt 要 ~300ms,不该占着数据库连接。
    */
@@ -377,11 +420,24 @@ export class SpaceService {
     email: string,
     input: AddSpaceMemberInput,
   ): Promise<{ id: string }> {
+    const department = normalizeDepartment(input.department);
+
     const existing = await this.prisma.user.findUnique({
       where: { email },
       select: { id: true },
     });
-    if (existing !== null) return existing;
+
+    if (existing !== null) {
+      // 邮箱已注册:仍然允许管理员顺手校正部门 —— 部门是组级权限的依据,
+      // 填错了会让「给这个部门授权」静默地不生效,所以在这里纠正是有价值的。
+      if (department !== null) {
+        await this.prisma.user.update({
+          where: { id: existing.id },
+          data: { department },
+        });
+      }
+      return existing;
+    }
 
     const name = input.name?.trim();
     if (name === undefined || name === '' || input.password === undefined) {
@@ -391,7 +447,7 @@ export class SpaceService {
     const passwordHash = await this.passwords.hash(input.password);
 
     return this.prisma.user
-      .create({ data: { email, name, passwordHash }, select: { id: true } })
+      .create({ data: { email, name, passwordHash, department }, select: { id: true } })
       .catch((error: unknown) => {
         if (isUniqueViolation(error)) {
           throw AppError.validation('该邮箱刚刚已被注册,请重试');
@@ -479,6 +535,17 @@ function toMemberViewOrNull(row: MemberRow, ownerId: string): SpaceMemberView | 
     isOwner: row.user.id === ownerId,
     joinedAt: row.createdAt.toISOString(),
   };
+}
+
+/**
+ * 部门名归一化:空串与纯空白都当成「没有部门」(`null`)。
+ *
+ * 不能留空串 —— `page_permissions.subject_id` 用部门名做匹配,
+ * 一个空串部门会让「空部门规则」意外命中所有没填部门的人。
+ */
+function normalizeDepartment(value: string | undefined): string | null {
+  const trimmed = value?.trim() ?? '';
+  return trimmed === '' ? null : trimmed;
 }
 
 /** 排序:所有者第一 → 角色从高到低 → 加入时间从早到晚。 */

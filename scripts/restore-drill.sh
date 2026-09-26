@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# ============================================================
+# 知源 KnowledgeCool · 备份恢复演练(DESIGN.md §9 M6 的「恢复演练脚本」)
+#
+# 为什么必须有这个脚本:**没演练过的备份等于没有备份。**
+# 它做的是把备份恢复到一个**临时数据库**(名字带 `drill_` 前缀),
+# 逐项比对行数,然后删掉临时库 —— 全程不碰生产库。
+#
+# 用法:
+#   ./scripts/restore-drill.sh                  # 演练最近一次备份
+#   ./scripts/restore-drill.sh 20260926-120000  # 演练指定的一次
+#
+# 通过后再用 ./scripts/restore.sh 做真正的恢复。
+# ============================================================
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_ROOT"
+
+if [[ -f .env ]]; then
+  # shellcheck disable=SC1091
+  set -a && source .env && set +a
+fi
+
+PG_USER="${POSTGRES_USER:-knowledgecool}"
+PG_DB="${POSTGRES_DB:-knowledgecool}"
+BACKUP_ROOT="${BACKUP_ROOT:-$REPO_ROOT/backups}"
+
+STAMP="${1:-}"
+if [[ -z "$STAMP" ]]; then
+  STAMP="$(ls -1 "$BACKUP_ROOT" 2>/dev/null | sort | tail -1 || true)"
+fi
+
+if [[ -z "$STAMP" || ! -d "$BACKUP_ROOT/$STAMP" ]]; then
+  echo "❌ 找不到备份:$BACKUP_ROOT/$STAMP"
+  echo "   先跑 ./scripts/backup.sh"
+  exit 1
+fi
+
+SRC="$BACKUP_ROOT/$STAMP"
+DRILL_DB="drill_${STAMP//[^0-9]/_}"
+PSQL=(docker compose exec -T postgres psql -U "$PG_USER" -X)
+
+echo "==> 演练备份:$STAMP"
+echo "==> 临时库:$DRILL_DB"
+
+cleanup() {
+  echo "==> 清理临时库"
+  "${PSQL[@]}" -d postgres -c "drop database if exists \"$DRILL_DB\";" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+# ---------- 1. 建临时库并恢复 ----------
+"${PSQL[@]}" -d postgres -c "drop database if exists \"$DRILL_DB\";" >/dev/null
+"${PSQL[@]}" -d postgres -c "create database \"$DRILL_DB\";" >/dev/null
+
+echo "==> 恢复数据"
+docker compose exec -T postgres \
+  pg_restore -U "$PG_USER" -d "$DRILL_DB" --no-owner --no-privileges \
+  < "$SRC/db.dump" >/dev/null 2>&1 || {
+    # pg_restore 对「扩展已存在」之类的警告会返回非零,不能一律当失败 ——
+    # 真正的判据是下面那一步的行数比对。
+    echo "   (pg_restore 返回了非零退出码,继续用行数比对判定)"
+  }
+
+# ---------- 2. 逐表比对行数 ----------
+echo "==> 比对行数"
+report="$(mktemp)"
+"${PSQL[@]}" -d "$PG_DB" -A -F'|' -t \
+  -c "select relname, n_live_tup from pg_stat_user_tables order by relname;" > "$report"
+"${PSQL[@]}" -d "$DRILL_DB" -A -F'|' -t \
+  -c "select relname, n_live_tup from pg_stat_user_tables order by relname;" > "${report}.drill"
+
+fail=0
+while IFS='|' read -r table source_count; do
+  [[ -z "$table" ]] && continue
+  drill_count="$(grep "^${table}|" "${report}.drill" | cut -d'|' -f2 || echo '缺失')"
+  if [[ "$drill_count" == "$source_count" ]]; then
+    printf '  ✓ %-22s %s\n' "$table" "$source_count"
+  else
+    printf '  ✗ %-22s 生产=%s 恢复后=%s\n' "$table" "$source_count" "$drill_count"
+    fail=1
+  fi
+done < "$report"
+
+rm -f "$report" "${report}.drill"
+
+# ---------- 3. 附件包可读性 ----------
+echo "==> 校验附件包"
+if tar -tzf "$SRC/uploads.tar.gz" >/dev/null 2>&1; then
+  echo "  ✓ uploads.tar.gz 可正常解包($(tar -tzf "$SRC/uploads.tar.gz" | wc -l) 个条目)"
+else
+  echo "  ✗ uploads.tar.gz 损坏"
+  fail=1
+fi
+
+echo
+if [[ "$fail" -eq 0 ]]; then
+  echo "✅ 演练通过 —— 这份备份是**能恢复的**,不是躺在磁盘上的死文件。"
+else
+  echo "❌ 演练失败 —— 别依赖这份备份,先查清原因。"
+  exit 1
+fi

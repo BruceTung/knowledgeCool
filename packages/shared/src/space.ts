@@ -77,6 +77,15 @@ export interface AddSpaceMemberInput {
   name?: string;
   /** 仅当邮箱不存在、需要建号时必填。 */
   password?: string;
+  /**
+   * 部门。
+   *
+   * 阶段一的「用户组」就取这个字段(`users.department`),所以它是
+   * **组级权限规则能生效的前提** —— 没有地方能设置它的话,
+   * 「给一个部门授权」这个能力在界面上就是死的。
+   * 邮箱已存在时也会用它覆盖既有值(管理员在邀请时顺手校正部门是很自然的动作)。
+   */
+  department?: string;
 }
 
 /** 修改成员角色。 */

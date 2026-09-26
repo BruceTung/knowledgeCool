@@ -172,4 +172,46 @@ describe('AllExceptionsFilter', () => {
       expect(capture(null).statusCode).toBe(500);
     });
   });
+
+  describe('body-parser 的解析错误', () => {
+    // ⚠️ 这类错误**不是** HttpException 的子类,只带 status / type 属性。
+    // 不显式认出来的话,「请求体超过上限」会变成 500 ——
+    // 而它明明是客户端的问题,500 会把排查方向引到服务端。
+    const tooLarge = Object.assign(new Error('request entity too large'), {
+      status: 413,
+      type: 'entity.too.large',
+      expose: true,
+    });
+
+    it('请求体超限 → 400 而不是 500', () => {
+      const result = capture(tooLarge);
+
+      expect(result.statusCode).toBe(413);
+      expect(result.body).toEqual({
+        error: { code: 'VALIDATION_FAILED', message: '请求体过大,请缩小内容后重试' },
+      });
+    });
+
+    it('其它解析错误 → 400,文案不泄露内部细节', () => {
+      const malformed = Object.assign(new SyntaxError('Unexpected token } in JSON'), {
+        status: 400,
+        type: 'entity.parse.failed',
+        expose: true,
+      });
+
+      const result = capture(malformed);
+
+      expect(result.statusCode).toBe(400);
+      expect(result.body).toEqual({
+        error: { code: 'VALIDATION_FAILED', message: '请求体解析失败' },
+      });
+      expect(JSON.stringify(result.body)).not.toContain('Unexpected token');
+    });
+
+    it('5xx 的解析错误仍按内部错误处理,不被误当成客户端问题', () => {
+      // 用 status 判范围而不是 `type` 判存在:5xx 不该走这条分支
+      const weird = Object.assign(new Error('boom'), { status: 500, type: 'entity.too.large' });
+      expect(capture(weird).statusCode).toBe(500);
+    });
+  });
 });

@@ -15,28 +15,32 @@ import {
   type UpdatePageInput,
 } from '@knowledgecool/shared';
 
+import { recordAudit } from '../audit/record.js';
 import { runSerializable } from '../common/db/serializable.js';
 import { AppError } from '../common/errors/app-error.js';
 import { Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { PermissionService } from '../permission/permission.service.js';
 import { SpaceService } from '../space/space.service.js';
 
-const PAGE_SELECT = {
-  id: true,
-  spaceId: true,
-  parentId: true,
-  title: true,
-  position: true,
-  materializedPath: true,
-  depth: true,
-  status: true,
-  version: true,
-  deletedAt: true,
-  createdAt: true,
-  updatedAt: true,
-} satisfies Prisma.PageSelect;
-
-type PageRow = Prisma.PageGetPayload<{ select: typeof PAGE_SELECT }>;
+/**
+ * `toDetail` 需要的字段。
+ *
+ * 刻意写成结构类型而不是从 select 推导:它的输入现在来自权限模块的 `PageAccessPage`
+ * (判定时顺带取回的那一行),两边都满足这个形状,就不必为了一个展示函数
+ * 再定义一个只有一处使用的 select。
+ */
+interface PageDetailRow {
+  id: string;
+  spaceId: string;
+  parentId: string | null;
+  title: string;
+  status: string;
+  version: number;
+  depth: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
 
 /** 树查询只取渲染需要的字段 —— 不带路径,它不该出现在响应里。 */
 const TREE_SELECT = {
@@ -66,12 +70,20 @@ type TreeRow = Prisma.PageGetPayload<{ select: typeof TREE_SELECT }>;
  * `move` 必须**递归重建整棵子树**的路径与深度。只改自己那一条的话,
  * 所有子孙的路径会指向旧位置 —— 权限判定(§5.2 沿路径回溯)会跟着错,
  * 而且**当下不会报任何错**,直到某天有人发现"某篇文档莫名其妙没有权限"。
+ *
+ * ## 鉴权一律走 PermissionService
+ *
+ * M5 之前这里调的是 `spaces.requireCapability`(纯空间级)。现在全部换成
+ * `permissions.requireCapability` —— 它先把页面规则沿物化路径叠在空间角色上,
+ * 再做能力判定。**不要**在这里再手写 `if (role === ...)`,
+ * 那会让页面级权限在某几条路径上被静默绕过。
  */
 @Injectable()
 export class PageService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly spaces: SpaceService,
+    private readonly permissions: PermissionService,
   ) {}
 
   // ==================================================================
@@ -85,7 +97,7 @@ export class PageService {
    * 阶段一的树规模(几百到几千节点)下,这点响应体远比每次展开都发请求划算。
    */
   async tree(operator: Actor, spaceId: string): Promise<PageTreeResponse> {
-    const access = await this.spaces.requireCapability(operator, spaceId, 'page.view');
+    const snapshot = await this.permissions.visibility(operator, spaceId);
 
     const rows = await this.prisma.page.findMany({
       where: { spaceId, deletedAt: null },
@@ -93,14 +105,19 @@ export class PageService {
       select: TREE_SELECT,
     });
 
-    return { spaceId, role: access.role, nodes: buildTree(rows) };
+    // 被页面级规则挡住的节点必须**从树里摘掉**,不能只是禁用它 ——
+    // 让节点以灰显的形式出现,等于告诉对方"这里有一篇你看不到的文档"。
+    const visible = snapshot.unrestricted
+      ? rows
+      : rows.filter((row) => snapshot.allowed.has(row.id));
+
+    return { spaceId, role: snapshot.spaceRole ?? 'viewer', nodes: buildTree(visible) };
   }
 
   /** 单页详情,含从根到自身的面包屑。 */
   async detail(operator: Actor, pageId: string): Promise<PageDetail> {
-    const page = await this.requireLivePage(pageId);
-    await this.spaces.requireCapability(operator, page.spaceId, 'page.view');
-    return { ...toDetail(page), breadcrumb: await this.breadcrumbOf(page) };
+    const access = await this.permissions.requireCapability(operator, pageId, 'page.view');
+    return { ...toDetail(access.page), breadcrumb: await this.breadcrumbOf(access.page) };
   }
 
   /** 空间回收站。只列「被删子树的根」—— 恢复是整棵子树一起回来的。 */
@@ -143,19 +160,13 @@ export class PageService {
 
   /** 新建页面。父节点可空(建在空间根下)。 */
   async create(operator: Actor, input: CreatePageInput): Promise<PageDetail> {
-    await this.spaces.requireCapability(operator, input.spaceId, 'page.create');
+    // 创建时目标页面还不存在,所以检查对象是**父节点**(§8.1 第 3 步)。
+    // 漏掉这一步的话,被 deny 的页面下面还能长出新页面,权限模型直接被绕过。
+    // 返回值就是父页面的行 —— 不必再查一次库。
+    const parent = await this.permissions.requireCreateIn(operator, input.spaceId, input.parentId);
 
-    let parentPath: string | null = null;
-    let depth = 0;
-
-    if (input.parentId !== null) {
-      const parent = await this.requireLivePage(input.parentId);
-      if (parent.spaceId !== input.spaceId) {
-        throw AppError.validation('父页面不在这个空间里');
-      }
-      parentPath = parent.materializedPath;
-      depth = parent.depth + 1;
-    }
+    const parentPath = parent?.materializedPath ?? null;
+    const depth = parent === null ? 0 : parent.depth + 1;
 
     // 主键在应用侧生成:路径里包含自身 id,先拿到 id 才能一次 INSERT 就把路径写对。
     // (数据库的 gen_random_uuid() 默认值只是兜底,显式给 id 会覆盖它。)
@@ -165,6 +176,8 @@ export class PageService {
 
     const row = await this.prisma.$transaction(async (tx) => {
       const position = await nextPositionIn(tx, input.spaceId, input.parentId);
+      // 这里**不加 select**:返回值要拿去组装 PageDetail 与面包屑,
+      // 用默认的整行返回最省事,也避免 select 与 PageDetailRow 两处漂移。
       return tx.page.create({
         data: {
           id,
@@ -177,8 +190,15 @@ export class PageService {
           createdBy: operator.id,
           updatedBy: operator.id,
         },
-        select: PAGE_SELECT,
       });
+    });
+
+    await recordAudit(this.prisma, {
+      actorId: operator.id,
+      action: 'page.create',
+      targetType: 'page',
+      targetId: row.id,
+      detail: { spaceId: input.spaceId, parentId: input.parentId, title },
     });
 
     return { ...toDetail(row), breadcrumb: await this.breadcrumbOf(row) };
@@ -186,8 +206,7 @@ export class PageService {
 
   /** 改名 / 改状态。带乐观锁。 */
   async update(operator: Actor, pageId: string, input: UpdatePageInput): Promise<PageDetail> {
-    const page = await this.requireLivePage(pageId);
-    await this.spaces.requireCapability(operator, page.spaceId, 'page.edit');
+    const access = await this.permissions.requireCapability(operator, pageId, 'page.edit');
 
     // 用 Unchecked 变体:它含全部标量列(含外键 updated_by),
     // 而 PageUpdateManyMutationInput 会把这些过滤掉
@@ -206,6 +225,14 @@ export class PageService {
     });
     if (claimed.count === 0) throw AppError.versionConflict();
 
+    await recordAudit(this.prisma, {
+      actorId: operator.id,
+      action: 'page.update',
+      targetType: 'page',
+      targetId: pageId,
+      detail: { spaceId: access.page.spaceId, title: input.title ?? null, status: input.status ?? null },
+    });
+
     return this.detail(operator, pageId);
   }
 
@@ -218,13 +245,20 @@ export class PageService {
    *  3. 自身换父与落位。
    */
   async move(operator: Actor, pageId: string, input: MovePageInput): Promise<PageDetail> {
-    const page = await this.requireLivePage(pageId);
-    await this.spaces.requireCapability(operator, page.spaceId, 'page.edit');
+    const access = await this.permissions.requireCapability(operator, pageId, 'page.edit');
+    const page = access.page;
 
     let newParentPath: string | null = null;
 
     if (input.newParentId !== null) {
-      const parent = await this.requireLivePage(input.newParentId);
+      // 目标父节点也要有 page.create/editor 权限 ——
+      // 否则可以把页面"搬进"一个自己无权访问的分支,再借由子页面间接拿到内容。
+      const parentAccess = await this.permissions.requireCapability(
+        operator,
+        input.newParentId,
+        'page.create',
+      );
+      const parent = parentAccess.page;
       if (parent.spaceId !== page.spaceId) {
         throw AppError.validation('不能跨空间移动页面');
       }
@@ -281,6 +315,14 @@ export class PageService {
       });
     });
 
+    await recordAudit(this.prisma, {
+      actorId: operator.id,
+      action: 'page.move',
+      targetType: 'page',
+      targetId: pageId,
+      detail: { spaceId: page.spaceId, newParentId: input.newParentId },
+    });
+
     return this.detail(operator, pageId);
   }
 
@@ -291,8 +333,8 @@ export class PageService {
    * 而它们的路径里还写着已删除的父 id。
    */
   async remove(operator: Actor, pageId: string): Promise<{ removedCount: number }> {
-    const page = await this.requireLivePage(pageId);
-    await this.spaces.requireCapability(operator, page.spaceId, 'page.delete');
+    const access = await this.permissions.requireCapability(operator, pageId, 'page.delete');
+    const page = access.page;
 
     // 整批用**同一个时间戳**。注意 `deletedAt: null` 这个条件不能少:
     // 子树里可能已经有早先单独删掉的页面,再盖一次新时间戳既没有意义,
@@ -310,6 +352,14 @@ export class PageService {
       data: { deletedAt: at, deletedBy: operator.id },
     });
 
+    await recordAudit(this.prisma, {
+      actorId: operator.id,
+      action: 'page.delete',
+      targetType: 'page',
+      targetId: pageId,
+      detail: { spaceId: page.spaceId, removedCount: result.count },
+    });
+
     return { removedCount: result.count };
   }
 
@@ -320,8 +370,12 @@ export class PageService {
    * DESIGN §8.2 的处置。否则恢复出来的页面会挂在一个看不见的父节点下。
    */
   async restore(operator: Actor, pageId: string): Promise<PageDetail> {
-    const page = await this.requirePage(pageId);
-    await this.spaces.requireCapability(operator, page.spaceId, 'page.restore');
+    // 回收站里的页面在权限判定上也算"不可见",所以必须显式放行已删除的行,
+    // 否则恢复接口永远拿不到页面(表现为"恢复一个已删除的页面报 404")。
+    const access = await this.permissions.requireCapability(operator, pageId, 'page.restore', {
+      allowDeleted: true,
+    });
+    const page = access.page;
     if (page.deletedAt === null) {
       throw AppError.validation('该页面不在回收站里');
     }
@@ -365,6 +419,14 @@ export class PageService {
       }
     });
 
+    await recordAudit(this.prisma, {
+      actorId: operator.id,
+      action: 'page.restore',
+      targetType: 'page',
+      targetId: pageId,
+      detail: { spaceId: page.spaceId, reparentedToRoot: mustReparent },
+    });
+
     return this.detail(operator, pageId);
   }
 
@@ -373,8 +435,10 @@ export class PageService {
    * 强制「先软删除、再彻底删除」两步,避免手一滑把活页面永久删掉。
    */
   async purge(operator: Actor, pageId: string): Promise<void> {
-    const page = await this.requirePage(pageId);
-    await this.spaces.requireCapability(operator, page.spaceId, 'page.purge');
+    const access = await this.permissions.requireCapability(operator, pageId, 'page.purge', {
+      allowDeleted: true,
+    });
+    const page = access.page;
     if (page.deletedAt === null) {
       throw AppError.validation('只能彻底删除回收站里的页面,请先移入回收站');
     }
@@ -409,27 +473,19 @@ export class PageService {
       }
       throw AppError.validation('页面层级异常,彻底删除已中止');
     });
+
+    await recordAudit(this.prisma, {
+      actorId: operator.id,
+      action: 'page.purge',
+      targetType: 'page',
+      targetId: pageId,
+      detail: { spaceId: page.spaceId, title: page.title },
+    });
   }
 
   // ==================================================================
   // 私有
   // ==================================================================
-
-  /** 取一个**活着**的页面。已删除的视同不存在(§6.1:不区分「不存在」与「无权」)。 */
-  private async requireLivePage(pageId: string): Promise<PageRow> {
-    const page = await this.requirePage(pageId);
-    if (page.deletedAt !== null) throw AppError.notFound();
-    return page;
-  }
-
-  private async requirePage(pageId: string): Promise<PageRow> {
-    const page = await this.prisma.page.findUnique({
-      where: { id: pageId },
-      select: PAGE_SELECT,
-    });
-    if (page === null) throw AppError.notFound();
-    return page;
-  }
 
   /** 由物化路径还原面包屑。祖先不是递归查出来的,是路径字符串切出来的。 */
   private async breadcrumbOf(page: { materializedPath: string }): Promise<PageBreadcrumb[]> {
@@ -561,7 +617,7 @@ function toPageStatus(value: string): PageStatus {
   return isPageStatus(value) ? value : 'published';
 }
 
-function toDetail(row: PageRow): Omit<PageDetail, 'breadcrumb'> {
+function toDetail(row: PageDetailRow): Omit<PageDetail, 'breadcrumb'> {
   return {
     id: row.id,
     spaceId: row.spaceId,

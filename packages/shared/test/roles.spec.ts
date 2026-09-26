@@ -75,6 +75,7 @@ const MATRIX: ReadonlyArray<readonly [Capability, readonly [boolean, boolean, bo
     ['comment.create', [false, true, true, true]],
     ['comment.resolve.own', [false, true, true, true]],
     ['comment.resolve.any', [false, false, true, true]],
+    ['comment.delete.any', [false, false, false, true]],
     ['page.create', [false, false, true, true]],
     ['page.edit', [false, false, true, true]],
     ['page.delete', [false, false, true, true]],

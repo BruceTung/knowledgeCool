@@ -69,7 +69,8 @@ export class AuthController {
     @Req() request: AuthenticatedRequest,
     @Res({ passthrough: true }) response: Response,
   ): Promise<void> {
-    await this.auth.logout(request.sessionToken);
+    // 传 actorId:审计里"谁登出了"比"发生过一次登出"有用得多
+    await this.auth.logout(request.sessionToken, request.user.id);
     // 清 Cookie 时属性必须与写入时一致,否则浏览器不会覆盖掉原来那个。
     response.clearCookie(SESSION_COOKIE_NAME, this.cookieBaseOptions());
   }

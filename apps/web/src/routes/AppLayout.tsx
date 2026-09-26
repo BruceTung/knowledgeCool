@@ -1,9 +1,12 @@
+import { useEffect, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 
 import { avatarClass, Button } from '../components/ui';
 import { useLogout, useMe } from '../features/auth/queries';
+import { useCommentCounts } from '../features/comments/queries';
 import { PageTreePanel } from '../features/pages/PageTreePanel';
 import { usePageTree } from '../features/pages/queries';
+import { CommandPalette } from '../features/search/CommandPalette';
 import { useSpaces } from '../features/spaces/queries';
 
 /**
@@ -29,7 +32,7 @@ export function idsFromPath(pathname: string): { spaceId?: string; pageId?: stri
  * 页面树只在「已经选中某个空间」时出现 —— 在 `/spaces` 这类全局页面上
  * 显示一棵不属于任何空间的树是没有意义的。
  *
- * M4 会把主区域换成编辑器,布局本身不再动。
+ * 全局检索是 `Ctrl / Cmd + K` 的命令面板,不占版面(§7.2)。
  */
 export function AppLayout() {
   const me = useMe();
@@ -40,7 +43,25 @@ export function AppLayout() {
 
   const { spaceId, pageId } = idsFromPath(pathname);
   const tree = usePageTree(spaceId);
+  const commentCounts = useCommentCounts(spaceId);
   const user = me.data?.user;
+
+  const [paletteOpen, setPaletteOpen] = useState(false);
+
+  // Ctrl / Cmd + K 打开命令面板。挂在 document 上是唯一可行的做法:
+  // 焦点可能在编辑器里,也可能在某个输入框里,没有单一的挂载点。
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key.toLowerCase() !== 'k') return;
+      if (!event.metaKey && !event.ctrlKey) return;
+      event.preventDefault();
+      setPaletteOpen((open) => !open);
+    }
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, []);
 
   return (
     <div className="flex h-full flex-col bg-white">
@@ -49,6 +70,20 @@ export function AppLayout() {
           知
         </div>
         <span className="text-sm font-medium text-slate-900">知源知识库</span>
+
+        <button
+          type="button"
+          onClick={() => {
+            setPaletteOpen(true);
+          }}
+          className="ml-2 flex items-center gap-2 rounded-md border border-slate-200 px-2 py-1 text-xs text-slate-400 hover:border-slate-300 hover:text-slate-600"
+          title="全局检索"
+        >
+          <span>搜索知识库…</span>
+          <kbd className="rounded border border-slate-200 bg-slate-50 px-1 text-[10px]">
+            Ctrl / ⌘ K
+          </kbd>
+        </button>
 
         <div className="flex-1" />
 
@@ -101,6 +136,18 @@ export function AppLayout() {
             ⊞
           </NavLink>
 
+          <NavLink
+            to="/search"
+            title="检索(也可用 Ctrl / Cmd + K)"
+            className={({ isActive }) =>
+              `flex h-8 w-8 items-center justify-center rounded-lg text-sm ${
+                isActive ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-400 hover:bg-white/70'
+              }`
+            }
+          >
+            ⌕
+          </NavLink>
+
           <div className="my-1 h-px w-6 flex-none bg-slate-200" />
 
           <div className="flex w-full flex-col items-center gap-1 overflow-auto">
@@ -130,6 +177,7 @@ export function AppLayout() {
               nodes={tree.data.nodes}
               role={tree.data.role}
               activePageId={pageId}
+              commentCounts={commentCounts.data ?? {}}
             />
           ) : (
             <div className="flex h-full w-72 flex-none items-center justify-center border-r border-slate-200 bg-slate-50">
@@ -143,6 +191,16 @@ export function AppLayout() {
           <Outlet />
         </main>
       </div>
+
+      {/* 只在打开时挂载:关闭即卸载,状态自然清空 */}
+      {paletteOpen && (
+        <CommandPalette
+          onClose={() => {
+            setPaletteOpen(false);
+          }}
+          {...(spaceId === undefined ? {} : { spaceId })}
+        />
+      )}
     </div>
   );
 }

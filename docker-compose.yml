@@ -95,6 +95,10 @@ services:
     ports:
       # 默认映射到 8080,避免在开发机上占用 80 端口
       - '${WEB_PORT:-8080}:80'
+    volumes:
+      # 只读挂载附件目录 —— Nginx 直接出图,不经过 Node。
+      # 与 api 共用同一个卷,所以上传和读取看到的是同一批文件。
+      - uploads:/data/uploads:ro
     depends_on:
       api:
         condition: service_started

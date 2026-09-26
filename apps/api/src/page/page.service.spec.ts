@@ -73,8 +73,52 @@ function createService() {
   const spaces = { requireCapability: vi.fn() };
   spaces.requireCapability.mockResolvedValue({ role: 'admin', space: SPACE });
 
-  const service = new PageService(prisma as never, spaces as never);
-  return { service, prisma, spaces };
+  /**
+   * 权限服务的替身。
+   *
+   * 它刻意**委托给同一份 prisma 桩**去取页面行 —— 这样各用例里
+   * `findUnique.mockResolvedValueOnce` 写下的调用序列仍然对得上,
+   * 不必为每个用例重写"页面从哪来"。
+   *
+   * 这里的 `role: 'admin'` 表示"鉴权已通过",**不是**在测权限判定本身 ——
+   * 权限判定有自己的单测(permission.service.spec.ts)。
+   */
+  const permissions = {
+    requireCapability: vi.fn(
+      async (
+        _operator: unknown,
+        pageId: string,
+        _capability: string,
+        options?: { allowDeleted?: boolean },
+      ) => {
+        const page = await prisma.page.findUnique({ where: { id: pageId } });
+        if (page === null) throw new Error('not found');
+        if (page.deletedAt !== null && options?.allowDeleted !== true) {
+          throw Object.assign(new Error('已删除'), { code: 'NOT_FOUND' });
+        }
+        return { role: 'admin', spaceRole: 'admin', viaSuperAdmin: false, page };
+      },
+    ),
+    requireCreateIn: vi.fn(async (_operator: unknown, spaceId: string, parentId: string | null) => {
+      if (parentId === null) return null;
+      const page = await prisma.page.findUnique({ where: { id: parentId } });
+      if (page === null || page.deletedAt !== null) {
+        throw Object.assign(new Error('已删除'), { code: 'NOT_FOUND' });
+      }
+      if (page.spaceId !== spaceId) {
+        throw Object.assign(new Error('跨空间'), { code: 'VALIDATION_FAILED' });
+      }
+      return page;
+    }),
+    visibility: vi.fn(async () => ({
+      spaceRole: 'admin',
+      unrestricted: true,
+      allowed: new Set<string>(),
+    })),
+  };
+
+  const service = new PageService(prisma as never, spaces as never, permissions as never);
+  return { service, prisma, spaces, permissions };
 }
 
 /** 取出最近一次 $executeRaw 的 SQL 文本与插值。 */
@@ -167,12 +211,12 @@ describe('PageService.create', () => {
     expect(prisma.page.create.mock.calls[0]?.[0].data.title).toBe('未命名页面');
   });
 
-  it('需要 page.create 能力(即 editor 起)', async () => {
-    const { service, spaces } = createService();
+  it('需要 page.create 能力 —— 建在根下时查空间角色', async () => {
+    const { service, permissions } = createService();
 
     await service.create(OPERATOR, { spaceId: 'sp-1', parentId: null });
 
-    expect(spaces.requireCapability).toHaveBeenCalledWith(OPERATOR, 'sp-1', 'page.create');
+    expect(permissions.requireCreateIn).toHaveBeenCalledWith(OPERATOR, 'sp-1', null);
   });
 });
 
@@ -517,12 +561,15 @@ describe('PageService.purge', () => {
   });
 
   it('需要 page.purge(admin 起),比软删除的门槛高', async () => {
-    const { service, spaces, prisma } = createService();
+    const { service, permissions, prisma } = createService();
     prisma.page.findUnique.mockResolvedValueOnce(pageRow({ deletedAt: new Date() }));
 
     await service.purge(OPERATOR, 'p-1');
 
-    expect(spaces.requireCapability).toHaveBeenCalledWith(OPERATOR, 'sp-1', 'page.purge');
+    // 必须显式放行已删除的行,否则回收站里的页面永远取不到
+    expect(permissions.requireCapability).toHaveBeenCalledWith(OPERATOR, 'p-1', 'page.purge', {
+      allowDeleted: true,
+    });
   });
 
   it('⚠️ 从叶子往根删 —— parent_id 是 onDelete: Restrict,先删父会撞外键', async () => {

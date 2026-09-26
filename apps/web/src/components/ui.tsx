@@ -97,8 +97,16 @@ export function SelectField({
   );
 }
 
+/**
+ * 按钮。
+ *
+ * `className` 会被**合并**而不是被覆盖 —— 第一版把它和 `{...rest}` 一起展开,
+ * 结果调用方传的 className 被后面的 className 顶掉(JSX 里后写的胜出),
+ * 表现为"加了 flex-none 却没生效",而且在 flex 行里被挤成两行。
+ */
 export function Button({
   variant = 'primary',
+  className,
   children,
   ...rest
 }: { variant?: 'primary' | 'secondary' | 'danger' } & ButtonHTMLAttributes<HTMLButtonElement>) {
@@ -110,7 +118,7 @@ export function Button({
     danger: 'border border-red-200 bg-white text-red-600 hover:bg-red-50',
   };
   return (
-    <button {...rest} className={`${base} ${styles[variant] ?? ''}`}>
+    <button {...rest} className={`${base} ${styles[variant] ?? ''} ${className ?? ''}`}>
       {children}
     </button>
   );

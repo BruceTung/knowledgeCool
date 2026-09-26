@@ -1,9 +1,179 @@
 @import 'tailwindcss';
 
-/* 主工作面是全屏布局:顶栏 + 图标栏 + 页面树 + 编辑器 + 右上下文栏(DESIGN.md §7.2)。
-   M1 只立骨架,M2 起再填业务界面。 */
+/* 主工作面是全屏布局:顶栏 + 图标栏 + 页面树 + 编辑器 + 右上下文栏(DESIGN.md §7.2)。 */
 html,
 body,
 #root {
   height: 100%;
+}
+
+/* ============================================================
+   编辑器正文排版(§7.4)
+   ============================================================
+   刻意**不引入 @tailwindcss/typography**:那个插件面向"博客正文",
+   而知识库需要的几件事它都不管(表格边框、代码块底色、占位符)。
+   手写这三十行比调插件的配置更直接,也不会因为插件升级而走样。 */
+
+.kc-prose {
+  color: #1e293b;
+  font-size: 15px;
+  line-height: 1.75;
+  max-width: 46rem;
+}
+
+.kc-prose > * + * {
+  margin-top: 0.75em;
+}
+
+.kc-prose h1 {
+  font-size: 1.65rem;
+  font-weight: 600;
+  line-height: 1.3;
+  margin-top: 1.6em;
+}
+
+.kc-prose h2 {
+  font-size: 1.3rem;
+  font-weight: 600;
+  line-height: 1.35;
+  margin-top: 1.4em;
+}
+
+.kc-prose h3 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin-top: 1.2em;
+}
+
+.kc-prose h1:first-child,
+.kc-prose h2:first-child,
+.kc-prose h3:first-child {
+  margin-top: 0;
+}
+
+/* 标题被滚到大纲锚点时,不要贴在容器最顶上 */
+.kc-prose h1,
+.kc-prose h2,
+.kc-prose h3 {
+  scroll-margin-top: 1rem;
+}
+
+.kc-prose ul,
+.kc-prose ol {
+  padding-left: 1.4em;
+}
+
+.kc-prose ul {
+  list-style: disc;
+}
+
+.kc-prose ol {
+  list-style: decimal;
+}
+
+.kc-prose li > ul,
+.kc-prose li > ol {
+  margin-top: 0.25em;
+}
+
+.kc-prose blockquote {
+  border-left: 3px solid #cbd5e1;
+  padding-left: 0.9em;
+  color: #475569;
+}
+
+.kc-prose code {
+  background: #f1f5f9;
+  border-radius: 3px;
+  padding: 0.1em 0.3em;
+  font-size: 0.9em;
+}
+
+.kc-prose pre {
+  background: #0f172a;
+  color: #e2e8f0;
+  border-radius: 8px;
+  padding: 0.85em 1em;
+  overflow-x: auto;
+}
+
+.kc-prose pre code {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  font-size: 0.85em;
+}
+
+.kc-prose hr {
+  border-color: #e2e8f0;
+}
+
+.kc-prose a {
+  color: #1d4ed8;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.kc-prose img {
+  max-width: 100%;
+  border-radius: 8px;
+}
+
+/* 表格:ProseMirror 的表格节点不带样式,不写这一段会退化成一堆挤在一起的文字 */
+.kc-prose table {
+  border-collapse: collapse;
+  table-layout: fixed;
+  width: 100%;
+  overflow: hidden;
+}
+
+.kc-prose th,
+.kc-prose td {
+  border: 1px solid #e2e8f0;
+  padding: 0.4em 0.6em;
+  vertical-align: top;
+}
+
+.kc-prose th {
+  background: #f8fafc;
+  font-weight: 600;
+  text-align: left;
+}
+
+/* 空表格单元格也要能被点中,否则用户没法开始输入 */
+.kc-prose td p.is-empty::before,
+.kc-prose th p.is-empty::before {
+  content: '\00a0';
+  float: left;
+  color: transparent;
+  pointer-events: none;
+}
+
+/* 选中的单元格 */
+.kc-prose .selectedCell::after {
+  background: rgb(29 78 216 / 0.12);
+  content: '';
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+  z-index: 2;
+}
+
+.kc-prose .column-resize-handle {
+  background-color: #1d4ed8;
+  bottom: -2px;
+  pointer-events: none;
+  position: absolute;
+  right: -2px;
+  top: 0;
+  width: 4px;
+}
+
+/* 占位符:只在第一个空段落上显示,避免整页都是灰字 */
+.kc-prose p.is-editor-empty:first-child::before {
+  color: #cbd5e1;
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
 }

@@ -22,6 +22,11 @@ interface PageTreePanelProps {
   role: SpaceRole;
   /** 当前打开的页面 —— 高亮它,并自动展开到它的路径。 */
   activePageId: string | undefined;
+  /**
+   * 各页面的未解决评论数(§8.4:阶段一不发通知,靠这个角标让人知道有讨论)。
+   * 缺省为空对象 —— 评论数拿不到不该影响树的渲染。
+   */
+  commentCounts?: Record<string, number>;
 }
 
 /**
@@ -33,7 +38,13 @@ interface PageTreePanelProps {
  * 权限在这里只用来**决定显示什么**。服务端仍是唯一裁判:
  * 即使有人把按钮抠出来点,后端照样 403。
  */
-export function PageTreePanel({ spaceId, nodes, role, activePageId }: PageTreePanelProps) {
+export function PageTreePanel({
+  spaceId,
+  nodes,
+  role,
+  activePageId,
+  commentCounts,
+}: PageTreePanelProps) {
   const navigate = useNavigate();
   const createPage = useCreatePage(spaceId);
   const updatePage = useUpdatePage(spaceId);
@@ -256,6 +267,15 @@ export function PageTreePanel({ spaceId, nodes, role, activePageId }: PageTreePa
           ) : (
             <span className="min-w-0 flex-1 truncate py-1" title={node.title}>
               {node.title}
+            </span>
+          )}
+
+          {(commentCounts?.[node.id] ?? 0) > 0 && renamingId !== node.id && (
+            <span
+              className="flex-none rounded-full bg-amber-50 px-1.5 text-[10px] text-amber-700 ring-1 ring-amber-200"
+              title={`${String(commentCounts?.[node.id] ?? 0)} 条未解决评论`}
+            >
+              {commentCounts?.[node.id] ?? 0}
             </span>
           )}
 

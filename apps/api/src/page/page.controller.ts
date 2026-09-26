@@ -9,10 +9,22 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Put,
+  Query,
+  Res,
 } from '@nestjs/common';
-import type { AuthUser, PageDetail, PageTreeResponse, TrashItem } from '@knowledgecool/shared';
+import type { Response } from 'express';
+import type {
+  AuthUser,
+  PageContentResponse,
+  PageDetail,
+  PageTreeResponse,
+  TrashItem,
+} from '@knowledgecool/shared';
 
 import { CurrentUser } from '../auth/current-user.decorator.js';
+import { SaveContentDto } from './dto/save-content.dto.js';
+import { ContentService } from './content.service.js';
 import { CreatePageDto, MovePageDto, UpdatePageDto } from './dto/page.dto.js';
 import { PageService } from './page.service.js';
 
@@ -27,7 +39,10 @@ import { PageService } from './page.service.js';
  */
 @Controller()
 export class PageController {
-  constructor(private readonly pages: PageService) {}
+  constructor(
+    private readonly pages: PageService,
+    private readonly content: ContentService,
+  ) {}
 
   /** 整棵页面树(不含回收站)。 */
   @Get('spaces/:spaceId/pages')
@@ -114,5 +129,60 @@ export class PageController {
     @Param('pageId', ParseUUIDPipe) pageId: string,
   ): Promise<void> {
     return this.pages.purge(user, pageId);
+  }
+
+  // ----------------------------------------------------------------
+  // 正文(§7.4 的文档模型)
+  // ----------------------------------------------------------------
+
+  /**
+   * 取正文。
+   *
+   * 页面刚建出来时还没有正文行 —— 那不是错误,服务端返回空文档,
+   * 前端拿到的永远是合法可渲染的结构。
+   */
+  @Get('pages/:pageId/content')
+  @HttpCode(HttpStatus.OK)
+  getContent(
+    @CurrentUser() user: AuthUser,
+    @Param('pageId', ParseUUIDPipe) pageId: string,
+  ): Promise<PageContentResponse> {
+    return this.content.get(user, pageId);
+  }
+
+  /** 存正文。同步重算 `text_for_search`;`baseUpdatedAt` 不匹配返回 409。 */
+  @Put('pages/:pageId/content')
+  @HttpCode(HttpStatus.OK)
+  saveContent(
+    @CurrentUser() user: AuthUser,
+    @Param('pageId', ParseUUIDPipe) pageId: string,
+    @Body() dto: SaveContentDto,
+  ): Promise<PageContentResponse> {
+    return this.content.save(user, pageId, dto);
+  }
+
+  /**
+   * 导出为 Markdown(M6)。
+   *
+   * 走 `Accept` 协商不合适 —— 同一个 URL 返回两种内容类型会让缓存与调试都变难。
+   * 这里用显式的 `?format=md`,并直接以 `text/markdown` 返回,方便浏览器直接下载。
+   */
+  @Get('pages/:pageId/export')
+  async export(
+    @CurrentUser() user: AuthUser,
+    @Param('pageId', ParseUUIDPipe) pageId: string,
+    // format 目前只有 md 一种;保留参数是为了将来加 pdf/png 时不改路由
+    @Query('format') _format: string | undefined,
+    @Res() res: Response,
+  ): Promise<void> {
+    const result = await this.content.exportMarkdown(user, pageId);
+    // 文件名里可能有 `/`、`:` 之类会破坏 Content-Disposition 的字符
+    const safeName = result.title.replace(/[\\/:*?"<>|\r\n]/g, '_').slice(0, 80) || 'page';
+    res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename*=UTF-8''${encodeURIComponent(`${safeName}.md`)}`,
+    );
+    res.send(result.markdown);
   }
 }

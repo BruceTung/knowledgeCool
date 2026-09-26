@@ -36,4 +36,13 @@ export class AddSpaceMemberDto {
     message: '密码过长:最多 72 字节(约 24 个汉字或 72 个 ASCII 字符)',
   })
   password?: string;
+
+  /**
+   * 部门。阶段一的「用户组」就是它,所以这里必须能设置 ——
+   * 否则「给某个部门授权」在界面上没有任何入口,组级规则形同虚设。
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(64, { message: '部门名最多 64 个字符' })
+  department?: string;
 }

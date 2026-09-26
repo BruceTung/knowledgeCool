@@ -85,12 +85,46 @@ export class AllExceptionsFilter implements ExceptionFilter {
       return { status, body: buildErrorBody(code, message, details) };
     }
 
-    // 3) 其它一切(含非 Error 的抛出物):内部错误,细节只进日志。
+    // 3) body-parser / raw-body 抛的解析错误。
+    //    ⚠️ 它们**不是** HttpException 的子类,只带 `status` / `type` 属性。
+    //    不显式认出来的话,「请求体超过上限」会变成 500 —— 而它明明是客户端的问题,
+    //    500 会把排查方向引到服务端,浪费很久。
+    const parserError = asParserError(exception);
+    if (parserError !== null) {
+      return {
+        status: parserError.status,
+        body: buildErrorBody(
+          'VALIDATION_FAILED',
+          parserError.type === 'entity.too.large'
+            ? '请求体过大,请缩小内容后重试'
+            : '请求体解析失败',
+        ),
+      };
+    }
+
+    // 4) 其它一切(含非 Error 的抛出物):内部错误,细节只进日志。
     return {
       status: ERROR_HTTP_STATUS.INTERNAL_ERROR,
       body: buildErrorBody('INTERNAL_ERROR'),
     };
   }
+}
+
+/**
+ * 识别 body-parser 的错误形状。
+ *
+ * `type === 'entity.too.large'` 是 URL 编码/JSON 解析器超限时的固定标识;
+ * 用属性判断而不是 `instanceof`,因为 body-parser 不导出这些类,
+ * 而且它的实现细节跨版本会变 —— 但这两个属性的契约很稳。
+ */
+function asParserError(exception: unknown): { status: number; type: string } | null {
+  if (typeof exception !== 'object' || exception === null) return null;
+
+  const candidate = exception as { status?: unknown; statusCode?: unknown; type?: unknown };
+  const status = typeof candidate.status === 'number' ? candidate.status : candidate.statusCode;
+  if (typeof status !== 'number' || status < 400 || status >= 500) return null;
+
+  return { status, type: typeof candidate.type === 'string' ? candidate.type : '' };
 }
 
 /**

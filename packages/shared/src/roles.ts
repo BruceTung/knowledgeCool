@@ -44,6 +44,7 @@ export const CAPABILITIES = [
   'comment.create',
   'comment.resolve.own',
   'comment.resolve.any',
+  'comment.delete.any',
   'page.create',
   'page.edit',
   'page.delete',
@@ -67,6 +68,12 @@ export const CAPABILITY_MIN_ROLE: Readonly<Record<Capability, EffectiveRole>> = 
   'comment.create': 'commenter',
   'comment.resolve.own': 'commenter',
   'comment.resolve.any': 'editor',
+  /**
+   * 删除**别人的**评论。作者删自己的评论不需要它(所有权比较在调用方)。
+   * 门槛定在 admin 而不是 editor:删评论是不可逆的,而且它抹掉的是他人的言论,
+   * 比"编辑文档"更需要谨慎。
+   */
+  'comment.delete.any': 'admin',
   'page.create': 'editor',
   'page.edit': 'editor',
   /** 软删除 —— 可恢复,所以 editor 就够 */

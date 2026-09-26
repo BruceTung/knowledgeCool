@@ -97,3 +97,69 @@ export async function apiSend<T>(
     body: JSON.stringify(body),
   });
 }
+
+/**
+ * 上传文件(multipart)。
+ *
+ * **不要**复用 `apiSend`:multipart 的 `Content-Type` 必须由浏览器自己填 ——
+ * 因为 boundary 是浏览器生成的,手写 `Content-Type` 会让后端解析不出文件。
+ * 这个坑的表现是"接口 400 或者 `file` 为 undefined",而 curl 手测却正常。
+ */
+export async function apiUpload<T>(path: string, file: File, field = 'file'): Promise<T> {
+  const form = new FormData();
+  form.append(field, file);
+
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { Accept: 'application/json' },
+    body: form,
+  });
+
+  const payload: unknown = await response.json().catch(() => undefined);
+
+  if (!response.ok) {
+    if (isApiErrorBody(payload)) throw new ApiError(payload);
+    throw new ApiError({
+      error: { code: 'INTERNAL_ERROR', message: `上传失败(HTTP ${response.status})` },
+    });
+  }
+
+  return payload as T;
+}
+
+/**
+ * 触发一次浏览器下载。
+ *
+ * 导出接口返回的是 `text/markdown` 而不是 JSON,所以不能走 `apiFetch`
+ * (它会尝试 `response.json()`)。这里直接拿 blob 造一个临时 `<a>` ——
+ * 这样 Cookie 会照常带上,权限校验仍然生效。
+ */
+export async function apiDownload(path: string, fallbackName: string): Promise<void> {
+  const response = await fetch(`${API_BASE}${path}`, { credentials: 'include' });
+  if (!response.ok) {
+    const payload: unknown = await response.json().catch(() => undefined);
+    if (isApiErrorBody(payload)) throw new ApiError(payload);
+    throw new ApiError({
+      error: { code: 'INTERNAL_ERROR', message: `导出失败(HTTP ${response.status})` },
+    });
+  }
+
+  // 文件名从 Content-Disposition 里取,取不到就用兜底名
+  const disposition = response.headers.get('Content-Disposition') ?? '';
+  const utf8Name = /filename\*=UTF-8''([^;]+)/i.exec(disposition)?.[1];
+  const name = utf8Name === undefined ? fallbackName : decodeURIComponent(utf8Name);
+
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = name;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  // 立刻 revoke 会让下载中途失败(部分浏览器),延迟释放更稳
+  setTimeout(() => {
+    URL.revokeObjectURL(url);
+  }, 10_000);
+}

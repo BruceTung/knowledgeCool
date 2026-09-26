@@ -11,6 +11,7 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { Prisma } from '../generated/prisma/client.js';
 import type { LoginDto } from './dto/login.dto.js';
 import type { SetupDto } from './dto/setup.dto.js';
+import { recordAudit } from '../audit/record.js';
 import { PasswordService } from './password.service.js';
 import { SessionService, type SessionMeta } from './session.service.js';
 
@@ -104,6 +105,14 @@ export class AuthService {
 
     const session = await this.sessions.issue(user.id, meta);
     await this.touchLastLogin(user.id);
+    await recordAudit(this.prisma, {
+      actorId: user.id,
+      action: 'auth.setup',
+      targetType: 'user',
+      targetId: user.id,
+      detail: { email: user.email },
+      ip: meta.ip ?? null,
+    });
     return { user: toAuthUser(user), token: session.token, expiresAt: session.expiresAt };
   }
 
@@ -124,11 +133,33 @@ export class AuthService {
 
     const session = await this.sessions.issue(user.id, meta);
     await this.touchLastLogin(user.id);
+    await recordAudit(this.prisma, {
+      actorId: user.id,
+      action: 'auth.login',
+      targetType: 'user',
+      targetId: user.id,
+      detail: { email: user.email },
+      ip: meta.ip ?? null,
+    });
     return { user: toAuthUser(user), token: session.token, expiresAt: session.expiresAt };
   }
 
-  async logout(token: string): Promise<void> {
+  /**
+   * 登出。
+   *
+   * `actorId` 是可选的:审计里"谁登出了"比"有一次登出"有用得多,
+   * 但会话 token 本身不携带用户 id,所以由调用方(controller,它有 `@CurrentUser()`)传进来。
+   * 给默认值是为了让旧调用点仍然可用。
+   */
+  async logout(token: string, actorId: string | null = null): Promise<void> {
     await this.sessions.revoke(token);
+    await recordAudit(this.prisma, {
+      actorId,
+      action: 'auth.logout',
+      targetType: 'user',
+      targetId: actorId ?? '(unknown)',
+      detail: {},
+    });
   }
 
   /**

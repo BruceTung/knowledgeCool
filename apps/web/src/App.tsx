@@ -4,9 +4,11 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 import { ErrorNote, FullScreenNote } from './components/ui';
 import { isUnauthorized, useMe, useSetupState } from './features/auth/queries';
 import { AppLayout } from './routes/AppLayout';
+import { AuditPage } from './routes/AuditPage';
 import { LoginPage } from './routes/LoginPage';
 import { MembersPage } from './routes/MembersPage';
 import { PageDetailPage } from './routes/PageDetailPage';
+import { SearchPage } from './routes/SearchPage';
 import { SetupPage } from './routes/SetupPage';
 import { SpaceOverviewPage } from './routes/SpaceOverviewPage';
 import { SpacesHome } from './routes/SpacesHome';
@@ -15,8 +17,8 @@ import { TrashPage } from './routes/TrashPage';
 /**
  * 路由表(DESIGN.md §7.2)。
  *
- * M2 落地:`/setup`、`/login`、`/spaces`、`/s/:spaceId`(概览)、`/s/:spaceId/members`。
- * M3 起 `/s/:spaceId` 会换成「页面树 + 编辑器」,但那只换组件、不动路由结构。
+ * M4 补上 `/search`;M5 补上 `/audit`(空间范围内的审计日志)。
+ * 全局检索另有一个不占版面的入口:`Ctrl / Cmd + K`(见 AppLayout)。
  *
  * `/setup` 与 `/login` 刻意放在外层(不套 RequireAuth)——
  * 它们存在的意义就是「还没登录」这个状态,套上守卫会变成死循环重定向。
@@ -36,10 +38,12 @@ export function App() {
       >
         <Route path="/" element={<Navigate to="/spaces" replace />} />
         <Route path="/spaces" element={<SpacesHome />} />
+        <Route path="/search" element={<SearchPage />} />
         <Route path="/s/:spaceId" element={<SpaceOverviewPage />} />
         <Route path="/s/:spaceId/p/:pageId" element={<PageDetailPage />} />
         <Route path="/s/:spaceId/trash" element={<TrashPage />} />
         <Route path="/s/:spaceId/members" element={<MembersPage />} />
+        <Route path="/s/:spaceId/audit" element={<AuditPage />} />
         <Route path="*" element={<NotFound />} />
       </Route>
     </Routes>
