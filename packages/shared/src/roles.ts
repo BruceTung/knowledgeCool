@@ -48,6 +48,7 @@ export const CAPABILITIES = [
   'page.edit',
   'page.delete',
   'page.restore',
+  'page.purge',
   'page.permission.update',
   'space.member.manage',
   'audit.view',
@@ -68,8 +69,11 @@ export const CAPABILITY_MIN_ROLE: Readonly<Record<Capability, EffectiveRole>> = 
   'comment.resolve.any': 'editor',
   'page.create': 'editor',
   'page.edit': 'editor',
+  /** 软删除 —— 可恢复,所以 editor 就够 */
   'page.delete': 'editor',
   'page.restore': 'editor',
+  /** ⚠️ 唯一**不可逆**的能力(§6.2 要求 admin)。调用点看到它就该多想一秒。 */
+  'page.purge': 'admin',
   'page.permission.update': 'admin',
   'space.member.manage': 'admin',
   'audit.view': 'admin',

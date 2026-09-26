@@ -17,6 +17,7 @@ import {
 } from '@knowledgecool/shared';
 
 import { PasswordService } from '../auth/password.service.js';
+import { isUniqueViolation, runSerializable } from '../common/db/serializable.js';
 import { AppError } from '../common/errors/app-error.js';
 import { Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -47,7 +48,15 @@ const MEMBER_SELECT = {
 } satisfies Prisma.SpaceMemberSelect;
 
 type MemberRow = Prisma.SpaceMemberGetPayload<{ select: typeof MEMBER_SELECT }>;
-type SpaceRow = Prisma.SpaceGetPayload<{ select: typeof SPACE_SUMMARY_SELECT }>;
+
+/** 空间的基础字段。导出给别的模块(页面模块)复用,免得各自再写一份 select。 */
+export type SpaceRow = Prisma.SpaceGetPayload<{ select: typeof SPACE_SUMMARY_SELECT }>;
+
+/** 空间级访问判定的结果。 */
+export interface SpaceAccess {
+  role: SpaceRole;
+  space: SpaceRow;
+}
 
 /**
  * 权限判定所需的「操作者」。只取两个字段,便于单测直接构造。
@@ -248,7 +257,7 @@ export class SpaceService {
   ): Promise<SpaceMemberView> {
     const { space } = await this.requireCapability(operator, spaceId, 'space.member.manage');
 
-    const row = await this.runGuarded(async (tx) => {
+    const row = await runSerializable(this.prisma, async (tx) => {
       const target = await tx.spaceMember.findUnique({
         where: { spaceId_userId: { spaceId, userId: targetUserId } },
         select: { role: true },
@@ -286,7 +295,7 @@ export class SpaceService {
       throw AppError.validation('空间所有者不能被移除');
     }
 
-    await this.runGuarded(async (tx) => {
+    await runSerializable(this.prisma, async (tx) => {
       const target = await tx.spaceMember.findUnique({
         where: { spaceId_userId: { spaceId, userId: targetUserId } },
         select: { role: true },
@@ -342,37 +351,22 @@ export class SpaceService {
     return { role, space };
   }
 
-  /** 断言操作者具备某能力。能力矩阵来自 shared/roles.ts,不在这里手写 if 判断。 */
-  private async requireCapability(
+  /**
+   * 断言操作者具备某能力。能力矩阵来自 shared/roles.ts,不在这里手写 if 判断。
+   *
+   * **公开给其他模块复用**(页面模块就是这么用的):权限判定只应该有一处实现,
+   * 否则迟早会有一处漏掉超管直通或「最小可见」的 NOT_FOUND 语义。
+   */
+  async requireCapability(
     operator: Operator,
     spaceId: string,
     capability: Capability,
-  ): Promise<{ role: SpaceRole; space: SpaceRow }> {
+  ): Promise<SpaceAccess> {
     const context = await this.requireVisible(operator, spaceId);
     if (!can(toEffectiveRole(context.role), capability)) {
       throw AppError.forbidden('需要空间管理员权限');
     }
     return context;
-  }
-
-  /**
-   * 跑一个「数一数再写」的事务。
-   *
-   * 用 **Serializable** 而非默认隔离级别:`assertNotLastAdmin` 是典型的
-   * 读后写(先 count 再 delete/update),ReadCommitted 下两个并发请求会各自
-   * 读到「还有 2 个管理员」然后各降一个,空间就零管理员了。
-   */
-  private async runGuarded<T>(
-    work: (tx: Prisma.TransactionClient) => Promise<T>,
-  ): Promise<T> {
-    try {
-      return await this.prisma.$transaction(work, { isolationLevel: 'Serializable' });
-    } catch (error: unknown) {
-      if (isSerializationFailure(error)) {
-        throw AppError.versionConflict('并发操作冲突,请重试');
-      }
-      throw error;
-    }
   }
 
   /**
@@ -497,25 +491,4 @@ function compareMemberViews(a: SpaceMemberView, b: SpaceMemberView, ownerId: str
   if (rankDiff !== 0) return rankDiff;
 
   return a.joinedAt.localeCompare(b.joinedAt);
-}
-
-/**
- * 判断是否是唯一约束冲突(Prisma 的 P2002)。
- *
- * 刻意用**鸭子类型**而不是 `instanceof Prisma.PrismaClientKnownRequestError`:
- * Prisma 7 换了生成器(`prisma-client`),生成物导出的错误类名不保证跨版本稳定,
- * 而 `code` 字段是驱动层的稳定契约。这样写不会被一次 Prisma 升级打断。
- */
-function isUniqueViolation(error: unknown): boolean {
-  return hasPrismaCode(error, 'P2002');
-}
-
-/** 判断是否是事务写冲突 / 死锁(Prisma 的 P2034),Serializable 下可能遇到。 */
-function isSerializationFailure(error: unknown): boolean {
-  return hasPrismaCode(error, 'P2034');
-}
-
-function hasPrismaCode(error: unknown, code: string): boolean {
-  if (typeof error !== 'object' || error === null) return false;
-  return (error as { code?: unknown }).code === code;
 }

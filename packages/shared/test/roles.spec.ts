@@ -79,6 +79,8 @@ const MATRIX: ReadonlyArray<readonly [Capability, readonly [boolean, boolean, bo
     ['page.edit', [false, false, true, true]],
     ['page.delete', [false, false, true, true]],
     ['page.restore', [false, false, true, true]],
+    // 彻底删除是唯一不可逆的能力,门槛刻意比软删除高一级
+    ['page.purge', [false, false, false, true]],
     ['page.permission.update', [false, false, false, true]],
     ['space.member.manage', [false, false, false, true]],
     ['audit.view', [false, false, false, true]],

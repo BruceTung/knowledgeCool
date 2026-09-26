@@ -6,9 +6,11 @@ import { isUnauthorized, useMe, useSetupState } from './features/auth/queries';
 import { AppLayout } from './routes/AppLayout';
 import { LoginPage } from './routes/LoginPage';
 import { MembersPage } from './routes/MembersPage';
+import { PageDetailPage } from './routes/PageDetailPage';
 import { SetupPage } from './routes/SetupPage';
 import { SpaceOverviewPage } from './routes/SpaceOverviewPage';
 import { SpacesHome } from './routes/SpacesHome';
+import { TrashPage } from './routes/TrashPage';
 
 /**
  * 路由表(DESIGN.md §7.2)。
@@ -35,6 +37,8 @@ export function App() {
         <Route path="/" element={<Navigate to="/spaces" replace />} />
         <Route path="/spaces" element={<SpacesHome />} />
         <Route path="/s/:spaceId" element={<SpaceOverviewPage />} />
+        <Route path="/s/:spaceId/p/:pageId" element={<PageDetailPage />} />
+        <Route path="/s/:spaceId/trash" element={<TrashPage />} />
         <Route path="/s/:spaceId/members" element={<MembersPage />} />
         <Route path="*" element={<NotFound />} />
       </Route>

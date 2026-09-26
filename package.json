@@ -21,7 +21,8 @@
     "db:generate": "pnpm --filter @knowledgecool/api run db:generate",
     "db:migrate": "pnpm --filter @knowledgecool/api run db:migrate",
     "db:deploy": "pnpm --filter @knowledgecool/api run db:deploy",
-    "db:validate": "pnpm --filter @knowledgecool/api run db:validate"
+    "db:validate": "pnpm --filter @knowledgecool/api run db:validate",
+    "seed:dev": "pnpm --filter @knowledgecool/api run seed:dev"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

@@ -61,9 +61,9 @@ export function SpaceOverviewPage() {
             </Link>
 
             <div className="rounded-xl border border-dashed border-slate-200 p-5">
-              <div className="text-sm font-medium text-slate-400">页面树与编辑器</div>
+              <div className="text-sm font-medium text-slate-400">正文编辑器</div>
               <div className="mt-0.5 text-xs text-slate-400">
-                M3 落地。届时这里会是知识库的主工作面。
+                M4 落地。届时点开页面就能在左侧那棵树旁边直接写正文。
               </div>
             </div>
           </div>

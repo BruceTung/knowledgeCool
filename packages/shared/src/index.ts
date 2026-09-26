@@ -18,3 +18,4 @@ export * from './dto.js';
 export * from './permission.js';
 export * from './auth.js';
 export * from './space.js';
+export * from './page.js';

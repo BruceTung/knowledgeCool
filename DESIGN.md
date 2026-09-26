@@ -470,6 +470,7 @@ export async function effectiveRole(
 | 创建 / 编辑页面 | ✗ | ✗ | ✓ | ✓ |
 | 删除页面(软) | ✗ | ✗ | ✓ | ✓ |
 | 从回收站恢复 | ✗ | ✗ | ✓ | ✓ |
+| **彻底删除**(不可逆) | ✗ | ✗ | ✗ | ✓ |
 | 修改页面权限 | ✗ | ✗ | ✗ | ✓ |
 | 邀请 / 移除成员 | ✗ | ✗ | ✗ | ✓ |
 | 查看审计日志 | ✗ | ✗ | ✗ | ✓ |
@@ -559,9 +560,9 @@ v1.1~v1.3 只写了「HttpOnly Cookie 承载会话」这个**载体**,没定义�
 | PATCH | `/comments/:id` | 作者 / admin | 标记已解决、重新打开、编辑正文 |
 | DELETE | `/comments/:id` | 作者 / admin | 删除评论 |
 | GET | `/search?q=` | 登录 | 模糊检索,**结果按权限过滤后返回** |
-| GET | `/trash` | 登录 | 回收站列表 |
-| POST | `/pages/:id/restore` | editor | 恢复(含子页面) |
-| DELETE | `/pages/:id/purge` | admin | 彻底删除 |
+| GET | `/spaces/:id/trash` | viewer | 空间回收站,只列被删子树的根(v1.6 由 `/trash` 调整而来) |
+| POST | `/pages/:id/restore` | editor | 恢复(含整棵子树;原父不在树上时挂回空间根下) |
+| DELETE | `/pages/:id/purge` | admin | 彻底删除(不可逆,且只允许作用于回收站里的页面) |
 | GET | `/audit-logs` | admin | 审计日志 |
 
 **阶段二占位(不实现)**
@@ -650,6 +651,24 @@ POST /pages/:id/move  { newParentId, newPosition }
 
 第 5 步是绝对重点。只改自己的路径,所有子孙的路径都会失效,权限判定会跟着出错,而且**不会立刻报错** —— 这是最危险的一类 bug。
 
+**实现要点(v1.6 补)**
+
+- 递归重建用**一条 UPDATE** 完成,不逐行改:
+  `SET materialized_path = <新前缀> || substr(materialized_path, <旧前缀长度> + 1)`
+  自身(整串 = 旧前缀)截出来是空串,恰好得到新路径;子孙则保留下半段相对路径。
+- 防环用**路径前缀**判定(`目标路径.startsWith(自身路径 + '/')`),不递归查子孙 ——
+  更便宜,而且不可能漏。**前缀末尾的斜杠不能省**,否则 `/p-1` 会被误判为 `/p-10` 的祖先。
+- ⚠️ **必须写 `substr(x, $n::int)`,不能写 `substring(x from $n)`**:
+  后者在参数类型为 `unknown` 时(驱动层就是这么发的)会被 PostgreSQL 解析成
+  **POSIX 正则**那一支并**静默返回 NULL** —— 开工实测踩过。
+  若 `materialized_path` 可空,这会把整棵子树的路径悄悄清空而不报任何错。
+- 「数一数再写」的检查放在 **Serializable** 事务里(同 §6.1 的会话机制与 §5.5 的缓存策略):
+  并发下两个移动可能互相踩。
+- 软删除**只标记 `deleted_at IS NULL` 的行**:子树里可能已经有早先单独删掉的页面,
+  再盖一次新时间戳既无意义,也会让返回的 `removedCount` 虚高。
+- 彻底删除必须**从叶子往根删**(按 depth 逐层):`pages.parent_id` 是 `onDelete: Restrict`,
+  而 `DELETE` 不支持 `ORDER BY` —— 外键检查是即时触发的,处理到父行时子行还在,直接撞约束。
+
 ### 8.2 软删除与恢复
 
 ```
@@ -731,11 +750,21 @@ POST /pages/:id/comments  { body, parentId? }
 
 ### M3 · 页面树(5 天)
 
-- [ ] pages 表、物化路径与 depth 维护逻辑
-- [ ] 页面树 CRUD + `move`(含递归重建路径)+ 防环校验
-- [ ] 软删除 / 回收站 / 恢复(子树级联)
-- [ ] 前端页面树组件:展开折叠、新建、删除、**拖拽排序(三区命中)**
+- [x] pages 表、物化路径与 depth 维护逻辑
+- [x] 页面树 CRUD + `move`(含递归重建路径)+ 防环校验
+- [x] 软删除 / 回收站 / 恢复(子树级联;原父不在树上时挂回根)
+- [x] 前端页面树组件:展开折叠、新建、重命名、删除、**拖拽排序(三区命中)**
 - **验收**:把一棵三层子树拖到另一个分支下,查库确认所有子孙的路径都已更新
+  —— **已达成(2026-09-26)**。实测刻意分两段:
+  ① **接口层 55 项断言全通过**,且覆盖失败路径:防环 400、乐观锁 409、
+     只读成员建/删/移/彻底删全部 403、畸形 id 400、彻底删除必须先软删除 400。
+  ② **直接查库 11 项断言全通过** —— 把 `X ─ Y ─ {Y1,Y2}` 里的 Y 移到另一个根 W 下之后,
+     库里 `Y / Y1 / Y2` 三行的 `materialized_path` 与 `depth` 全部重建,
+     而未移动的 X 与 Z 一个字都没变。这正是「只改自己那条路径」写错时会失败的地方。
+  单测:api 139 / shared 60 / web 27。
+  前端四个页面(空间概览、页面树、页面详情、回收站)已用无头浏览器实渲染确认。
+- **本阶段的一处实测坑**(已写进 §8.1):`substring(x from $n)` 在参数类型 unknown 时
+  会走 PostgreSQL 的 POSIX 正则分支并**静默返回 NULL**,导致整棵子树的路径被清空而不报错。
 
 ### M4 · 正文与检索(6 天)
 
@@ -835,3 +864,4 @@ POST /pages/:id/comments  { body, parentId? }
 | 2026-09-26 | v1.3 | M1 完成并**实测验收通过**(装上 Docker Desktop 后补跑):`docker compose down -v` 清空数据卷 → `up -d` → 6.5 秒四容器就绪;经 Nginx 反代 `/api/v1/health` 返回 200、`/api/v1/health/ready` 报 database 与 redis 均 up;全新建库迁移自动执行,扩展与三个手写索引均就位。同步修正两处实现缺陷:①`pnpm-lock.yaml` 与 package.json 的 typescript 版本不一致(`--frozen-lockfile` 会失败,影响任何全新克隆与 CI);②api 镜像原用 `pnpm exec` 调 prisma,导致每次容器启动都去外网下载 pnpm 并 relink 依赖(启动 39s+ 且耦合外网),改为直调 `./node_modules/.bin/prisma` 后降到 6.5s。§9 的 M1 任务项已勾选完成。 |
 | 2026-09-26 | v1.4 | ①**§6.1.1 新增**:定死会话机制 —— 不透明会话 id + PG `sessions` 表(库里只存 token 的 SHA-256),并说明为何不用 JWT(可吊销 / 符合 §3.2「Redis 不作为唯一数据源」/ `SESSION_SECRET` 留给阶段二签短期 JWT);同时给出与 §3.1「同一套 JWT」的衔接路径与 `SESSION_COOKIE_SECURE` 的运维注意。②**§4.3 补充**:实测发现三个"手写索引"中有两个可以表达进 schema(`pages_path_idx` 用 `ops: raw("text_pattern_ops")`、`page_contents_trgm_idx` 用 `type: Gin` + `ops: raw("gin_trgm_ops")`)—— 这一点很要紧,因为 schema 里没声明的索引会被 `migrate dev` 生成 `DROP INDEX` 删掉,而删掉三元组索引会让中文检索**静默**退化成全表扫描。③**§6.2 新增接口** `GET /auth/setup-state`(公开):§7.2 的 `/setup` 路由需要它才能判断该显示引导页还是登录页。④**M2 进度**:认证后端已完成并端到端实测(初始化 / 登录 / 登出 / 守卫 / 会话吊销),另新增 72 字节密码上限校验以规避 bcrypt 静默截断。 |
 | 2026-09-26 | v1.5 | ①**§5.3 新增**「`deny` 与 `role='none'` 的分工」小节 —— 两者语义不同且**都必要**(deny 是绝对否决、`role='none'` 可被更具体的层推翻),并定死 UI 约定:「拒绝访问」写 `deny=true`,原型的对应交互同步修改。②**§9 的 M2 全部勾选完成**并补齐实测口径(41 项端到端断言 + 各包单测数)。③**修复死字段**:`users.last_login_at` 此前 schema 有、全代码库无写入,现于登录与初始化时写入。④**去重**:`toSpaceRole` 由 auth / space 两处私有副本上提到 `packages/shared/src/roles.ts`。⑤**修复前端请求封装的 header 覆盖 bug**:`apiFetch` 原先把 `...init` 展开在 `headers` 之后,导致调用方一旦传 headers,`Accept: application/json` 被整块顶掉。⑥修正 `packages/shared/src/index.ts` 的模块制式注释 —— 它是 **ESM**(`"type": "module"`),原注释误写为「编译为 CommonJS」。 |
+| 2026-09-26 | v1.6 | ①**§9 的 M3 全部勾选完成**,并补齐两段实测口径(接口层 55 项 + 直接查库 11 项)。②**§8.1 补「实现要点」**:一条 UPDATE 递归重建路径的写法、用路径前缀做防环(以及末尾斜杠不能省的原因)、`substring(x from $n)` 的**静默 NULL 陷阱**(必须改写成 `substr(x, $n::int)`)、软删除只标记未删行(否则 `removedCount` 虚高)、彻底删除必须按 depth 从叶子往根删(`onDelete: Restrict` + `DELETE` 不支持 `ORDER BY`)。③**§5.4 矩阵新增**「彻底删除(不可逆)」一行(admin 起,门槛刻意比软删除高一级),`page.purge` 同步进 `CAPABILITIES`。④**§6.2 接口调整**:`GET /trash` → `GET /spaces/:id/trash`(回收站天然以空间为界,做成全局列表反而要额外处理跨空间权限)。 |

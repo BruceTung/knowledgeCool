@@ -1,21 +1,45 @@
-import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 
 import { avatarClass, Button } from '../components/ui';
 import { useLogout, useMe } from '../features/auth/queries';
+import { PageTreePanel } from '../features/pages/PageTreePanel';
+import { usePageTree } from '../features/pages/queries';
 import { useSpaces } from '../features/spaces/queries';
 
 /**
- * 应用外壳:顶栏 + 左侧空间栏 + 主区域。
+ * 从 URL 里取出当前空间与当前页面。
  *
- * 这里只到「空间」这一层 —— M3 会在同一个左栏里挂上页面树,
- * 所以布局骨架现在就要立好,免得那时再重排一次。
+ * 用正则而不是 `useMatch`:布局路由位于子路由之上,拿不到子路由的 params,
+ * 而路径形状是固定的、可控的。正则在这里更直观,也不会因为路由嵌套层级
+ * 调整而悄悄失配。
+ */
+export function idsFromPath(pathname: string): { spaceId?: string; pageId?: string } {
+  const page = /^\/s\/([0-9a-fA-F-]{36})\/p\/([0-9a-fA-F-]{36})/.exec(pathname);
+  if (page?.[1] !== undefined) {
+    return { spaceId: page[1], ...(page[2] === undefined ? {} : { pageId: page[2] }) };
+  }
+  const space = /^\/s\/([0-9a-fA-F-]{36})/.exec(pathname);
+  if (space?.[1] !== undefined) return { spaceId: space[1] };
+  return {};
+}
+
+/**
+ * 应用外壳:顶栏 + 空间栏 + 页面树 + 主区域(DESIGN.md §7.2)。
+ *
+ * 页面树只在「已经选中某个空间」时出现 —— 在 `/spaces` 这类全局页面上
+ * 显示一棵不属于任何空间的树是没有意义的。
+ *
+ * M4 会把主区域换成编辑器,布局本身不再动。
  */
 export function AppLayout() {
   const me = useMe();
   const spaces = useSpaces();
   const logout = useLogout();
   const navigate = useNavigate();
+  const { pathname } = useLocation();
 
+  const { spaceId, pageId } = idsFromPath(pathname);
+  const tree = usePageTree(spaceId);
   const user = me.data?.user;
 
   return (
@@ -63,48 +87,57 @@ export function AppLayout() {
       </header>
 
       <div className="flex min-h-0 flex-1">
-        <aside className="flex w-60 flex-none flex-col gap-1 overflow-auto border-r border-slate-200 bg-slate-50 p-3">
-          <div className="mb-1 px-2 text-[11px] font-medium tracking-wide text-slate-400">
-            我的空间
-          </div>
-
-          {spaces.isPending && <p className="px-2 text-xs text-slate-400">加载中…</p>}
-          {spaces.isError && <p className="px-2 text-xs text-red-600">空间列表加载失败</p>}
-          {spaces.data?.length === 0 && (
-            <p className="px-2 text-xs text-slate-400">还没有空间,去「全部空间」建一个</p>
-          )}
-
-          {spaces.data?.map((space) => (
-            <NavLink
-              key={space.id}
-              to={`/s/${space.id}`}
-              className={({ isActive }) =>
-                `flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors ${
-                  isActive ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:bg-white/70'
-                }`
-              }
-            >
-              <span
-                className={`flex h-5 w-5 flex-none items-center justify-center rounded text-[11px] ring-1 ${avatarClass(space.color)}`}
-              >
-                {space.letter}
-              </span>
-              <span className="min-w-0 flex-1 truncate">{space.name}</span>
-              <span className="flex-none text-[11px] text-slate-400">{space.memberCount}</span>
-            </NavLink>
-          ))}
-
+        {/* 空间栏只放标识字,名称走 title 提示 —— 横向空间留给页面树 */}
+        <nav className="flex w-14 flex-none flex-col items-center gap-1 border-r border-slate-200 bg-slate-50 py-2">
           <NavLink
             to="/spaces"
+            title="全部空间"
             className={({ isActive }) =>
-              `mt-1 rounded-md px-2 py-1.5 text-xs transition-colors ${
-                isActive ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:bg-white/70'
+              `flex h-8 w-8 items-center justify-center rounded-lg text-sm ${
+                isActive ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-400 hover:bg-white/70'
               }`
             }
           >
-            全部空间 →
+            ⊞
           </NavLink>
-        </aside>
+
+          <div className="my-1 h-px w-6 flex-none bg-slate-200" />
+
+          <div className="flex w-full flex-col items-center gap-1 overflow-auto">
+            {spaces.data?.map((space) => (
+              <Link
+                key={space.id}
+                to={`/s/${space.id}`}
+                title={`${space.name} · ${String(space.memberCount)} 位成员`}
+                className="flex-none"
+              >
+                <span
+                  className={`flex h-8 w-8 items-center justify-center rounded-lg text-sm ring-1 ${
+                    space.id === spaceId ? 'shadow-sm ring-slate-300' : ''
+                  } ${avatarClass(space.color)}`}
+                >
+                  {space.letter}
+                </span>
+              </Link>
+            ))}
+          </div>
+        </nav>
+
+        {spaceId !== undefined &&
+          (tree.data !== undefined ? (
+            <PageTreePanel
+              spaceId={spaceId}
+              nodes={tree.data.nodes}
+              role={tree.data.role}
+              activePageId={pageId}
+            />
+          ) : (
+            <div className="flex h-full w-72 flex-none items-center justify-center border-r border-slate-200 bg-slate-50">
+              <span className="text-xs text-slate-400">
+                {tree.isError ? '页面树加载失败' : '加载中…'}
+              </span>
+            </div>
+          ))}
 
         <main className="min-w-0 flex-1 overflow-auto bg-white">
           <Outlet />
