@@ -41,8 +41,11 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
-RUN corepack enable \
-  && mkdir -p /data/uploads
+# 运行阶段**不装 corepack / pnpm**:启动路径上不需要包管理器。
+# 曾经这里写了 `pnpm exec prisma migrate deploy`,后果是每次容器启动都会
+# 让 corepack 去 registry.npmjs.org 下载 pnpm,再重新校验一遍依赖 ——
+# 既是几十秒的启动延迟,也让"启动"这个动作依赖外网可达。
+RUN mkdir -p /data/uploads
 
 # pnpm 的 node_modules 内部是相对符号链接(→ ../../node_modules/.pnpm/...),
 # 因此根 node_modules 与各包的 node_modules 必须**保持相同相对位置**一起拷贝。
@@ -63,4 +66,5 @@ EXPOSE 3000
 # 先应用迁移再启动。
 # migrate deploy 只跑未应用的迁移,幂等;容器重启不会重复执行。
 # 注意:不在这里用 migrate dev —— 它需要影子库,生产环境不该有。
-CMD ["sh", "-c", "pnpm exec prisma migrate deploy && node dist/main.js"]
+# 直接调 node_modules/.bin/prisma,不经过 pnpm(见上方 runtime 阶段说明)。
+CMD ["sh", "-c", "./node_modules/.bin/prisma migrate deploy && exec node dist/main.js"]
