@@ -11,22 +11,29 @@
  *   docker compose exec -e KC_API=http://127.0.0.1:3000/api/v1 \
  *     -e KC_ROOT=http://web api node scripts/verify-org.mjs
  *
- * ## 副作用会**自己还原**(v2.4 起)
+ * ## 副作用会**自己还原**(v2.6 起,细节在 v2.7 补全)
  *
  * A 组那段「首次登录改密」不是演给你看的 —— 它**真的**会把 KC003 的密码
  * 从 `123456` 改成 `KC_SEED_PASSWORD`;`login()` 这个辅助函数在遇到
  * "需要先改密"的账号时也会顺手改掉,所以 KC004 同样会被改。
  *
- * ⚠️ 以前这件事**没有任何地方还原**,后果有两条,都真的踩过:
+ * 脚本还会**建节点**(验"新建的边界")、**改所有者**(验"谁能任命组长"),
+ * 并临时把 KC005 标成离职。
+ *
+ * ⚠️ v2.5 及以前,这些改动**没有任何地方还原**,后果三条,都真的踩过:
  *   1. 跑过一次验收,`DEMO-ACCOUNTS.txt` 里写的 `123456` 就登不上了
  *   2. 下一轮 A 组走"跳过"分支,总项数比满项少几项 —— 看着像回归,其实是
  *      上一轮脚本自己造成的
+ *   3. **v2.6 只还原了密码,没还原节点与所有者** —— 于是服务器上积了 3 个
+ *      「赵敏的临时笔记」,「后端组」的所有者还停在赵敏,而**下一轮运行开始失败**,
+ *      失败的样子是「组长改不动内容了」,查了半天代码才发现是脚本自己的垃圾
  *
- * 现在**最后一组(N)会调超管的「重置密码」接口把 KC003 / KC004 放回去**,
- * 所以本脚本是幂等的:跑几次结果都一样,演示账号也不会被动坏。
- * (N 组本身也顺带验了那个接口 —— 它是"员工忘密码"的唯一正规出口。)
+ * v2.7 起由 `restoreToolState()` 统一收尾:**密码 + 残留节点 + 被改的所有者**。
+ * 它有两个调用点 —— 正常路径在 N 组结尾,异常时在文件末尾的 `finally` 兜底;
+ * 而且**开头还会自检**:发现上一轮的残留就先自动清掉再跑,而不是带着脏前提失败。
  *
- * 若 N 组没跑到(脚本中途抛异常),手工还原:
+ * 所以本脚本是幂等的:跑几次结果都一样。若 N 组没跑到(脚本中途抛异常),
+ * 手工还原:
  *
  *   docker compose exec api node scripts/reset-demo-passwords.mjs
  *
@@ -58,6 +65,14 @@ const INITIAL_PASSWORD = '123456';
 
 let passed = 0;
 let failed = 0;
+
+/**
+ * 收尾还原是否已经在正常路径上跑过。
+ *
+ * 正常跑完时 N 组会调一次 `restoreToolState()`;若脚本中途抛异常,则走文件末尾
+ * `finally` 里的兜底。用这个标记区分,避免"还原两次"(虽然幂等,但输出会重复)。
+ */
+let restoredByScript = false;
 
 function check(label, ok, extra) {
   if (ok) {
@@ -154,6 +169,144 @@ async function login(employeeNo, candidates) {
 async function whoami() {
   const me = await api('GET', '/auth/me');
   return me.body?.user ?? null;
+}
+
+/** 数组兜底:断言里的 `.some(...)` 一旦拿到错误体就会抛异常,把脚本直接打断。 */
+function arr(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+/**
+ * 本脚本**自己创建出来**的节点标题 —— 收尾时按标题清理。
+ *
+ * ⚠️ 为什么需要这个清单:脚本会建节点(验"新建的边界")。正常路径下它们在 I 组被
+ * 彻底删除,但**一旦中途异常,这些节点就永久留在库里**。
+ *
+ * 实测踩到:v2.6 那轮我在服务器上跑了几次,库里积了 3 个「赵敏的临时笔记」,
+ * 于是**下一次运行开始失败** —— 而且失败的样子是"组长改不动内容了"(C 组),
+ * 看起来像功能坏了,其实是脚本自己上一轮留下的垃圾把前提条件弄脏了。
+ *
+ * 按**标题**清理而不是按 id:崩掉那一轮拿到的 id 已经丢了,标题才是稳定的。
+ * 代价——**不要用这些名字给自己建页面**(它们是测试数据专用名)。
+ */
+const TOOL_NODE_TITLES = [
+  '赵敏的临时笔记',
+  '赵敏的临时笔记(组长改过)',
+  '不该建在这里',
+  '赵敏建的部门',
+  'M 组的临时页面',
+];
+
+/**
+ * 把脚本改过的东西放回去。
+ *
+ * **正常路径在 N 组结尾调一次;异常时在 `finally` 里再兜一次**(见文件末尾)。
+ * 这是 v2.6 教训的推广:v2.6 只还原了**密码**,v2.7 补上**节点**与**所有者** ——
+ * 脚本对系统状态做的任何修改,都必须由脚本自己收回。
+ *
+ * 三件事:
+ *   1. 清掉脚本建出来的残留节点
+ *   2. 把「后端组」的所有者放回王思远(F 组会临时改成赵敏)
+ *   3. 把 KC003 / KC004 的密码放回「初始密码 + 待首次登录」
+ *
+ * ⚠️ 第 1 步为什么需要**换几个身份试**:
+ *
+ * 彻底删除要 `canManage`,而它的定义是「自己就是所有者,或祖先链上有我」
+ * (`permission.ts` 的 `canManage`)。超管**不在其列** —— 他不自动拥有内容管理权,
+ * 这是 §5.1 刻意的隔离。
+ *
+ * 所以:
+ *   · 超管**改不了一级之外节点的所有者**(`setOwner` 只有根节点才要求超管,
+ *     其余要 `requireManage`),于是"超管先接管再删"这条路走不通(实测 403)。
+ *   · 但**节点自己的所有者能删自己的**(`self.ownerId === actor.id`)。
+ *   · **祖先所有者也能删** —— 陈默(技术部部长)能删技术部下的任何东西。
+ *
+ * 于是按 陈默 → 赵敏 → 超管 的顺序试。这不是"防御性编程",是**权限模型决定的**:
+ * 脚本建出来的节点分属不同的人与层级,没有一个身份能通吃。
+ */
+async function restoreToolState() {
+  const notes = [];
+
+  try {
+    cookie = '';
+    if (!(await login('KC001', [ADMIN_PASSWORD]))) {
+      notes.push('拿不到超管会话,未能还原');
+      return notes;
+    }
+
+    const users = arr((await api('GET', '/admin/users')).body);
+    const wangId = users.find((u) => u.employeeNo === 'KC003')?.id;
+    const tree = (await api('GET', '/org/tree')).body ?? { nodes: [] };
+
+    // 1) 残留节点。
+    //
+    // 身份顺序:陈默(技术部的祖先所有者,管得住技术部下面的一切)→ 赵敏(她建的
+    // 顶层节点只有她自己删得动)→ 超管(只对他自己建的顶层节点有效)。
+    const identities = [
+      ['KC002', [SEED_PASSWORD, INITIAL_PASSWORD]],
+      ['KC004', [INITIAL_PASSWORD, SEED_PASSWORD]],
+      ['KC001', [ADMIN_PASSWORD]],
+    ];
+
+    for (const title of TOOL_NODE_TITLES) {
+      for (const node of arr(tree.nodes).filter((n) => n.title === title)) {
+        let cleaned = null;
+
+        for (const [employeeNo, passwords] of identities) {
+          cookie = '';
+          if (!(await login(employeeNo, passwords))) continue;
+
+          // 节点可能已经在回收站里(上一次软删成功、彻底删失败),
+          // 这时软删会回 400 —— 但彻底删照样能做,所以不看软删的结果。
+          await api('DELETE', `/nodes/${node.id}`);
+          const hard = await api('DELETE', `/nodes/${node.id}/purge`);
+          if (hard.status < 300) {
+            cleaned = employeeNo;
+            break;
+          }
+        }
+
+        notes.push(
+          cleaned === null
+            ? `清残留节点「${title}」**失败** —— 没有任何身份删得动它,请手工处理`
+            : `清残留节点「${title}」(以 ${cleaned} 身份)`,
+        );
+      }
+    }
+
+    // 2) 「后端组」的所有者。一级部门以外的节点,超管改不动所有者 ——
+    //    所以这里必须由**当前的管理者**来做:技术部的所有者(陈默)在祖先链上。
+    const group = arr(tree.nodes).find((n) => n.title === '后端组');
+    if (group !== undefined && wangId !== undefined) {
+      const detail = await api('GET', `/nodes/${group.id}`);
+      if (detail.body?.ownerId !== wangId) {
+        cookie = '';
+        await login('KC002', [SEED_PASSWORD, INITIAL_PASSWORD]);
+        const fixed = await api('PATCH', `/nodes/${group.id}/owner`, { ownerId: wangId });
+        notes.push(
+          `「后端组」所有者放回王思远${fixed.status === 204 ? '' : `**失败**(${String(fixed.status)})`}`,
+        );
+      } else {
+        notes.push('「后端组」所有者本来就是王思远,无需还原');
+      }
+    }
+
+    // 3) 演示账号密码(超管才能做)
+    cookie = '';
+    await login('KC001', [ADMIN_PASSWORD]);
+    for (const employeeNo of ['KC003', 'KC004']) {
+      const id = users.find((u) => u.employeeNo === employeeNo)?.id;
+      if (id === undefined) continue;
+      const done = await api('POST', `/admin/users/${id}/reset-password`, {});
+      notes.push(
+        `${employeeNo} 密码放回 123456${done.status === 200 ? '' : ` **失败**(${String(done.status)})`}`,
+      );
+    }
+  } catch (error) {
+    notes.push(`还原过程出错:${String(error)}`);
+  }
+
+  return notes;
 }
 
 // ---------------------------------------------------------------- 主流程
@@ -312,9 +465,9 @@ async function main() {
   const admin = await whoami();
   check('超管 KC001 登录成功且 isSuperAdmin 为真', admin?.isSuperAdmin === true);
 
-  const tree = (await api('GET', '/org/tree')).body;
+  let tree = (await api('GET', '/org/tree')).body;
   const nodeId = (title) => tree.nodes.find((node) => node.title === title)?.id;
-  const users = (await api('GET', '/admin/users')).body;
+  let users = (await api('GET', '/admin/users')).body;
   const userId = (employeeNo) => users.find((user) => user.employeeNo === employeeNo)?.id;
 
   for (const title of ['技术部', '市场部', '后端组', 'CRM 项目', '研发规范', '技术方案', '接口规范', '市场部工作方式']) {
@@ -324,6 +477,36 @@ async function main() {
     }
   }
   console.log(`  · 树:${tree.nodes.map((n) => n.title).join('、')}`);
+
+  // ---- 上一次运行的残留?先自愈再继续 ----
+  //
+  // ⚠️ 这一段是 v2.7 补的,补的是一个**很贵的坑**。
+  //
+  // 原来这里只检查"少没少标题",不检查"多没多东西"和"所有者对不对"。
+  // 于是脚本自己上一轮崩掉时留下的测试节点、以及被改过没还原的所有者,
+  // 会让这一轮的断言从一开始就失败 —— 而且失败的样子是
+  // 「组长改不动内容了」,读起来像功能坏了。
+  //
+  // 实测:服务器上积了 3 个「赵敏的临时笔记」,「后端组」的所有者还是赵敏。
+  // 我对着那个输出查了半天代码,最后才发现是脚本自己的垃圾。
+  const groupOwnerId = (await api('GET', `/nodes/${nodeId('后端组')}`)).body?.ownerId;
+  const groupOwnerNo = users.find((u) => u.id === groupOwnerId)?.employeeNo;
+  const residue = tree.nodes.filter((node) => TOOL_NODE_TITLES.includes(node.title));
+  const ownerWrong = groupOwnerNo !== 'KC003';
+
+  if (residue.length > 0 || ownerWrong) {
+    const why = [
+      residue.length > 0 ? `多余测试节点 ${String(residue.length)} 个` : '',
+      ownerWrong ? `「后端组」所有者是 ${String(groupOwnerNo)}` : '',
+    ]
+      .filter((x) => x !== '')
+      .join('、');
+    console.log(`  · 检测到上一次运行的残留(${why})—— 先自动还原`);
+    for (const note of await restoreToolState()) console.log(`    · ${note}`);
+    // 还原之后重新取一遍:下面的 nodeId / userId 闭包引用的是这两个变量
+    tree = (await api('GET', '/org/tree')).body;
+    users = (await api('GET', '/admin/users')).body;
+  }
 
   const adminEditable = new Set(tree.editableNodeIds);
   check(
@@ -422,6 +605,17 @@ async function main() {
     title: '赵敏的临时笔记',
   });
   check('赵敏能在自己所属的「后端组」下新建 → 201', underOwnGroup.status === 201);
+  /*
+    ⚠️ 后面十几处都要用这个 id,所以在这里取一次并**允许为 undefined**。
+
+    原来各处都直接写 `underOwnId` —— 一旦上一步失败(比如库里状态不对),
+    `body` 是错误对象,`.id` 是 undefined,于是请求打到 `/nodes/undefined`,
+    拿到 400,然后后面用 `.body.some(...)` 的断言**抛异常把整个脚本打断**,
+    连最后的收尾还原都跑不到。实测就是这样把演示数据越弄越脏的。
+
+    取一次 + 可选链之后:失败只会让后续断言**报错但继续跑**,收尾照常执行。
+  */
+  const underOwnId = underOwnGroup.body?.id;
 
   const underOtherGroup = await api('POST', '/nodes', {
     parentId: nodeId('CRM 项目'),
@@ -453,7 +647,7 @@ async function main() {
   // 组长能改组员建的页面 —— 「A 建的东西,A 的领导也能改」
   cookie = '';
   await login('KC003', [SEED_PASSWORD, INITIAL_PASSWORD]);
-  const wangEditZhaoPage = await api('PATCH', `/nodes/${underOwnGroup.body.id}`, {
+  const wangEditZhaoPage = await api('PATCH', `/nodes/${underOwnId}`, {
     title: '赵敏的临时笔记(组长改过)',
     version: underOwnGroup.body.version,
   });
@@ -618,24 +812,29 @@ async function main() {
 
   cookie = '';
   await login('KC003', [SEED_PASSWORD, INITIAL_PASSWORD]);
-  const deleted = await api('DELETE', `/nodes/${underOwnGroup.body.id}`);
-  check('组长能软删组员建的页面 → 200 且 removedCount 为 1', deleted.status === 200 && deleted.body.removedCount === 1);
+  const deleted = await api('DELETE', `/nodes/${underOwnId}`);
+  check(
+    '组长能软删组员建的页面 → 200 且 removedCount 为 1',
+    deleted.status === 200 && deleted.body?.removedCount === 1,
+    `${String(deleted.status)} / ${JSON.stringify(deleted.body ?? null).slice(0, 100)}`,
+  );
 
   cookie = '';
   await login('KC005', [SEED_PASSWORD, INITIAL_PASSWORD]);
   const marketTrash = await api('GET', '/trash');
   check(
     '别人的回收站条目不会出现在孙浩这里',
-    !marketTrash.body.some((item) => item.id === underOwnGroup.body.id),
+    !arr(marketTrash.body).some((item) => item.id === underOwnId),
   );
 
   cookie = '';
   await login('KC003', [SEED_PASSWORD, INITIAL_PASSWORD]);
   const ownTrash = await api('GET', '/trash');
-  check('王思远的回收站里能看到它', ownTrash.body.some((item) => item.id === underOwnGroup.body.id));
+  check('王思远的回收站里能看到它', arr(ownTrash.body).some((item) => item.id === underOwnId));
   check(
     '回收站条目带 deletedByName 与 parentAlive',
-    typeof ownTrash.body[0]?.deletedByName === 'string' && typeof ownTrash.body[0]?.parentAlive === 'boolean',
+    typeof arr(ownTrash.body)[0]?.deletedByName === 'string' &&
+      typeof arr(ownTrash.body)[0]?.parentAlive === 'boolean',
   );
 
   // 当前身份是王思远(后端组组长),他对「接口规范」有管理权 ——
@@ -645,21 +844,21 @@ async function main() {
 
   // POST 的默认状态码是 201,不是 200 —— 这里两种都接受,
   // 免得测试因为框架默认值而误报
-  const restored = await api('POST', `/nodes/${underOwnGroup.body.id}/restore`);
+  const restored = await api('POST', `/nodes/${underOwnId}/restore`);
   check('恢复 → 2xx', restored.status === 200 || restored.status === 201, `实际 ${String(restored.status)}`);
-  check('恢复后能重新读到', (await api('GET', `/nodes/${underOwnGroup.body.id}`)).status === 200);
+  check('恢复后能重新读到', (await api('GET', `/nodes/${underOwnId}`)).status === 200);
 
   // 彻底删除:门槛是 canManage(祖先链所有者),被授权者与被删页面自己没有权限。
   // 用陈默(技术部部长)来验 —— 他是这棵树的所有者链顶端。
   cookie = '';
   await login('KC002', [SEED_PASSWORD]);
-  const deletedAgain = await api('DELETE', `/nodes/${underOwnGroup.body.id}`);
+  const deletedAgain = await api('DELETE', `/nodes/${underOwnId}`);
   check('再次软删 → 200', deletedAgain.status === 200);
-  const purged = await api('DELETE', `/nodes/${underOwnGroup.body.id}/purge`);
+  const purged = await api('DELETE', `/nodes/${underOwnId}/purge`);
   check('所有者彻底删除 → 204', purged.status === 204, `实际 ${String(purged.status)}`);
   check(
     '彻底删除后真的读不到了 → 404',
-    (await api('GET', `/nodes/${underOwnGroup.body.id}`)).status === 404,
+    (await api('GET', `/nodes/${underOwnId}`)).status === 404,
   );
 
   // 被授权者不能彻底销毁(能改不代表能销毁)
@@ -787,15 +986,17 @@ async function main() {
 
   const logs = await api('GET', '/audit-logs?limit=200');
   const actions = new Set((logs.body?.items ?? []).map((item) => item.action));
-  check('超管能看到审计记录', logs.status === 200 && logs.body.items.length > 0);
+  check('超管能看到审计记录', logs.status === 200 && arr(logs.body?.items).length > 0);
   for (const action of ['auth.login', 'org.import', 'node.create', 'node.content.update', 'grant.replace', 'node.owner.update', 'comment.create', 'node.delete', 'node.restore']) {
     check(`审计里有 ${action}`, actions.has(action));
   }
 
   cookie = '';
   await login('KC004', [SEED_PASSWORD, INITIAL_PASSWORD]);
+  const zhaoMe = await whoami();
   const zhaoLogs = await api('GET', '/audit-logs?limit=200');
-  const zhaoActions = new Set((zhaoLogs.body?.items ?? []).map((item) => item.action));
+  const zhaoItems = arr(zhaoLogs.body?.items);
+  const zhaoActions = new Set(zhaoItems.map((item) => item.action));
   // 她能看到**自己拥有的节点**上的记录(那是她的地盘,应该能看见);
   // 但看不到别人的动作 —— 这才是要验的性质。
   check(
@@ -803,10 +1004,30 @@ async function main() {
     !zhaoActions.has('org.import'),
     `她看到的动作:${[...zhaoActions].join(', ') || '(无)'}`,
   );
+
+  /*
+    ⚠️ 这一条原来只检查"她的日志里有没有 `grant.replace`" —— 那是**错的**,
+    而且错得很隐蔽(干净的库里恰好没有反例,所以它一直是绿的)。
+
+    审计的可见性规则是「**我是操作者** 或 目标节点在我的管辖范围内」。
+    所以**她自己**成功做过的授权变更,当然应该出现在她的日志里 ——
+    那不是"看到了别人的动作"。
+
+    实测踩到:一次崩溃的运行里「后端组」的所有者被改成了赵敏(脚本没还原),
+    于是她当时**合法地**改了一次授权,审计如实记下。之后这笔历史一直留在
+    最近 200 条里,这一条开始失败 —— 而系统行为完全正确,**错的是断言**。
+
+    要验的性质是「她看不到**别人的**授权变更」,所以按操作者过滤。
+    这同时避免了另一个坑:**别让断言的正确性依赖"历史里恰好没有某条记录"**
+    (v2.5 已经在审计断言上栽过一次,那次是反过来 —— 让脚本自己制造被断言的动作)。
+  */
+  const zhaoGrantByOthers = zhaoItems.filter(
+    (item) => item.action === 'grant.replace' && item.actor?.id !== zhaoMe?.id,
+  );
   check(
-    '赵敏看不到别人节点上的授权变更',
-    !zhaoActions.has('grant.replace'),
-    `她看到的动作:${[...zhaoActions].join(', ') || '(无)'}`,
+    '赵敏看不到**别人的**授权变更(她自己合法做过的除外)',
+    zhaoGrantByOthers.length === 0,
+    `${String(zhaoGrantByOthers.length)} 条,操作者:${zhaoGrantByOthers.map((x) => x.actor?.name ?? '未知').join('、')}`,
   );
 
   // ============================================================
@@ -1215,7 +1436,17 @@ async function main() {
     (kc005Back.body ?? []).find((item) => item.employeeNo === 'KC005')?.status === 'active',
   );
 
-  console.log('  · 演示账号已还原:KC003 / KC004 = 初始密码 123456 + 待首次登录');
+  // ---- 收尾:把脚本动过的**全部**东西放回去 ----
+  //
+  // v2.6 这里只还原了**密码**,结果服务器上还是越跑越脏:脚本建出来的测试节点
+  // 在崩掉的那一轮留在了库里,「后端组」的所有者也被改成了赵敏 ——
+  // 于是下一次运行时 C 组的断言开始失败,看起来像"组长改不动内容了"。
+  //
+  // v2.7 起统一交给 `restoreToolState()`:密码 + 残留节点 + 被改的所有者。
+  // 异常时文件末尾的 `finally` 还会再兜一次。
+  console.log('  · 收尾还原(密码 / 残留节点 / 所有者):');
+  for (const note of await restoreToolState()) console.log(`    · ${note}`);
+  restoredByScript = true;
 
   // ============================================================
   console.log(`\n${'═'.repeat(60)}`);
@@ -1224,4 +1455,21 @@ async function main() {
   console.log('✅ v2.0 权限模型端到端验收全部通过');
 }
 
-await main();
+/*
+  ⚠️ `finally` 里再兜一次还原。
+
+  这一条也是被实测逼出来的:脚本中途抛异常时,**中间那些 `check()` 的结果全丢了**
+  (连汇总都打不出来),而更要紧的是**收尾还原不会跑** —— 于是库里又多一批垃圾,
+  下一轮失败得更厉害,恶性循环。
+
+  这里只兜"还原",不兜"异常本身":异常照旧抛出去(退出码仍是 1),
+  因为"脚本自己崩了"和"某条断言没过"是两件不同的事,不该混成同一个信号。
+*/
+try {
+  await main();
+} finally {
+  if (!restoredByScript) {
+    console.log('\n收尾还原(脚本异常退出,这是兜底):');
+    for (const note of await restoreToolState()) console.log(`  · ${note}`);
+  }
+}

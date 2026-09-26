@@ -15,6 +15,7 @@ import {
 import { useGrantDialog } from '../features/grants/dialog-store';
 import { useMembersDialog } from '../features/members/dialog-store';
 import { useExportMarkdown, useNodeContent, useNodeDetail, useUpdateNode } from '../features/org/queries';
+import { T_BADGE, T_BODY } from '../lib/typography';
 
 type RightTab = 'outline' | 'comments';
 
@@ -43,7 +44,7 @@ export function NodeDetailPage() {
 /** 离职标记。历史记录不抹掉,只在名字旁注明(v2.2)。 */
 function DepartedBadge() {
   return (
-    <span className="rounded bg-amber-50 px-1 text-[10px] text-amber-700 ring-1 ring-amber-200">
+    <span className={`rounded bg-amber-50 px-1 text-amber-700 ring-1 ring-amber-200 ${T_BADGE}`}>
       已离职
     </span>
   );
@@ -133,7 +134,7 @@ function NodeDetailView({ nodeId }: { nodeId: string }) {
     <div className="flex h-full min-h-0">
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex-none border-b border-slate-200 px-6 pt-4 pb-3">
-          <nav className="flex flex-wrap items-center gap-1 text-xs text-slate-400">
+          <nav className={`flex flex-wrap items-center gap-1 text-slate-400 text-xs`}>
             <Link to="/" className="hover:text-slate-600">
               全部
             </Link>
@@ -176,7 +177,7 @@ function NodeDetailView({ nodeId }: { nodeId: string }) {
                 </h1>
               )}
 
-              <div className="flex flex-wrap items-center gap-3 px-2 text-xs text-slate-400">
+              <div className={`flex flex-wrap items-center gap-3 px-2 text-slate-400 text-xs`}>
                 <SaveStateLabel state={saveState} />
                 <span>所有者 {node.ownerName}</span>
                 {node.ownerDeparted && <DepartedBadge />}
@@ -260,7 +261,7 @@ function NodeDetailView({ nodeId }: { nodeId: string }) {
               onClick={() => {
                 setTab(item.key);
               }}
-              className={`flex-1 border-b-2 px-3 py-2 text-xs transition-colors ${
+              className={`flex-1 border-b-2 px-3 py-2.5 transition-colors text-xs ${
                 tab === item.key
                   ? 'border-slate-900 text-slate-900'
                   : 'border-transparent text-slate-500 hover:text-slate-700'
@@ -274,7 +275,7 @@ function NodeDetailView({ nodeId }: { nodeId: string }) {
         {tab === 'outline' ? (
           <div className="min-h-0 flex-1 overflow-auto p-3">
             {outline.length === 0 ? (
-              <p className="py-6 text-center text-xs text-slate-400">
+              <p className={`py-6 text-center text-slate-400 text-xs`}>
                 还没有标题。用工具栏的 H1/H2/H3 建结构,这里会自动出现目录。
               </p>
             ) : (
@@ -286,8 +287,13 @@ function NodeDetailView({ nodeId }: { nodeId: string }) {
                       onClick={() => {
                         scrollToHeading(item.index);
                       }}
-                      className="w-full truncate rounded px-2 py-1 text-left text-xs text-slate-600 hover:bg-white"
-                      style={{ paddingLeft: `${String((item.level - 1) * 12 + 8)}px` }}
+                      /*
+                        目录项是 `T_BODY`(14px),不是 12px —— 它和左栏的树一样,
+                        是**要被读的内容**,不是装饰。缩进也跟着从 12px 提到 14px,
+                        否则 14px 的字配 12px 的缩进,层级差看不出来。
+                      */
+                      className={`w-full truncate rounded px-2 py-1 text-left text-slate-600 hover:bg-white ${T_BODY}`}
+                      style={{ paddingLeft: `${String((item.level - 1) * 14 + 8)}px` }}
                       title={item.text}
                     >
                       {item.text}

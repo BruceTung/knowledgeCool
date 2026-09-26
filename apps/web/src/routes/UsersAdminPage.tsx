@@ -12,6 +12,7 @@ import {
 } from '../features/admin/queries';
 import { describeReset } from '../features/admin/reset-note';
 import { useMe } from '../features/auth/queries';
+import { T_BADGE } from '../lib/typography';
 
 /**
  * 人员管理(超管)。
@@ -280,14 +281,14 @@ export function UsersAdminPage() {
                 */}
                 <span className="flex w-24 flex-none flex-wrap items-center gap-1">
                   {user.isSuperAdmin && (
-                    <span className="rounded bg-violet-50 px-1 text-[10px] text-violet-700 ring-1 ring-violet-200">
+                    <span className={`rounded bg-violet-50 px-1 text-violet-700 ring-1 ring-violet-200 ${T_BADGE}`}>
                       管理员
                     </span>
                   )}
 
                   {user.mustChangePassword && (
                     <span
-                      className="rounded bg-amber-50 px-1 text-[10px] text-amber-700 ring-1 ring-amber-200"
+                      className={`rounded bg-amber-50 px-1 text-amber-700 ring-1 ring-amber-200 ${T_BADGE}`}
                       title="密码还是初始值 123456 —— 在本人改密之前,任何知道他工号的人都能登进这个账号"
                     >
                       初始密码未改

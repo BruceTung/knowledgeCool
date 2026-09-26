@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 
 import { Button, ErrorNote, SelectField, TextField } from '../components/ui';
+import { T_BADGE, T_BODY } from '../lib/typography';
 import { useCreateOrgNode, useOrgScopes, useOrgUsers } from '../features/admin/queries';
 import { OrgImportPanel } from '../features/admin/OrgImportPanel';
 import { useOrgTree } from '../features/org/queries';
@@ -190,11 +191,11 @@ export function OrgAdminPage() {
                 {department.children.length > 0 && (
                   <ul className="ml-4 mt-0.5 space-y-0.5">
                     {department.children.map((child) => (
-                      <li key={child.id} className="flex items-center gap-2 text-xs">
+                      <li key={child.id} className={`flex items-center gap-2 ${T_BODY}`}>
                         {/* ⚠️ 必须按 kind 区分:空间与页面在同一棵树上(§4.1),
                             把文档也标成「组长」会让人以为它是个组 */}
                         <span
-                          className={`flex-none rounded px-1 text-[10px] ${
+                          className={`flex-none rounded px-1 ${T_BADGE} ${
                             child.kind === 'space'
                               ? 'bg-teal-50 text-teal-700'
                               : 'bg-slate-100 text-slate-500'

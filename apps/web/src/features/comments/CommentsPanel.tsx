@@ -8,6 +8,7 @@ import { COMMENT_BODY_MAX_LENGTH, type CommentView } from '@knowledgecool/shared
 import { useState } from 'react';
 
 import { avatarClass, Button, ErrorNote } from '../../components/ui';
+import { T_BADGE, T_BODY } from '../../lib/typography';
 import { useCreateComment, useDeleteComment, useComments, useUpdateComment } from './queries';
 
 export function CommentsPanel({ nodeId }: { nodeId: string }) {
@@ -16,7 +17,7 @@ export function CommentsPanel({ nodeId }: { nodeId: string }) {
   const [draft, setDraft] = useState('');
   const [replyTo, setReplyTo] = useState<string | null>(null);
 
-  if (comments.isPending) return <p className="p-4 text-xs text-slate-400">加载评论…</p>;
+  if (comments.isPending) return <p className={`p-4 text-slate-400 text-xs`}>加载评论…</p>;
   if (comments.isError) {
     return (
       <div className="p-4">
@@ -45,7 +46,7 @@ export function CommentsPanel({ nodeId }: { nodeId: string }) {
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="min-h-0 flex-1 overflow-auto px-4 py-3">
         {data.threads.length === 0 ? (
-          <p className="py-6 text-center text-xs text-slate-400">
+          <p className={`py-6 text-center text-slate-400 text-xs`}>
             还没有评论。评论区用于讨论这一页的内容 —— 阶段一不做行内锚定。
           </p>
         ) : (
@@ -76,7 +77,7 @@ export function CommentsPanel({ nodeId }: { nodeId: string }) {
 
       <div className="flex-none border-t border-slate-200 p-3">
           {replyTo !== null && (
-            <div className="mb-2 flex items-center justify-between text-xs text-slate-500">
+            <div className={`mb-2 flex items-center justify-between text-slate-500 text-xs`}>
               <span>正在回复这条评论</span>
               <button type="button" className="hover:text-slate-700" onClick={() => setReplyTo(null)}>
                 取消
@@ -97,10 +98,10 @@ export function CommentsPanel({ nodeId }: { nodeId: string }) {
             }}
             rows={3}
             placeholder="写下你的评论…(Enter 发送,Shift+Enter 换行)"
-            className="w-full resize-none rounded-md border border-slate-300 px-2 py-1.5 text-xs outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+            className={`w-full resize-none rounded-md border border-slate-300 px-2 py-1.5 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 ${T_BODY}`}
           />
           <div className="mt-2 flex items-center justify-between">
-            <span className="text-[11px] text-slate-400">
+            <span className={`text-slate-400 ${T_BADGE}`}>
               {draft.length}/{COMMENT_BODY_MAX_LENGTH}
             </span>
             <Button disabled={create.isPending || draft.trim() === ''} onClick={submit}>
@@ -135,17 +136,17 @@ function CommentCard({
     <div className="rounded-md border border-slate-200 bg-white p-2.5">
       <div className="flex items-center gap-2">
         <span
-          className={`flex h-5 w-5 flex-none items-center justify-center rounded-full text-[10px] ring-1 ${avatarClass(comment.author.avatarColor)}`}
+          className={`flex h-6 w-6 flex-none items-center justify-center rounded-full ${T_BADGE} ring-1 ${avatarClass(comment.author.avatarColor)}`}
         >
           {Array.from(comment.author.name)[0] ?? '?'}
         </span>
-        <span className="text-xs font-medium text-slate-700">{comment.author.name}</span>
+        <span className={`font-medium text-slate-700 text-xs`}>{comment.author.name}</span>
         {comment.author.departed && (
-          <span className="rounded bg-amber-50 px-1 text-[10px] text-amber-700 ring-1 ring-amber-200">
+          <span className={`rounded bg-amber-50 px-1 text-amber-700 ring-1 ring-amber-200 ${T_BADGE}`}>
             已离职
           </span>
         )}
-        <span className="text-[11px] text-slate-400">
+        <span className={`text-slate-400 ${T_BADGE}`}>
           {new Date(comment.createdAt).toLocaleString('zh-CN')}
         </span>
       </div>
@@ -158,7 +159,7 @@ function CommentCard({
               setDraft(event.target.value.slice(0, COMMENT_BODY_MAX_LENGTH));
             }}
             rows={3}
-            className="w-full resize-none rounded-md border border-slate-300 px-2 py-1.5 text-xs outline-none focus:border-blue-500"
+            className={`w-full resize-none rounded-md border border-slate-300 px-2 py-1.5 outline-none focus:border-blue-500 ${T_BODY}`}
           />
           <div className="mt-1 flex justify-end gap-2">
             <Button
@@ -184,12 +185,12 @@ function CommentCard({
           </div>
         </div>
       ) : (
-        <p className="mt-1.5 whitespace-pre-wrap text-xs leading-relaxed text-slate-700">
+        <p className={`mt-1.5 whitespace-pre-wrap leading-relaxed text-slate-700 ${T_BODY}`}>
           {comment.body}
         </p>
       )}
 
-      <div className="mt-1.5 flex items-center gap-3 text-[11px] text-slate-400">
+      <div className={`mt-2 flex items-center gap-3 text-slate-400 text-xs`}>
         {onReply !== undefined && (
           <button type="button" className="hover:text-slate-600" onClick={onReply}>
             回复

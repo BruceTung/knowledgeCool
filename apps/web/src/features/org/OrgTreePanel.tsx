@@ -15,6 +15,7 @@ import { useMemo, useState, type DragEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { ErrorNote } from '../../components/ui';
+import { T_BADGE, T_BODY } from '../../lib/typography';
 import { useCreateNode, useDeleteNode, useMoveNode, useUpdateNode } from './queries';
 import {
   buildTree,
@@ -58,15 +59,16 @@ function kindBadge(node: OrgTreeNode): string {
  * 行内操作按钮的统一规格。
  *
  * ⚠️ 这几个按钮原来是**各写各的** —— 有的带 `text-[11px]`,有的不写
- * (于是继承父级的 14px),于是一行里 6 个按钮出现两种字号。
+ * (于是继承父级的字号),于是一行里 6 个按钮出现两种字号。
  * 这就是「图标、字体大小、字样都不对称」最直接的来源(用户 2026-09-27 反馈)。
  *
  * 收敛成常量之后,新增按钮不会再各写一份规格。
+ *
+ * v2.6 起尺寸跟着刻度走:字形 12px(`text-xs`)、点击区 24px(`h-6 w-6`)——
+ * 原来字形 13px 挤在 20px 的方框里,鼠标也不好点。
  */
-const ROW_ACTION_CLASS =
-  'flex h-5 w-5 flex-none items-center justify-center rounded text-[13px] text-slate-400 hover:bg-slate-100 hover:text-slate-700';
-const ROW_ACTION_DANGER_CLASS =
-  'flex h-5 w-5 flex-none items-center justify-center rounded text-[13px] text-slate-400 hover:bg-red-50 hover:text-red-600';
+const ROW_ACTION_CLASS = `flex h-6 w-6 flex-none items-center justify-center rounded text-xs text-slate-400 hover:bg-slate-100 hover:text-slate-700`;
+const ROW_ACTION_DANGER_CLASS = `flex h-6 w-6 flex-none items-center justify-center rounded text-xs text-slate-400 hover:bg-red-50 hover:text-red-600`;
 
 export function OrgTreePanel({
   tree,
@@ -221,10 +223,11 @@ export function OrgTreePanel({
     const nodeManageable = manageable.has(node.id) || (isSuperAdmin && node.depth === 0);
 
     const rowClass = [
-      // `h-7` 是为了**统一行高**:原来靠内容自己撑开,带展开箭头的行、
-      // 带角标的行、带重命名输入框的行高度各不相同,一列看过去就是歪的。
-      'group relative flex h-7 items-center gap-1 rounded-md pr-1 text-[13px] transition-colors',
-      isActive ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:bg-white/70',
+      // `h-8`(32px)配内容级字号。原来是 `h-7` 配 13px —— 用户两次反馈左栏
+      // "字体太小",根子就是这里:树行是**要被读的内容**(`T_BODY`),
+      // 却比正文(15px)小了两级、和标签一个尺寸。
+      `group relative flex h-8 items-center gap-1 rounded-md pr-1 ${T_BODY} transition-colors`,
+      isActive ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:bg-white',
       forbidden && dragId !== null ? 'opacity-40' : '',
       target === 'into' ? 'ring-2 ring-blue-400' : '',
     ].join(' ');
@@ -292,7 +295,10 @@ export function OrgTreePanel({
           {node.children.length > 0 ? (
             <button
               type="button"
-              className="flex h-4 w-4 flex-none items-center justify-center text-[9px] text-slate-400 hover:text-slate-700"
+              // ⚠️ 展开箭头原来只有 9px —— 那么小的 ▾/▸ 几乎看不出是箭头。
+              // (这里刻意不写出那个类名:字号扫描器不区分注释,见 `lib/typography.ts`。)
+              // 它是**要能被认出**的控件,不是装饰,所以跟着徽章一档走。
+              className="flex h-5 w-5 flex-none items-center justify-center text-xs text-slate-400 hover:text-slate-700"
               onClick={(event) => {
                 event.stopPropagation();
                 toggleExpanded(node.id);
@@ -302,11 +308,11 @@ export function OrgTreePanel({
               {isExpanded ? '▾' : '▸'}
             </button>
           ) : (
-            <span className="h-4 w-4 flex-none" />
+            <span className="h-5 w-5 flex-none" />
           )}
 
           <span
-            className={`flex h-4 w-4 flex-none items-center justify-center rounded text-[10px] font-medium ${
+            className={`flex h-5 w-5 flex-none items-center justify-center rounded ${T_BADGE} font-medium ${
               node.depth === 0
                 ? 'bg-blue-50 text-blue-700'
                 : node.kind === 'space'
@@ -340,7 +346,7 @@ export function OrgTreePanel({
               // ⚠️ 颜色刻意是**中性灰**,不是琥珀色。
               // 琥珀色等于暗示"有待处理的事",而评论只是评论 ——
               // 这个角标数的是"有几条评论",不是"有几个待解决问题"。
-              className="flex-none rounded-full bg-slate-100 px-1.5 text-[10px] tabular-nums text-slate-500"
+              className={`flex-none rounded-full bg-slate-100 px-1.5 ${T_BADGE} tabular-nums text-slate-500`}
               title={`${String(node.commentCount)} 条评论`}
             >
               {node.commentCount}
@@ -348,13 +354,24 @@ export function OrgTreePanel({
           )}
 
           {node.status !== 'published' && (
-            <span className="flex-none rounded bg-slate-100 px-1 text-[10px] text-slate-500">
+            <span className={`flex-none rounded bg-slate-100 px-1 ${T_BADGE} text-slate-500`}>
               {node.status === 'draft' ? '草稿' : '归档'}
             </span>
           )}
 
           {renamingId !== node.id && (
-            <span className="flex flex-none items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+            /*
+              ⚠️ 这排按钮必须**绝对定位**,不能占布局宽度。
+
+              原来它在流里(`flex-none`),于是 6 个按钮常驻吃掉 130~160px ——
+              而 320px 的行里,扣掉缩进、箭头、徽章之后只剩 215px,标题因此在
+              **没悬停的时候就已经被提前截断**("CRM 项…")。字号从 13px 提到 14px
+              之后更明显。
+
+              改成悬浮覆盖:标题永远拿到完整宽度,按钮只在悬停时盖在右端。
+              底色用 `bg-white`,与行的 `hover:bg-white` 完全一致,所以看不出接缝。
+            */
+            <span className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5 rounded bg-white pl-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
               {canCreateUnder(node) && (
                 <>
                   <button
@@ -447,16 +464,21 @@ export function OrgTreePanel({
   const dragging = dragId !== null;
 
   return (
-    <div className="flex h-full w-72 flex-none flex-col border-r border-slate-200 bg-slate-50">
-      <div className="flex flex-none items-center gap-2 border-b border-slate-200 px-3 py-2">
-        <span className="flex-1 text-xs font-medium text-slate-500">
+    /*
+      宽度从 288px 加到 320px:字号提到 14px 之后,同样的标题会更早被截断,
+      而组织树里的名字(「市场部工作方式」这类)本来就偏长。
+      加宽比缩字更对 —— 被截掉的名字是**信息丢失**,字小了只是**读着费劲**。
+    */
+    <div className="flex h-full w-80 flex-none flex-col border-r border-slate-200 bg-slate-50">
+      <div className="flex flex-none items-center gap-2 border-b border-slate-200 px-3 py-2.5">
+        <span className={`flex-1 font-medium text-slate-500 text-xs`}>
           组织结构 · {countNodes(nodes)}
         </span>
         <button
           type="button"
           title="新建页面(不挂在任何部门下,只有管理员可以)"
           disabled={createNode.isPending}
-          className="rounded px-1.5 py-0.5 text-xs text-slate-500 hover:bg-white hover:text-slate-800 disabled:opacity-50"
+          className={`rounded px-1.5 py-0.5 text-slate-500 hover:bg-white hover:text-slate-800 disabled:opacity-50 text-xs`}
           onClick={() => handleCreate(null, 'document')}
         >
           + 顶层
@@ -466,7 +488,7 @@ export function OrgTreePanel({
       <div className="min-h-0 flex-1 overflow-auto px-2 pb-3">
         {dragging && (
           <div
-            className={`mb-1 rounded-md border border-dashed px-2 py-1 text-center text-[11px] transition-colors ${
+            className={`mb-1 rounded-md border border-dashed px-2 py-1 text-center transition-colors text-xs ${
               rootDropActive
                 ? 'border-blue-400 bg-blue-50 text-blue-700'
                 : 'border-slate-300 text-slate-400'
@@ -492,7 +514,7 @@ export function OrgTreePanel({
         )}
 
         {nodes.length === 0 ? (
-          <p className="px-2 py-6 text-center text-xs leading-relaxed text-slate-400">
+          <p className={`px-2 py-6 text-center leading-relaxed text-slate-400 text-xs`}>
             组织架构还是空的。
             <br />
             管理员可以到「组织架构」里建部门,或用 Excel 一次性导入全员名单。
@@ -505,14 +527,14 @@ export function OrgTreePanel({
       <div className="flex-none space-y-0.5 border-t border-slate-200 p-2">
         <button
           type="button"
-          className="block w-full rounded-md px-2 py-1 text-left text-xs text-slate-500 hover:bg-white hover:text-slate-800"
+          className={`block w-full rounded-md px-2 py-1.5 text-left text-slate-500 hover:bg-white hover:text-slate-800 text-xs`}
           onClick={() => void navigate('/trash')}
         >
           回收站 →
         </button>
         <button
           type="button"
-          className="block w-full rounded-md px-2 py-1 text-left text-xs text-slate-500 hover:bg-white hover:text-slate-800"
+          className={`block w-full rounded-md px-2 py-1.5 text-left text-slate-500 hover:bg-white hover:text-slate-800 text-xs`}
           onClick={() => void navigate('/audit')}
         >
           审计日志 →
@@ -520,7 +542,7 @@ export function OrgTreePanel({
         <ErrorNote
           error={moveNode.error ?? createNode.error ?? updateNode.error ?? deleteNode.error}
         />
-        <p className="px-2 pt-1 text-[11px] leading-relaxed text-slate-400">
+        <p className={`px-2 pt-1 leading-relaxed text-slate-400 text-xs`}>
           可直接拖拽调整层级与顺序:上/下四分之一是"排到前/后",中间是"成为子节点"。
           悬停节点行可见 ⚙(权限 · 谁能改)与 ☰(成员 · 归属在哪)。
         </p>

@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 
 import { ErrorNote } from '../components/ui';
 import { useSearch } from '../features/search/queries';
+import { T_BADGE } from '../lib/typography';
 
 /**
  * 检索结果页(DESIGN.md §7.2 的 `/search`)。
@@ -98,9 +99,9 @@ function ResultRow({ hit }: { hit: SearchHit }) {
       <div className="flex items-center gap-2">
         <span className="text-sm font-medium text-slate-800">{hit.title}</span>
         {hit.matchedIn === 'title' && (
-          <span className="rounded bg-blue-50 px-1 text-[10px] text-blue-700">标题命中</span>
+          <span className={`rounded bg-blue-50 px-1 text-blue-700 ${T_BADGE}`}>标题命中</span>
         )}
-        <span className="ml-auto text-[11px] text-slate-400">
+        <span className={`ml-auto text-slate-400 text-xs`}>
           {new Date(hit.updatedAt).toLocaleDateString('zh-CN')}
         </span>
       </div>

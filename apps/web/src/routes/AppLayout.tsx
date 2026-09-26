@@ -11,6 +11,7 @@ import { OrgTreePanel } from '../features/org/OrgTreePanel';
 import { useOrgTree } from '../features/org/queries';
 import { CommandPalette } from '../features/search/CommandPalette';
 import { hasOpenModal } from '../lib/modal-store';
+import { T_BADGE, T_BODY } from '../lib/typography';
 
 /** 从路径里取出当前节点 id(`/n/:nodeId`)。 */
 function activeNodeIdOf(pathname: string): string | undefined {
@@ -86,10 +87,10 @@ export function AppLayout() {
         <button
           type="button"
           onClick={() => setPaletteOpen(true)}
-          className="flex w-72 items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1 text-left text-xs text-slate-400 hover:border-slate-300 hover:bg-white"
+          className={`flex w-72 items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-left text-slate-400 hover:border-slate-300 hover:bg-white ${T_BADGE}`}
         >
-          <span className="flex-1">搜索全公司内容…</span>
-          <kbd className="rounded border border-slate-200 bg-white px-1 text-[10px] text-slate-400">
+          <span className={`flex-1 ${T_BODY}`}>搜索全公司内容…</span>
+          <kbd className={`rounded border border-slate-200 bg-white px-1 text-slate-400 ${T_BADGE}`}>
             Ctrl K
           </kbd>
         </button>
@@ -110,13 +111,13 @@ export function AppLayout() {
         {user !== undefined && (
           <div className="flex items-center gap-2 border-l border-slate-200 pl-3">
             <div className="text-right leading-tight">
-              <div className="text-xs font-medium text-slate-800">{user.name}</div>
-              <div className="text-[10px] text-slate-400">{user.employeeNo}</div>
+              <div className={`font-medium text-slate-800 text-xs`}>{user.name}</div>
+              <div className={`text-slate-400 ${T_BADGE}`}>{user.employeeNo}</div>
             </div>
             <div className="flex gap-1">
               <button
                 type="button"
-                className="rounded px-1.5 py-1 text-[11px] text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+                className={`rounded px-1.5 py-1 text-slate-500 hover:bg-slate-100 hover:text-slate-800 text-xs`}
                 onClick={() => void navigate('/change-password')}
               >
                 改密
@@ -124,7 +125,7 @@ export function AppLayout() {
               <button
                 type="button"
                 disabled={logout.isPending}
-                className="rounded px-1.5 py-1 text-[11px] text-slate-500 hover:bg-slate-100 hover:text-slate-800 disabled:opacity-50"
+                className={`rounded px-1.5 py-1 text-slate-500 hover:bg-slate-100 hover:text-slate-800 disabled:opacity-50 text-xs`}
                 onClick={() => {
                   logout.mutate(undefined, {
                     onSettled: () => void navigate('/login', { replace: true }),
@@ -149,8 +150,8 @@ export function AppLayout() {
             onOpenMembers={openMembers}
           />
         ) : (
-          <div className="flex h-full w-72 flex-none items-center justify-center border-r border-slate-200 bg-slate-50">
-            <span className="text-xs text-slate-400">
+          <div className="flex h-full w-80 flex-none items-center justify-center border-r border-slate-200 bg-slate-50">
+            <span className={`text-slate-400 text-xs`}>
               {tree.isError ? '组织结构加载失败' : '加载中…'}
             </span>
           </div>

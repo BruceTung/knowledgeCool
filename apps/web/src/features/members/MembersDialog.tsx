@@ -28,6 +28,7 @@ import { useState } from 'react';
 
 import { Button, ErrorNote, SelectField } from '../../components/ui';
 import { useModalOpen } from '../../lib/modal-store';
+import { T_BADGE } from '../../lib/typography';
 import { useAddNodeMember, useMemberCandidates, useNodeMembers, useRemoveNodeMember } from './queries';
 import { describeRemoval } from './removal-note';
 
@@ -38,7 +39,7 @@ function StatusBadge({ status }: { status: NodeMemberView['status'] }) {
       ? 'bg-amber-50 text-amber-700 ring-amber-200'
       : 'bg-slate-100 text-slate-500 ring-slate-200';
   return (
-    <span className={`ml-1 rounded px-1 text-[10px] ring-1 ${tone}`}>
+    <span className={`ml-1 rounded px-1 ring-1 ${tone} ${T_BADGE}`}>
       {USER_STATUS_LABELS[status]}
     </span>
   );
@@ -67,12 +68,12 @@ function MemberRow({
           {member.name}
           <StatusBadge status={member.status} />
           {member.isOwnerHere && (
-            <span className="ml-1 rounded bg-blue-50 px-1 text-[10px] text-blue-700 ring-1 ring-blue-200">
+            <span className={`ml-1 rounded bg-blue-50 px-1 text-blue-700 ring-1 ring-blue-200 ${T_BADGE}`}>
               本节点所有者
             </span>
           )}
           {!member.isOwnerHere && member.isAncestorOwner && (
-            <span className="ml-1 rounded bg-violet-50 px-1 text-[10px] text-violet-700 ring-1 ring-violet-200">
+            <span className={`ml-1 rounded bg-violet-50 px-1 text-violet-700 ring-1 ring-violet-200 ${T_BADGE}`}>
               上级所有者
             </span>
           )}

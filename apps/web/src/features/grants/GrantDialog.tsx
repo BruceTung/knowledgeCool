@@ -16,13 +16,14 @@ import { useState } from 'react';
 
 import { Button, ErrorNote, SelectField } from '../../components/ui';
 import { useModalOpen } from '../../lib/modal-store';
+import { T_BADGE } from '../../lib/typography';
 import { useMe } from '../auth/queries';
 import { useOwnerCandidates, useSetOwner } from '../admin/queries';
 import { useGrantCandidates, useNodeGrants, useSaveGrants } from './queries';
 
 function DepartedBadge() {
   return (
-    <span className="ml-1 rounded bg-amber-50 px-1 text-[10px] text-amber-700 ring-1 ring-amber-200">
+    <span className={`ml-1 rounded bg-amber-50 px-1 text-amber-700 ring-1 ring-amber-200 ${T_BADGE}`}>
       已离职
     </span>
   );

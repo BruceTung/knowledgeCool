@@ -17,6 +17,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { useModalOpen } from '../../lib/modal-store';
+import { T_BADGE } from '../../lib/typography';
 import { useSearch } from './queries';
 
 export function CommandPalette({ onClose }: { onClose: () => void }) {
@@ -116,7 +117,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
                         {hit.title}
                       </span>
                       {hit.matchedIn === 'title' && (
-                        <span className="flex-none rounded bg-blue-50 px-1 text-[10px] text-blue-700">
+                        <span className={`flex-none rounded bg-blue-50 px-1 text-blue-700 ${T_BADGE}`}>
                           标题
                         </span>
                       )}
