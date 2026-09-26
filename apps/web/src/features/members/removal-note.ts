@@ -12,6 +12,10 @@
  *
  * 这两句要是漏了或者写反了,管理员会照着错误的心智模型做人事调整,
  * 而后果要过很久才显形。所以它有测试。
+ *
+ * ⚠️ **这是 `window.confirm` 的纯文本,不是 Markdown。** 别写 `**加粗**` ——
+ * 它会把两个星号原样显示出来(实渲染时一眼就能看到:`**不会**`)。
+ * 要强调就用「」。
  */
 
 import type { NodeMemberView } from '@knowledgecool/shared';
@@ -21,7 +25,7 @@ export function describeRemoval(member: NodeMemberView, nodeTitle: string): stri
 
   if (member.isOwnerHere) {
     notes.push(
-      `他正是「${nodeTitle}」的所有者 —— 移出归属**不会**改变这一点,他仍然能改、能管这里。`,
+      `他正是「${nodeTitle}」的所有者 —— 移出归属不会改变这一点,他仍然能改、能管这里。`,
     );
   } else if (member.isAncestorOwner) {
     notes.push('他是上级所有者 —— 移出归属不影响他对这里的管理权。');

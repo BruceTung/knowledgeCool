@@ -162,9 +162,10 @@ export class OrgController {
 
   // ---------------- 人员(超管) ----------------
 
+  /** 人员列表。**超管专属** —— 名册里含账号状态与登录时间,不是公开信息。 */
   @Get('admin/users')
-  listUsers(@Query('q') q?: string): Promise<OrgUserView[]> {
-    return this.org.listUsers(q);
+  listUsers(@CurrentUser() user: AuthUser, @Query('q') q?: string): Promise<OrgUserView[]> {
+    return this.org.listUsers(user, q);
   }
 
   @Post('admin/users')
@@ -189,6 +190,23 @@ export class OrgController {
     @Body() body: SetAssignmentsDto,
   ): Promise<OrgUserView> {
     return this.org.setAssignments(user, userId, body);
+  }
+
+  /**
+   * 把某人的密码**重置为内置初始密码**,并强制他下次登录先改密。
+   *
+   * 这是「员工忘密码」的正规出口 —— 没有它,只能进容器改数据库。
+   * 副作用是**会立刻吊销他全部会话**,所以界面上必须先确认再点。
+   *
+   * 返回 200 而不是 201:没有新建任何东西,响应体是那个人刷新后的视图。
+   */
+  @Post('admin/users/:userId/reset-password')
+  @HttpCode(HttpStatus.OK)
+  resetPassword(
+    @CurrentUser() user: AuthUser,
+    @Param('userId', ParseUUIDPipe) userId: string,
+  ): Promise<OrgUserView> {
+    return this.org.resetPassword(user, userId);
   }
 
   // ---------------- 组织架构导入(Excel,§8.5) ----------------

@@ -56,8 +56,20 @@ describe('describeRemoval', () => {
       member({ isOwnerHere: true, memberNodeIds: ['n-group', 'n-other'], memberPaths: ['技术部 / 后端组', '技术部'] }),
       '后端组',
     );
-    expect(text).toContain('移出归属**不会**改变这一点');
+    expect(text).toContain('移出归属不会改变这一点');
     expect(text).toContain('他仍然能改、能管这里');
+  });
+
+  /**
+   * ⚠️ 这条是**实渲染验证**时才发现的:`window.confirm` 是纯文本,
+   * 写给 Markdown 看的 `**加粗**` 会把两个星号原样显示出来 ——
+   * 真实弹窗里就是「移出归属**不会**改变这一点」。
+   * 用一个断言把这类符号钉死,否则下次写文案的人还会这么干。
+   */
+  it('是纯文本:不能出现 Markdown 记号(confirm 不会渲染它们)', () => {
+    const text = describeRemoval(member({ isOwnerHere: true }), '后端组');
+    expect(text).not.toContain('**');
+    expect(text).not.toContain('`');
   });
 
   it('他是上级所有者时给出对应提示,且不与所有者那句重复', () => {
@@ -66,7 +78,7 @@ describe('describeRemoval', () => {
       '技术部',
     );
     expect(text).toContain('上级所有者');
-    expect(text).not.toContain('移出归属**不会**改变这一点');
+    expect(text).not.toContain('移出归属不会改变这一点');
   });
 
   it('「本节点所有者」优先于「上级所有者」', () => {

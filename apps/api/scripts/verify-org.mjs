@@ -11,19 +11,24 @@
  *   docker compose exec -e KC_API=http://127.0.0.1:3000/api/v1 \
  *     -e KC_ROOT=http://web api node scripts/verify-org.mjs
  *
- * ⚠️ **它有副作用:会把演示账号的密码改掉。**
+ * ## 副作用会**自己还原**(v2.4 起)
  *
  * A 组那段「首次登录改密」不是演给你看的 —— 它**真的**会把 KC003 的密码
- * 从 `123456` 改成 `KC_SEED_PASSWORD`;而 `login()` 这个辅助函数在遇到
+ * 从 `123456` 改成 `KC_SEED_PASSWORD`;`login()` 这个辅助函数在遇到
  * "需要先改密"的账号时也会顺手改掉,所以 KC004 同样会被改。
  *
- * 后果:**跑完之后 `DEMO-ACCOUNTS.txt` 里写的 `123456` 就登不上了。**
- * 这不是 bug —— 要验就真验,不能只看界面。想还原成文档描述的状态:
+ * ⚠️ 以前这件事**没有任何地方还原**,后果有两条,都真的踩过:
+ *   1. 跑过一次验收,`DEMO-ACCOUNTS.txt` 里写的 `123456` 就登不上了
+ *   2. 下一轮 A 组走"跳过"分支,总项数比满项少几项 —— 看着像回归,其实是
+ *      上一轮脚本自己造成的
+ *
+ * 现在**最后一组(N)会调超管的「重置密码」接口把 KC003 / KC004 放回去**,
+ * 所以本脚本是幂等的:跑几次结果都一样,演示账号也不会被动坏。
+ * (N 组本身也顺带验了那个接口 —— 它是"员工忘密码"的唯一正规出口。)
+ *
+ * 若 N 组没跑到(脚本中途抛异常),手工还原:
  *
  *   docker compose exec api node scripts/reset-demo-passwords.mjs
- *
- * (那两个账号已经改过密时,首登那一段会走"跳过"分支,总数因此比满项少几项 ——
- *  那是跳过,不是失败。)
  *
  * ⚠️ 与上一版脚本的**根本区别**:v1 的 76 项断言里有一批在新模型下是错的反的
  * (「只读成员越权 403」「检索结果按权限过滤」)—— 那些断言的存在本身就说明
@@ -39,6 +44,10 @@
  *      以及"读全员开放、写要 canManage"这条在该接口上是否成立。
  *   M. **回收站保留策略 + 树的按根查询** —— 保留期内的东西不会被清掉;
  *      子树查询里祖先链仍然参与判权(最容易做错的一处,错了不报任何错)。
+ *
+ * v2.5 追加一组:
+ *   N. **重置密码(超管)** —— 判权、不能重置自己、重置会吊销已有会话、
+ *      重置后仍然不下发会话;**并且把 KC003 / KC004 放回演示状态**。
  */
 
 const BASE = process.env.KC_API ?? 'http://127.0.0.1:8080/api/v1';
@@ -1043,6 +1052,170 @@ async function main() {
     marketLeaf.status === 200 &&
       !marketLeaf.body.editableNodeIds.includes(nodeId('接口规范')),
   );
+
+  // ============================================================
+  console.log('\nN. 重置密码(超管),并把演示账号放回原位');
+  // ============================================================
+
+  // 这一段有两个职责,**后者比前者重要**。
+  //
+  // 前者:验「重置密码」这条路 —— 它是"员工忘密码"的唯一正规出口。
+  //       没有它,忘密码只能靠运维进容器改数据库(不留痕迹,也不该是运维干的)。
+  //
+  // 后者:**把演示账号放回文档描述的状态**。A 组为了验首次改密会真的改掉
+  //       KC003 的密码,`login()` 这个辅助函数也会顺手改掉 KC004 ——
+  //       而这件事以前**没有任何地方还原**。
+  //
+  //       后果有两条,都是真的踩过:
+  //         · 跑过一次验收之后,`DEMO-ACCOUNTS.txt` 里写的 123456 就登不上了
+  //           (用户反馈过一句「测试账号没了?」)
+  //         · 下一轮 A 组会走"跳过"分支,总项数从 143 掉到 136 ——
+  //           看着像回归,其实是上一轮脚本自己造成的
+  //
+  //       所以这一段是**幂等性的前提**:跑完它,再跑一次的结果与第一次完全一致。
+
+  cookie = '';
+  await login('KC001', [ADMIN_PASSWORD]);
+  const roster = await api('GET', '/admin/users');
+  check('超管能拿到人员名册', roster.status === 200 && Array.isArray(roster.body));
+
+  const byNo = new Map((roster.body ?? []).map((item) => [item.employeeNo, item]));
+  const kc001 = byNo.get('KC001');
+  const kc003 = byNo.get('KC003');
+  const kc004 = byNo.get('KC004');
+  const kc005 = byNo.get('KC005');
+
+  check(
+    '名册带 mustChangePassword(界面靠它标「初始密码未改」)',
+    typeof kc003?.mustChangePassword === 'boolean',
+    `实际 ${typeof kc003?.mustChangePassword}`,
+  );
+  check(
+    '名册带账号状态(离职的人要能看出来)',
+    typeof kc005?.status === 'string',
+    `实际 ${String(kc005?.status)}`,
+  );
+
+  // ---- 判权:名册与重置都是超管专属 ----
+  //
+  // ⚠️ 名册此前**根本没有判权** —— 任何登录用户都能拿到全公司名册,
+  // 而文档一直写的是超管。是加 `mustChangePassword` 的时候才暴露的:
+  // 那个字段等于一份"谁的密码还是 123456"的目标清单。
+  cookie = '';
+  await login('KC005', [SEED_PASSWORD, INITIAL_PASSWORD]);
+  check('非超管读人员名册 → 403', (await api('GET', '/admin/users')).status === 403);
+  const outsiderReset = await api(
+    'POST',
+    `/admin/users/${String(kc004?.id)}/reset-password`,
+    {},
+  );
+  check(
+    '非超管重置别人的密码 → 403',
+    outsiderReset.status === 403,
+    `实际 ${String(outsiderReset.status)}`,
+  );
+
+  cookie = '';
+  await login('KC001', [ADMIN_PASSWORD]);
+  const selfReset = await api('POST', `/admin/users/${String(kc001?.id)}/reset-password`, {});
+  check(
+    '重置**自己**的密码 → 400(能登进来的人不需要,允许只会制造一次手滑)',
+    selfReset.status === 400,
+    `实际 ${String(selfReset.status)}`,
+  );
+
+  // ---- 重置会**吊销他手上的会话** ----
+  //
+  // 这是这个动作最容易漏掉、也最容易让人误解的一半:管理员说"我把他密码重置了",
+  // 心里想的是"我把他踢出去了"。不删会话行的话,他那个标签页还能继续用。
+  cookie = '';
+  const kc004Alive = await login('KC004', [SEED_PASSWORD, INITIAL_PASSWORD]);
+  const kc004Cookie = cookie;
+  check('KC004 重置前能正常登录(后面要验这个会话会被吊销)', kc004Alive && kc004Cookie !== '');
+  check(
+    '重置前,他带会话能读树',
+    (await api('GET', '/org/tree')).status === 200,
+  );
+
+  cookie = '';
+  await login('KC001', [ADMIN_PASSWORD]);
+  const resetKc004 = await api('POST', `/admin/users/${String(kc004?.id)}/reset-password`, {});
+  check(
+    '超管重置 KC004 的密码 → 200',
+    resetKc004.status === 200,
+    `实际 ${String(resetKc004.status)}`,
+  );
+  check(
+    '响应里 mustChangePassword 已经变成 true',
+    resetKc004.body?.mustChangePassword === true,
+    JSON.stringify(resetKc004.body ?? null).slice(0, 120),
+  );
+
+  cookie = kc004Cookie;
+  check(
+    '★ 重置之后他**原来的会话立刻失效** → 401(不然"重置了"只是句空话)',
+    (await api('GET', '/org/tree')).status === 401,
+  );
+
+  // ---- 重置之后:他还是得走完整条首登链路 ----
+  cookie = '';
+  const afterReset = await api('POST', '/auth/login', {
+    employeeNo: 'KC004',
+    password: INITIAL_PASSWORD,
+  });
+  check(
+    '重置后用初始密码登录 → kind = password-change-required',
+    afterReset.status === 200 && afterReset.body?.kind === 'password-change-required',
+    JSON.stringify(afterReset.body ?? null).slice(0, 120),
+  );
+  check(
+    '★ 重置仍然**不下发会话** —— 重置没有把"首登不建会话"这条规矩绕过去',
+    !issuedSession(afterReset),
+    `Set-Cookie: ${afterReset.setCookie.join(' | ') || '(空)'}`,
+  );
+
+  // ---- 把 KC003 / KC004 放回演示状态 ----
+  cookie = '';
+  await login('KC001', [ADMIN_PASSWORD]);
+  const restoreKc003 = await api('POST', `/admin/users/${String(kc003?.id)}/reset-password`, {});
+  check(
+    '把 KC003 也放回「初始密码 + 待首次登录」',
+    restoreKc003.status === 200 && restoreKc003.body?.mustChangePassword === true,
+    `实际 ${String(restoreKc003.status)}`,
+  );
+
+  cookie = '';
+  const demoCheck = await api('POST', '/auth/login', {
+    employeeNo: 'KC003',
+    password: INITIAL_PASSWORD,
+  });
+  check(
+    '★ 演示账号回到文档描述的状态:KC003 / 123456 能走到「要改密」这一步',
+    demoCheck.status === 200 && demoCheck.body?.kind === 'password-change-required',
+    `实际 ${String(demoCheck.status)} ${JSON.stringify(demoCheck.body ?? null).slice(0, 100)}`,
+  );
+
+  // ---- 重置一个登不进来的人是白做工,要说清原因 ----
+  cookie = '';
+  await login('KC001', [ADMIN_PASSWORD]);
+  await api('PATCH', `/admin/users/${String(kc005?.id)}`, { status: 'departed' });
+  const resetDeparted = await api('POST', `/admin/users/${String(kc005?.id)}/reset-password`, {});
+  check(
+    '重置「已离职」的人 → 400,并且提示要先把状态改回在职',
+    resetDeparted.status === 400 &&
+      typeof resetDeparted.body?.error?.message === 'string' &&
+      resetDeparted.body.error.message.includes('在职'),
+    `${String(resetDeparted.status)} ${JSON.stringify(resetDeparted.body ?? null).slice(0, 120)}`,
+  );
+  // 复原。**必须复原** —— 否则演示数据里会多一个离职的市场部部长。
+  await api('PATCH', `/admin/users/${String(kc005?.id)}`, { status: 'active' });
+  const kc005Back = await api('GET', '/admin/users');
+  check(
+    '复原 KC005 为在职(验收不能留下改动)',
+    (kc005Back.body ?? []).find((item) => item.employeeNo === 'KC005')?.status === 'active',
+  );
+
+  console.log('  · 演示账号已还原:KC003 / KC004 = 初始密码 123456 + 待首次登录');
 
   // ============================================================
   console.log(`\n${'═'.repeat(60)}`);

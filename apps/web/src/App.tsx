@@ -49,8 +49,10 @@ export function App() {
           <Route path="/search" element={<SearchPage />} />
           <Route path="/trash" element={<TrashPage />} />
           <Route path="/audit" element={<AuditPage />} />
-          <Route path="/admin/org" element={<OrgAdminPage />} />
-          <Route path="/admin/users" element={<UsersAdminPage />} />
+          <Route path="/admin" element={<RequireSuperAdmin />}>
+            <Route path="/admin/org" element={<OrgAdminPage />} />
+            <Route path="/admin/users" element={<UsersAdminPage />} />
+          </Route>
           <Route path="*" element={<NotFound />} />
         </Route>
       </Route>
@@ -85,6 +87,34 @@ function RequireAuth() {
           <ErrorNote error={me.error} />
         </span>
       </FullScreenNote>
+    );
+  }
+
+  return <Outlet />;
+}
+
+/**
+ * 超管守卫(**只负责体验,不是安全边界**)。
+ *
+ * 服务端每个接口各自判权(§5.1) —— 一个非管理员把请求直接打过去照样是 403。
+ * 这一层解决的是另一件事:他**手工敲地址**进到 `/admin/users` 时,
+ * 应该看到一句人话,而不是一屏「403 Forbidden」的红色报错。
+ *
+ * 导航里的入口本来就按 `isSuperAdmin` 隐藏了,所以正常路径下走不到这里。
+ */
+function RequireSuperAdmin() {
+  const me = useMe();
+
+  if (me.data !== undefined && !me.data.user.isSuperAdmin) {
+    return (
+      <div className="p-8">
+        <h1 className="text-lg font-medium text-slate-900">需要管理员权限</h1>
+        <p className="mt-1 text-sm leading-relaxed text-slate-500">
+          人员管理与组织架构维护只对管理员开放。
+          <br />
+          如果你只是想看某个部门里有谁,在左侧组织树里悬停该节点、点 ☰。
+        </p>
+      </div>
     );
   }
 

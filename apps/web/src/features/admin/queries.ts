@@ -74,6 +74,25 @@ export function useSetUserAssignments() {
   });
 }
 
+/**
+ * 把某人的密码重置为内置初始密码(超管)。
+ *
+ * 服务端会**顺带吊销他全部会话**,所以这个动作不只是"改个密码" ——
+ * 它会把那个人立刻踢下线,他正在编辑但没保存的内容会丢。
+ * 调用方必须先确认(见 `UsersAdminPage`)。
+ */
+export function useResetUserPassword() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (userId: string) =>
+      apiSend<OrgUserView>('POST', `/admin/users/${userId}/reset-password`, {}),
+    onSuccess: () => {
+      // 列表上那个「初始密码未改」标记要跟着变 —— 它就是这个接口的效果
+      void queryClient.invalidateQueries({ queryKey: ['org'] });
+    },
+  });
+}
+
 /** 建部门(一级,超管)或建组(二级,部长)。 */
 export function useCreateOrgNode() {
   const queryClient = useQueryClient();

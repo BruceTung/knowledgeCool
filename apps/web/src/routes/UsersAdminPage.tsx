@@ -6,9 +6,12 @@ import {
   useCreateUser,
   useOrgScopes,
   useOrgUsers,
+  useResetUserPassword,
   useSetUserAssignments,
   useUpdateUser,
 } from '../features/admin/queries';
+import { describeReset } from '../features/admin/reset-note';
+import { useMe } from '../features/auth/queries';
 
 /**
  * 人员管理(超管)。
@@ -120,9 +123,13 @@ function AssignmentsEditor({ user }: { user: OrgUserView }) {
 
 export function UsersAdminPage() {
   const [query, setQuery] = useState('');
+  const me = useMe();
   const users = useOrgUsers(query);
   const createUser = useCreateUser();
   const updateUser = useUpdateUser();
+  const resetPassword = useResetUserPassword();
+
+  const myId = me.data?.user.id;
 
   const [employeeNo, setEmployeeNo] = useState('');
   const [name, setName] = useState('');
@@ -130,7 +137,13 @@ export function UsersAdminPage() {
   const [renamingId, setRenamingId] = useState<string | null>(null);
 
   return (
-    <div className="mx-auto max-w-4xl space-y-8 px-8 py-8">
+    /*
+      这一页比其他页宽(`max-w-6xl`,别处是 3xl / 4xl)。
+      它是一张**有九列的表**:工号 / 姓名 / 徽章 / 归属 / 上次登录 / 状态 / 重置 / 设置归属。
+      放在 4xl 里这些列会互相挤压并折行,而"挤成一团再换行"正是最难看的排版,
+      所以宁可用更宽的容器 —— 数据密集的管理页本来就该宽。
+    */
+    <div className="mx-auto max-w-6xl space-y-8 px-8 py-8">
       <div>
         <h1 className="text-lg font-semibold text-slate-900">人员管理</h1>
         <p className="mt-1 text-xs leading-relaxed text-slate-500">
@@ -214,7 +227,7 @@ export function UsersAdminPage() {
           {(users.data ?? []).map((user) => (
             <li key={user.id} className="px-4 py-3">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="w-28 flex-none font-mono text-xs text-slate-500">
+                <span className="w-24 flex-none font-mono text-xs text-slate-500">
                   {user.employeeNo}
                 </span>
 
@@ -242,9 +255,15 @@ export function UsersAdminPage() {
                     }}
                   />
                 ) : (
+                  /*
+                    姓名列**定宽**,不参与 flex 分配。
+                    原来它是 `flex-1`,于是每当后面多出一个徽章(管理员 / 初始密码未改),
+                    这一列就被挤窄,同一张表里各行的姓名起始位置全不一样 ——
+                    看起来就是"对不齐"。定宽之后只有归属路径那列伸缩,左侧是齐的。
+                  */
                   <button
                     type="button"
-                    className="min-w-24 flex-1 text-left text-sm text-slate-900 hover:underline"
+                    className="w-32 flex-none text-left text-sm text-slate-900 hover:underline"
                     onClick={() => {
                       setRenamingId(user.id);
                     }}
@@ -254,21 +273,43 @@ export function UsersAdminPage() {
                   </button>
                 )}
 
-                {user.isSuperAdmin && (
-                  <span className="rounded bg-violet-50 px-1 text-[10px] text-violet-700 ring-1 ring-violet-200">
-                    管理员
-                  </span>
-                )}
+                {/*
+                  徽章也放在**定宽槽位**里。
+                  否则"有徽章的行"会把后面所有列整体右推 —— 表现就是
+                  `上次登录` 这一列在每行的位置都不一样,看着像没对齐。
+                */}
+                <span className="flex w-24 flex-none flex-wrap items-center gap-1">
+                  {user.isSuperAdmin && (
+                    <span className="rounded bg-violet-50 px-1 text-[10px] text-violet-700 ring-1 ring-violet-200">
+                      管理员
+                    </span>
+                  )}
 
-                <span className="min-w-0 flex-1 truncate text-[11px] text-slate-400">
+                  {user.mustChangePassword && (
+                    <span
+                      className="rounded bg-amber-50 px-1 text-[10px] text-amber-700 ring-1 ring-amber-200"
+                      title="密码还是初始值 123456 —— 在本人改密之前,任何知道他工号的人都能登进这个账号"
+                    >
+                      初始密码未改
+                    </span>
+                  )}
+                </span>
+
+                <span className="w-52 flex-none truncate text-[11px] text-slate-400">
                   {user.scopePaths.length === 0 ? '未归属任何节点' : user.scopePaths.join('、')}
                 </span>
 
-                <span className="text-[11px] text-slate-400">
+                <span className="w-28 flex-none text-[11px] text-slate-400">
                   {user.lastLoginAt === null
                     ? '从未登录'
                     : `上次登录 ${new Date(user.lastLoginAt).toLocaleDateString('zh-CN')}`}
                 </span>
+
+                {/*
+                  前面几列全是定宽,所以这条"吃掉剩余空间"的空档是必要的:
+                  没有它,右边的状态与按钮就不是贴着右边缘,而是跟着左边一起漂。
+                */}
+                <div className="flex-1" />
 
                 <div className="w-28 flex-none">
                   <SelectField
@@ -287,15 +328,43 @@ export function UsersAdminPage() {
                   </SelectField>
                 </div>
 
-                <Button
-                  variant="secondary"
-                  className="flex-none"
-                  onClick={() => {
-                    setExpandedId(expandedId === user.id ? null : user.id);
-                  }}
-                >
-                  {expandedId === user.id ? '收起归属' : '设置归属'}
-                </Button>
+                {/*
+                  两个操作按钮放在**定宽的槽位**里、右对齐。
+                  不这么做的话,`状态` 下拉的位置会随"这一行有没有重置按钮"左右移动 ——
+                  同一列每行对不齐,而这正是这套界面此前被指出的问题。
+
+                  重置按钮用 `variant="danger"`:它真的会把一个人踢下线,
+                  红色是恰当的提醒;顺便也继承了与「设置归属」完全一致的尺寸
+                  (此前它是手写的小号按钮,同一行里两种按钮高度不同)。
+                */}
+                <div className="flex w-48 flex-none items-center justify-end gap-2">
+                  {user.id !== myId && (
+                    <Button
+                      variant="danger"
+                      disabled={user.status !== 'active' || resetPassword.isPending}
+                      title={
+                        user.status === 'active'
+                          ? '把密码重置为 123456,并强制他下次登录先改密(会踢他下线)'
+                          : '他当前不是「在职」,重置密码也登不进来 —— 先把状态改回在职'
+                      }
+                      onClick={() => {
+                        if (!window.confirm(describeReset(user))) return;
+                        resetPassword.mutate(user.id);
+                      }}
+                    >
+                      重置密码
+                    </Button>
+                  )}
+
+                  <Button
+                    variant="secondary"
+                    onClick={() => {
+                      setExpandedId(expandedId === user.id ? null : user.id);
+                    }}
+                  >
+                    {expandedId === user.id ? '收起归属' : '设置归属'}
+                  </Button>
+                </div>
               </div>
 
               {expandedId === user.id && <AssignmentsEditor user={user} />}
@@ -316,7 +385,18 @@ export function UsersAdminPage() {
         删了他写的文档会变成「佚名」,审计日志也会断链。
       </div>
 
-      <ErrorNote error={updateUser.error} />
+      <div className="rounded-md bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-600">
+        <b>同事忘了密码</b>,用上面每人右侧的「重置密码」:密码会回到
+        <code className="mx-1 rounded bg-white px-1">123456</code>,
+        他下次登录必须先改成自己的。这个动作会<b>立刻吊销他当前的登录</b>,
+        所以别在他正在写文档的时候做。
+        <br />
+        标着「初始密码未改」的人,密码还是 123456 —— 在本人改密之前,
+        <b>任何知道他工号的人都能登进他的账号</b>(§6.1.2)。<b>没有保密能力</b>是这套权限模型的
+        刻意选择:别把薪酬、合同、个人材料当普通文档写进来。
+      </div>
+
+      <ErrorNote error={updateUser.error ?? resetPassword.error} />
     </div>
   );
 }

@@ -34,6 +34,8 @@ export const AUDIT_ACTIONS = [
   'org.import',
   'org.user.create',
   'org.user.update',
+  /** 超管把某人的密码打回初始值 —— 直接改变「谁能登进这个账号」,必须留痕 */
+  'org.user.reset_password',
   'org.assignment.set',
   /** 在某个节点上单独加人 / 移出人(v2.4 节点成员管理入口) */
   'org.member.add',
@@ -64,6 +66,7 @@ export const AUDIT_ACTION_LABELS: Readonly<Record<string, string>> = Object.free
   'org.import': '导入组织架构',
   'org.user.create': '新建人员',
   'org.user.update': '修改人员',
+  'org.user.reset_password': '重置密码',
   'org.assignment.set': '调整组织归属',
   'org.member.add': '节点添加成员',
   'org.member.remove': '节点移出成员',

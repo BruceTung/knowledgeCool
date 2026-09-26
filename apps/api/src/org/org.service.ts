@@ -49,6 +49,7 @@ const USER_VIEW_SELECT = {
   name: true,
   status: true,
   isSuperAdmin: true,
+  mustChangePassword: true,
   lastLoginAt: true,
 } satisfies Prisma.UserSelect;
 
@@ -69,8 +70,21 @@ export class OrgService {
   // 人的列表
   // ================================================================
 
-  /** 人员列表,含每人的组织归属路径。 */
-  async listUsers(query?: string): Promise<OrgUserView[]> {
+  /**
+   * 人员列表,含每人的组织归属路径。
+   *
+   * ⚠️ **超管专属**(v2.4 补上校验)。此前这条接口**根本没有判权** —— 任何
+   * 登录用户都能拿到全公司名册,而文档 §6.2 一直写的是超管。加
+   * `mustChangePassword` 的时候才暴露出来:那个字段等于一份"谁的密码还是
+   * 123456"的**目标清单**,对非管理员绝不该可见。
+   *
+   * 那"这个部门里有谁"要不要公开?要 —— 但它走的是
+   * `GET /nodes/:id/members`(v2.4,读全员开放)。公开的是**组织归属**,
+   * 不是账号状态与登录时间。
+   */
+  async listUsers(operator: Actor, query?: string): Promise<OrgUserView[]> {
+    this.requireSuperAdmin(operator);
+
     const keyword = query?.trim();
 
     const rows = await this.prisma.user.findMany({
@@ -181,6 +195,81 @@ export class OrgService {
       targetType: 'user',
       targetId: userId,
       detail: { name: input.name ?? null, status: input.status ?? null },
+    });
+
+    return (await this.viewOf(userId)) ?? toView(await this.pluckUser(userId), []);
+  }
+
+  /**
+   * 把某人的密码**打回初始值**(超管)。
+   *
+   * 这是系统里唯一一个正规的「我进不去自己的账号」出口。少了它,忘密码的人
+   * 只能靠运维进容器跑脚本直接改库 —— 那不是运维该干的事,而且不留任何痕迹。
+   *
+   * 三件事必须一起做,少一件都会留下说不清的状态:
+   *
+   *   1. 哈希写回 `INITIAL_PASSWORD`(`123456`,§6.1.2 的内置常量)
+   *   2. `mustChangePassword = true` —— 否则等于把密码**永久**设成了 123456
+   *   3. **吊销他全部会话** —— 否则他手上那个标签页还能继续用,
+   *      而管理员以为"他已经进不来了"
+   *
+   * ## 为什么不用管已签发的一次性凭证
+   *
+   * 重置一个还没激活的账号时,他上一步拿到的 `setupToken` 在 10 分钟内仍然可用。
+   * 这**不构成额外暴露**:他能拿旧凭证改密码,也能拿 `123456` 重新登一次换张新的。
+   * 未激活账号的初始密码本来就等同于公开信息 —— 那正是这套强制改密机制
+   * 存在的前提(§6.1.2「已知风险」)。为了它引入"凭证版本号",等于给认证主链路
+   * 加一条谁都不敢动的耦合。
+   *
+   * 真正需要收回的东西(已发出的**会话**)重置是收回了的,见上面第 3 条。
+   */
+  async resetPassword(operator: Actor, userId: string): Promise<OrgUserView> {
+    this.requireSuperAdmin(operator);
+
+    // 能点这个按钮就说明他已经登进来了 —— 能登进来的人不需要重置自己。
+    // 允许它只会制造一次手滑:他会立刻被踢下线,然后要用 123456 登回来、
+    // 还得再改一遍密码。想改自己的密码,走「修改密码」。
+    if (userId === operator.id) {
+      throw AppError.validation(
+        '不能重置自己的密码 —— 你现在是登录状态,要改自己的密码请用「修改密码」',
+      );
+    }
+
+    const existing = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, employeeNo: true, name: true, status: true },
+    });
+    if (existing === null) throw AppError.notFound();
+
+    // 重置一个登不进来的人的密码是白做工,而且会让人以为"重置了怎么还是登不上"。
+    // 直接把真正的原因说出来。
+    if (existing.status !== 'active') {
+      const label = existing.status === 'departed' ? '已离职' : '已停用';
+      throw AppError.validation(
+        `${existing.name}当前是「${label}」,重置密码也登不进来。要先把他改回「在职」`,
+      );
+    }
+
+    const passwordHash = await this.passwords.hash(INITIAL_PASSWORD);
+
+    await this.prisma.$transaction([
+      this.prisma.user.update({
+        where: { id: userId },
+        data: { passwordHash, mustChangePassword: true },
+      }),
+      // 立刻踢下线。「重置密码」在管理员的认知里就是"我把他踢出去了",
+      // 留着会话行会让这句话不成立。
+      this.prisma.session.deleteMany({ where: { userId } }),
+    ]);
+
+    await recordAudit(this.prisma, {
+      actorId: operator.id,
+      action: 'org.user.reset_password',
+      targetType: 'user',
+      targetId: userId,
+      // 只记工号与姓名。密码是内置常量,但**任何密码都不进审计** ——
+      // 审计日志的读者范围比密码的知情范围大得多。
+      detail: { employeeNo: existing.employeeNo, name: existing.name },
     });
 
     return (await this.viewOf(userId)) ?? toView(await this.pluckUser(userId), []);
@@ -786,6 +875,7 @@ function toView(
     isSuperAdmin: row.isSuperAdmin,
     scopePaths: nodes.map((node) => renderPath(node.materializedPath, titles)),
     scopeNodeIds: nodes.map((node) => node.id),
+    mustChangePassword: row.mustChangePassword,
     lastLoginAt: row.lastLoginAt?.toISOString() ?? null,
   };
 }
