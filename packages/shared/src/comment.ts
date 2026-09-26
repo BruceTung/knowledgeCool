@@ -22,27 +22,32 @@ export interface CommentAuthor {
   id: string;
   name: string;
   avatarColor: string;
+  /**
+   * 已离职 —— 用户明确要求"离职人员在他留下的内容上也要标出来"(v2.2)。
+   * 与节点一样:历史记录不抹掉,只在名字旁注明。
+   */
+  departed: boolean;
 }
 
 /** 一条评论。回复嵌在 `replies` 里 —— 阶段一只允许一层嵌套。 */
 export interface CommentView {
   id: string;
-  pageId: string;
+  nodeId: string;
   parentId: string | null;
   author: CommentAuthor;
   body: string;
   status: CommentStatus;
   createdAt: string;
   updatedAt: string;
-  /** 当前用户能否把它标为已解决(自己的、或编辑者以上)。用于前端显示按钮。 */
+  /** 当前用户能否把它标为已解决(自己的、或该节点的任一祖先所有者)。用于前端显示按钮。 */
   canResolve: boolean;
   canDelete: boolean;
   replies: CommentView[];
 }
 
-/** `GET /pages/:id/comments` 的响应体。 */
+/** `GET /nodes/:id/comments` 的响应体。 */
 export interface CommentListResponse {
-  pageId: string;
+  nodeId: string;
   /** 扁平总数(含回复),前端用于页面树角标。 */
   total: number;
   openCount: number;

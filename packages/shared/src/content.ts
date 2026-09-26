@@ -42,21 +42,25 @@ export const EMPTY_DOC: ProseMirrorDoc = Object.freeze({
   content: [],
 });
 
-/** `GET /pages/:id/content` 的响应体。 */
-export interface PageContentResponse {
-  pageId: string;
+/**
+ * `GET /nodes/:id/content` 的响应体。
+ *
+ * v2.0 起由 `PageContentResponse` 改名 —— 空间与页面已合并为节点树(§4.1)。
+ */
+export interface NodeContentResponse {
+  nodeId: string;
   content: ProseMirrorDoc;
   /** 正文最后保存时间。客户端下次保存时原样带回,用于冲突检测。 */
   updatedAt: string;
 }
 
 /**
- * `PUT /pages/:id/content` 的请求体。
+ * `PUT /nodes/:id/content` 的请求体。
  *
  * `baseUpdatedAt` 是**可选的乐观锁**:客户端把「我读到的那一版」的时间戳带回来,
  * 服务端发现库里已经更新了就返回 409。
  *
- * 为什么正文不用 `pages.version`:那个版本号被结构操作(改名/移动)共用,
+ * 为什么正文不用 `nodes.version`:那个版本号被结构操作(改名/移动)共用,
  * 编辑正文会让改名冲突、改名会让正文冲突 —— 两者耦合是错的。
  * 阶段一没有协同,冲突检测只需要"不静默覆盖别人刚写的内容"这一个目标。
  */

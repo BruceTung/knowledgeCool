@@ -1,24 +1,25 @@
-import { Controller, Get, Inject, Query } from '@nestjs/common';
+import { Controller, Get, Query } from '@nestjs/common';
 import { AUDIT_PAGE_SIZE, type AuditLogPage } from '@knowledgecool/shared';
 
 import { CurrentUser } from '../auth/current-user.decorator.js';
-import type { AuthenticatedRequest } from '../auth/authenticated-request.js';
 import { AuditService } from './audit.service.js';
 
 /**
  * 审计日志查询(DESIGN.md §6.2)。
  *
- * 授权在 service 里做(`audit.view` 能力),不在 controller 里 ——
- * 这样"跨空间只给超管"这类规则只有一处实现。
+ * 可见范围的计算在 service 里做(按"我拥有所有权的节点子树"),不在 controller ——
+ * 这样规则只有一处实现。
+ *
+ * v2.0 去掉了 `spaceId` 参数:范围现在由**我拥有哪些节点**决定,
+ * 不由"我选了哪个空间"决定。传空间 id 反而会绕开那条规则。
  */
 @Controller('audit-logs')
 export class AuditController {
-  constructor(@Inject(AuditService) private readonly audit: AuditService) {}
+  constructor(private readonly audit: AuditService) {}
 
   @Get()
-  async list(
-    @CurrentUser() user: AuthenticatedRequest['user'],
-    @Query('spaceId') spaceId?: string,
+  list(
+    @CurrentUser() user: { id: string; isSuperAdmin: boolean },
     @Query('cursor') cursor?: string,
     @Query('limit') limit?: string,
   ): Promise<AuditLogPage> {
@@ -26,7 +27,6 @@ export class AuditController {
     return this.audit.list(
       { id: user.id, isSuperAdmin: user.isSuperAdmin },
       {
-        ...(spaceId === undefined || spaceId === '' ? {} : { spaceId }),
         ...(cursor === undefined || cursor === '' ? {} : { cursor }),
         ...(Number.isFinite(parsed) ? { limit: parsed } : {}),
       },

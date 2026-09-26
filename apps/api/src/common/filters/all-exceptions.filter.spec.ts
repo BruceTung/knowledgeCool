@@ -63,7 +63,7 @@ describe('AllExceptionsFilter', () => {
 
       expect(result.statusCode).toBe(409);
       expect(result.body).toEqual({
-        error: { code: 'VERSION_CONFLICT', message: '该页面已被他人修改,请刷新后重试' },
+        error: { code: 'VERSION_CONFLICT', message: '该内容已被他人修改,请刷新后重试' },
       });
     });
 
@@ -91,7 +91,7 @@ describe('AllExceptionsFilter', () => {
 
       expect(result.statusCode).toBe(404);
       expect(result.body).toEqual({
-        error: { code: 'NOT_FOUND', message: '页面不存在或你没有访问权限' },
+        error: { code: 'NOT_FOUND', message: '内容不存在' },
       });
       // 关键断言:内部路由信息不能出现在响应体里
       expect(JSON.stringify(result.body)).not.toContain('Cannot GET');

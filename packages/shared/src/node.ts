@@ -21,6 +21,15 @@ export function isNodeKind(value: unknown): value is NodeKind {
   return typeof value === 'string' && (NODE_KINDS as readonly string[]).includes(value);
 }
 
+export function isNodeStatus(value: unknown): value is NodeStatus {
+  return typeof value === 'string' && (NODE_STATUSES as readonly string[]).includes(value);
+}
+
+/** 把库里读出的字符串收敛成合法状态,未知值一律按 `published`。 */
+export function toNodeStatus(value: string | null | undefined): NodeStatus {
+  return isNodeStatus(value) ? value : 'published';
+}
+
 /** 树上的一个节点。列表与树都用它 —— 字段刻意保持最小。 */
 export interface NodeSummary {
   id: string;
@@ -96,8 +105,13 @@ export interface UpdateNodeInput {
 export interface MoveNodeInput {
   /** null = 移到一级 */
   newParentId: string | null;
-  /** 排到这个兄弟之前;null / 省略 = 排到最后 */
-  beforeId?: string | null;
+  /**
+   * 排到第几位(0 起)。省略 = 排到最后。
+   *
+   * 用位置而不是"排到某个兄弟之前",是因为前端拖拽时本来就知道自己落在第几格,
+   * 而按 id 找前驱需要前端先算一遍,算错就会**静默落到错误位置**。
+   */
+  newPosition?: number;
   version: number;
 }
 

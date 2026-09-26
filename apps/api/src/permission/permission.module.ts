@@ -1,20 +1,20 @@
 import { Module } from '@nestjs/common';
 
-import { SpaceModule } from '../space/space.module.js';
 import { PermissionController } from './permission.controller.js';
 import { PermissionService } from './permission.service.js';
 
 /**
- * 页面权限模块(DESIGN.md §5)。
+ * 权限模块 —— 权限判定的**唯一入口**。
  *
- * 这个模块是**权限判定的唯一入口**:页面、评论、检索三个模块都从这里拿
- * `PermissionService`,而不是各自写 `if (role === 'viewer')`。
- * §12 把权限判定列为"错了不会立刻报错"的头号高危逻辑,收敛成一处是唯一可行的做法。
+ * 不 import `AuditModule`:审计写入是纯函数(`audit/record.ts`),
+ * 只要手里有 `PrismaService` 就能写。做成可注入服务会形成
+ * `PermissionModule → AuditModule → ...` 的环,而审计**读取侧**确实需要校验权限,
+ * 环一旦形成就很难拆。
  *
- * 审计走纯函数(audit/record.ts),所以这里不需要 import 审计模块。
+ * 同理也不 import 节点模块 —— `PermissionService` 只依赖 `Node` 表本身,
+ * 不依赖 `NodeService` 的任何逻辑。
  */
 @Module({
-  imports: [SpaceModule],
   controllers: [PermissionController],
   providers: [PermissionService],
   exports: [PermissionService],

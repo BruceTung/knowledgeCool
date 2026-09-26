@@ -7,14 +7,19 @@ import { SESSION_COOKIE_NAME } from '../common/constants.js';
 import { AuthService } from './auth.service.js';
 import type { AuthenticatedRequest } from './authenticated-request.js';
 import { CurrentUser } from './current-user.decorator.js';
+import { ChangePasswordDto } from './dto/change-password.dto.js';
 import { LoginDto } from './dto/login.dto.js';
 import { SetupDto } from './dto/setup.dto.js';
+import { AllowDuringPasswordChange } from './password-change-allowed.decorator.js';
 import { Public } from './public.decorator.js';
 
 /**
- * 认证接口(DESIGN.md §6.2)。
+ * 认证接口(DESIGN.md §6.2)。实际路径带全局前缀:`/api/v1/auth/...`
  *
- * 实际路径带全局前缀: /api/v1/auth/...
+ * ⚠️ v2.2 变化:
+ *   - 登录 / 初始化用**工号**,不是邮箱
+ *   - 新增 `POST /change-password`
+ *   - `GET /me` 返回组织归属,不再返回"可见空间列表"
  */
 @Controller('auth')
 export class AuthController {
@@ -25,8 +30,6 @@ export class AuthController {
 
   /**
    * 前端初始化引导页需要知道「该显示创建管理员还是该显示登录」。
-   * 这是 v1.4 新增的公开接口:DESIGN §6.2 原表里没有它,但 §7.2 的 /setup 路由
-   * 需要这个信息才能正确渲染(否则只能靠「试着提交并接住 403」)。
    * 只暴露一个布尔值,不泄露用户数量等细节。
    */
   @Public()
@@ -50,6 +53,12 @@ export class AuthController {
     return issued.user;
   }
 
+  /**
+   * 登录。
+   *
+   * ⚠️ 这里**允许** `mustChangePassword` 的用户登录成功 ——
+   * 否则他连改密页都进不去。拦截发生在后续请求上(见 `AuthGuard`)。
+   */
   @Public()
   @Post('login')
   @HttpCode(HttpStatus.OK)
@@ -63,7 +72,29 @@ export class AuthController {
     return issued.user;
   }
 
+  /**
+   * 改密。
+   *
+   * ⚠️ **必须标注 `@AllowDuringPasswordChange()`** —— 否则守卫会把这条请求
+   * 也一起 403 掉,用户被锁死在改密页里(§6.1.2)。
+   */
+  @Post('change-password')
+  @AllowDuringPasswordChange()
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async changePassword(
+    @CurrentUser() user: AuthUser,
+    @Body() dto: ChangePasswordDto,
+  ): Promise<void> {
+    await this.auth.changePassword(user.id, dto);
+  }
+
+  /**
+   * 登出。
+   *
+   * 同样在白名单里:一个未改密的人应该有权退出,而不是被困在改密页。
+   */
   @Post('logout')
+  @AllowDuringPasswordChange()
   @HttpCode(HttpStatus.NO_CONTENT)
   async logout(
     @Req() request: AuthenticatedRequest,
@@ -92,7 +123,7 @@ export class AuthController {
     return {
       httpOnly: true,
       sameSite: 'lax',
-      // 默认跟随 NODE_ENV=production;TLS 落地(M6)之前走 http 时需显式关掉,
+      // 默认跟随 NODE_ENV=production;走 http 访问时必须显式关掉,
       // 否则浏览器不会回传 Cookie。详见 DESIGN.md §6.1.1 的运维注意。
       secure: this.config.get<boolean>('sessionCookieSecure') ?? false,
       path: '/',

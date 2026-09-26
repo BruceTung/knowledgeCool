@@ -3,29 +3,40 @@
  *
  * 审计日志是**只写不删**的:阶段一不提供任何删除接口,
  * 保留策略(按天分区 / 定期归档)留到规模上来再说。
+ *
+ * ⚠️ v2.0 的动作名整体换了前缀:`space.*` / `page.*` → `org.*` / `node.*`,
+ * `perm.update` → `grant.replace`。并且**删掉了 `superadmin.bypass`** ——
+ * 新模型里没有超管旁路(§4.3),那个动作不会再出现。
  */
 
 /** 会被记录的动作。刻意用字符串常量而不是枚举 —— 日志的取值应该能自由扩展。 */
 export const AUDIT_ACTIONS = [
+  // 认证
   'auth.setup',
   'auth.login',
   'auth.logout',
-  'space.create',
-  'space.member.add',
-  'space.member.update',
-  'space.member.remove',
-  'page.create',
-  'page.update',
-  'page.move',
-  'page.delete',
-  'page.restore',
-  'page.purge',
-  'page.content.update',
-  'perm.update',
+  'auth.password.change',
+  // 节点
+  'node.create',
+  'node.update',
+  'node.move',
+  'node.delete',
+  'node.restore',
+  'node.purge',
+  'node.content.update',
+  /** 任命 / 变更所有者 —— 直接改变"谁能改什么",是最该留痕的一类 */
+  'node.owner.update',
+  // 授权
+  'grant.replace',
+  // 组织架构
+  'org.import',
+  'org.user.create',
+  'org.user.update',
+  'org.assignment.set',
+  // 评论
   'comment.create',
   'comment.update',
   'comment.delete',
-  'superadmin.bypass',
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 
@@ -34,22 +45,23 @@ export const AUDIT_ACTION_LABELS: Readonly<Record<string, string>> = Object.free
   'auth.setup': '初始化管理员',
   'auth.login': '登录',
   'auth.logout': '登出',
-  'space.create': '创建空间',
-  'space.member.add': '添加成员',
-  'space.member.update': '修改成员角色',
-  'space.member.remove': '移除成员',
-  'page.create': '新建页面',
-  'page.update': '修改页面',
-  'page.move': '移动页面',
-  'page.delete': '删除页面(进回收站)',
-  'page.restore': '恢复页面',
-  'page.purge': '彻底删除页面',
-  'page.content.update': '保存正文',
-  'perm.update': '修改页面权限',
+  'auth.password.change': '修改密码',
+  'node.create': '新建节点',
+  'node.update': '修改节点',
+  'node.move': '移动节点',
+  'node.delete': '移入回收站',
+  'node.restore': '从回收站恢复',
+  'node.purge': '彻底删除',
+  'node.content.update': '保存正文',
+  'node.owner.update': '变更所有者',
+  'grant.replace': '调整授权名单',
+  'org.import': '导入组织架构',
+  'org.user.create': '新建人员',
+  'org.user.update': '修改人员',
+  'org.assignment.set': '调整组织归属',
   'comment.create': '发表评论',
   'comment.update': '修改评论',
   'comment.delete': '删除评论',
-  'superadmin.bypass': '超管绕过权限',
 });
 
 /** 一条审计记录。 */
@@ -60,7 +72,7 @@ export interface AuditLogView {
   action: string;
   targetType: string;
   targetId: string;
-  /** 目标的可读名(页面标题 / 空间名),查得到才有。 */
+  /** 目标的可读名(节点标题 / 人名),查得到才有。 */
   targetLabel: string | null;
   detail: Record<string, unknown>;
   ip: string | null;

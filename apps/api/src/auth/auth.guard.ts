@@ -1,18 +1,28 @@
 import { Injectable, type CanActivate, type ExecutionContext } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 
-import { AppError } from '../common/errors/app-error.js';
 import { SESSION_COOKIE_NAME } from '../common/constants.js';
+import { AppError } from '../common/errors/app-error.js';
 import type { AuthenticatedRequest } from './authenticated-request.js';
 import { AuthService } from './auth.service.js';
+import { PASSWORD_CHANGE_ALLOWED_KEY } from './password-change-allowed.decorator.js';
 import { IS_PUBLIC_KEY } from './public.decorator.js';
 
 /**
  * 全局鉴权守卫(默认安全)。
  *
- * 「最小可见」原则(§5.3)在这里的第一道体现:
- * 未登录、会话过期、会话被吊销、账号被停用 —— 一律返回同一个 401,
+ * 未登录、会话过期、会话被吊销、账号被停用或已离职 —— 一律返回同一个 401,
  * 不告诉调用方具体是哪种情况。
+ *
+ * ## ⚠️ 首登强制改密的拦截就在这里
+ *
+ * 这是 v2.2 最容易做错的一处:**只在前端跳到改密页是无效的** ——
+ * 用户手工敲一个别的 URL 就绕过去了。所以拦截必须落在服务端,
+ * 而且必须落在**守卫**上,而不是某个 controller 里:
+ * 守卫覆盖所有路由,将来新增接口不会漏。
+ *
+ * 白名单只有两条(改密、登出),由 `@AllowDuringPasswordChange()` 显式标注。
+ * 没有标注的接口,一律 403 `PASSWORD_CHANGE_REQUIRED`。
  */
 @Injectable()
 export class AuthGuard implements CanActivate {
@@ -42,6 +52,16 @@ export class AuthGuard implements CanActivate {
     const user = await this.auth.resolveUserBySessionToken(token);
     if (user === null) {
       throw AppError.unauthorized();
+    }
+
+    if (user.mustChangePassword) {
+      const allowed = this.reflector.getAllAndOverride<boolean>(PASSWORD_CHANGE_ALLOWED_KEY, [
+        context.getHandler(),
+        context.getClass(),
+      ]);
+      if (allowed !== true) {
+        throw new AppError('PASSWORD_CHANGE_REQUIRED');
+      }
     }
 
     request.user = user;

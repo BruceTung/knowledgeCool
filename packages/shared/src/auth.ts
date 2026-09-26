@@ -20,8 +20,15 @@ export interface AuthUser {
   name: string;
   avatarColor: string;
   isSuperAdmin: boolean;
-  /** 已离职 / 已停用的用户**不能登录**;这两个字段只用于展示(如成员列表) */
+  /** 已离职 / 已停用的用户**不能登录**;这个字段只用于展示(如成员列表) */
   status: 'active' | 'disabled' | 'departed';
+  /**
+   * 是否必须先改密。
+   *
+   * 放在 `AuthUser` 上而不是 `MeResponse` 顶层,是因为**守卫每个请求都要看它**
+   * (`request.user` 就是这个对象)。放在顶层的话,守卫还得为此多查一次库。
+   */
+  mustChangePassword: boolean;
 }
 
 /** 我的组织归属 —— 一条对应一个节点。一人可有多条。 */
@@ -39,14 +46,6 @@ export interface MeResponse {
    * **没有"可见空间列表"了** —— 所有节点对所有登录用户可见(§5.3 规则一)。
    */
   scopes: MyScope[];
-  /**
-   * 是否需要强制改密。
-   *
-   * 为 `true` 时,服务端会拒绝**除改密与登出之外的所有接口**
-   * (403 `PASSWORD_CHANGE_REQUIRED`)。前端据此跳转改密页 ——
-   * 但**那只是体验,安全边界在服务端**。
-   */
-  mustChangePassword: boolean;
 }
 
 /** 登录 / 初始化的请求体。**v2.2 起用工号,不是邮箱。** */

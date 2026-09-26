@@ -1,79 +1,86 @@
 /**
  * 审计日志的**读取**侧(DESIGN.md §6.2 的 `GET /audit-logs`)。
  *
- * 写入侧在 `record.ts` —— 那里解释了为什么写入不做成可注入的服务
- * (会形成模块环)。本服务只负责查询,所以可以放心依赖 SpaceModule 做鉴权。
+ * 写入侧在 `record.ts` —— 那里解释了为什么写入不做成可注入的服务(会形成模块环)。
+ *
+ * ## ⚠️ v2.0 的可见范围变化
+ *
+ * 旧模型按「空间」授权:空间管理员能看该空间的日志。
+ * 新模型没有"空间成员"这个概念了,改成**按节点子树**:
+ *
+ *   - **超管**:全部日志
+ *   - **其他人**:只能看到「**我拥有所有权的节点及其子树内**发生的动作」,
+ *     外加「我自己的操作」
+ *
+ * 这条规则同时覆盖了两种身份:部长(一级节点所有者)能看到整个部门,
+ * 组长(二级节点所有者)只能看到自己那个组。
+ *
+ * 为什么用 `detail->>'nodeId'` 而不只看 `target_id`:评论、授权这类动作的
+ * `target_id` 是评论 id / 用户 id,不是节点 id。写入侧统一在 `detail` 里带了
+ * `nodeId`,读取侧靠它认领 —— 这样就不必给 `audit_logs` 加一个
+ * "每个调用点都要记得填"的列(填漏一条就是一次越权可见)。
  */
 
 import { Injectable } from '@nestjs/common';
 import {
   AUDIT_ACTION_LABELS,
   AUDIT_PAGE_SIZE,
+  type Actor,
   type AuditLogPage,
   type AuditLogView,
 } from '@knowledgecool/shared';
 
-import { AppError } from '../common/errors/app-error.js';
 import { Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { SpaceService } from '../space/space.service.js';
 
-/** 操作者的最小形态。与 SpaceService 的 `Operator` 结构一致。 */
-interface Operator {
-  id: string;
-  isSuperAdmin: boolean;
+/** `$queryRaw` 的返回行。列名与 SQL 里的别名逐字对应。 */
+interface RawAuditRow {
+  id: bigint;
+  action: string;
+  target_type: string;
+  target_id: string;
+  detail: unknown;
+  ip: string | null;
+  created_at: Date;
+  actor_id: string | null;
+  actor_name: string | null;
 }
 
 @Injectable()
 export class AuditService {
-  constructor(
-    private readonly prisma: PrismaService,
-    private readonly spaces: SpaceService,
-  ) {}
+  constructor(private readonly prisma: PrismaService) {}
 
   /**
    * 查询审计日志。
    *
-   * 阶段一**按空间授权**:有空间管理员权限(`audit.view`,admin 起)就能看该空间的日志。
-   * 全局日志(跨空间)只对超管开放 —— 否则一个空间的管理员能看到
-   * 他本不该知道的其他空间的存在(违反 §5.3 最小可见)。
+   * 用 `$queryRaw` 而不是 `findMany`,是因为筛选项里有一个
+   * 「JSON 字段的某个键落在某个 id 集合里」的条件 —— Prisma 的
+   * `where` 能表达 `equals`,但表达不了 `in`,而把几百个 id 拼成几百个
+   * `OR` 条件既难看又慢。
    */
   async list(
-    operator: Operator,
-    options: { spaceId?: string; cursor?: string; limit?: number },
+    operator: Actor,
+    options: { cursor?: string; limit?: number } = {},
   ): Promise<AuditLogPage> {
     const limit = Math.min(Math.max(options.limit ?? AUDIT_PAGE_SIZE, 1), 200);
+    const scopeIds = await this.visibleNodeIds(operator);
+    const cursor = options.cursor ?? null;
 
-    let targetFilter: Prisma.AuditLogWhereInput;
-
-    if (options.spaceId !== undefined) {
-      await this.spaces.requireCapability(operator, options.spaceId, 'audit.view');
-      targetFilter = await this.spaceTargetFilter(options.spaceId);
-    } else {
-      if (!operator.isSuperAdmin) {
-        throw AppError.forbidden('只有超级管理员可以查看跨空间的审计日志');
-      }
-      targetFilter = {};
-    }
-
-    const rows = await this.prisma.auditLog.findMany({
-      where: {
-        ...targetFilter,
-        ...(options.cursor === undefined ? {} : { id: { lt: BigInt(options.cursor) } }),
-      },
-      orderBy: { id: 'desc' },
-      take: limit + 1, // 多取一条用于判断还有没有下一页
-      select: {
-        id: true,
-        action: true,
-        targetType: true,
-        targetId: true,
-        detail: true,
-        ip: true,
-        createdAt: true,
-        actor: { select: { id: true, name: true } },
-      },
-    });
+    const rows = await this.prisma.$queryRaw<RawAuditRow[]>(Prisma.sql`
+      SELECT a.id, a.action, a.target_type, a.target_id, a.detail, a.ip, a.created_at,
+             u.id AS actor_id, u.name AS actor_name
+        FROM audit_logs a
+        LEFT JOIN users u ON u.id = a.actor_id
+       WHERE (
+               ${operator.isSuperAdmin}::boolean
+               OR a.actor_id = ${operator.id}::uuid
+               OR a.target_id = ANY(${scopeIds}::text[])
+               OR a.detail->>'nodeId' = ANY(${scopeIds}::text[])
+             )
+         AND (${cursor}::bigint IS NULL OR a.id < ${cursor}::bigint)
+       ORDER BY a.id DESC
+       LIMIT ${limit + 1}::int
+    `);
 
     const hasMore = rows.length > limit;
     const page = hasMore ? rows.slice(0, limit) : rows;
@@ -82,14 +89,17 @@ export class AuditService {
 
     const items: AuditLogView[] = page.map((row) => ({
       id: row.id.toString(),
-      actor: row.actor,
+      actor:
+        row.actor_id === null
+          ? null
+          : { id: row.actor_id, name: row.actor_name ?? '未知' },
       action: row.action,
-      targetType: row.targetType,
-      targetId: row.targetId,
-      targetLabel: labels.get(`${row.targetType}:${row.targetId}`) ?? null,
+      targetType: row.target_type,
+      targetId: row.target_id,
+      targetLabel: labels.get(`${row.target_type}:${row.target_id}`) ?? null,
       detail: (row.detail ?? {}) as Record<string, unknown>,
       ip: row.ip,
-      createdAt: row.createdAt.toISOString(),
+      createdAt: row.created_at.toISOString(),
     }));
 
     const last = page.at(-1);
@@ -97,70 +107,61 @@ export class AuditService {
   }
 
   /**
-   * 把审计条目限定在一个空间内。
+   * 「我拥有所有权的节点」及其**全部后代**的 id。
    *
-   * 麻烦在于 `audit_logs` 只有 `target_type/target_id`,没有 `space_id` ——
-   * 加一列当然更直接,但那意味着每条写日志的调用点都要负责填对空间,
-   * 填漏一条就是一次越权可见。这里改成按目标反查,把正确性集中在读取侧。
+   * 超管返回空数组 —— 他走 `isSuperAdmin` 分支直接看全部,
+   * 算了也用不上,而全表扫一遍节点在大实例上并不便宜。
+   *
+   * 一次查询搞定:把每个所有者节点的路径前缀展开成 `OR` 条件。
+   * 所有者节点数通常是个位数(一个部长管几个组),所以这个 `OR` 很短。
    */
-  private async spaceTargetFilter(spaceId: string): Promise<Prisma.AuditLogWhereInput> {
-    const [pageIds, memberIds] = await Promise.all([
-      this.prisma.page.findMany({ where: { spaceId }, select: { id: true } }),
-      this.prisma.spaceMember.findMany({ where: { spaceId }, select: { userId: true } }),
-    ]);
+  private async visibleNodeIds(operator: Actor): Promise<string[]> {
+    if (operator.isSuperAdmin) return [];
 
-    return {
-      OR: [
-        { targetType: 'space', targetId: spaceId },
-        ...pageIds.map((row) => ({ targetType: 'page', targetId: row.id })),
-        ...memberIds.map((row) => ({
-          targetType: 'space_member',
-          targetId: `${spaceId}:${row.userId}`,
-        })),
-        // 评论的目标 id 是 comment.id,反查成本高;用 detail.spaceId 认领。
-        // 写入方(recordAudit 的调用点)会带上它。
-        { detail: { path: ['spaceId'], equals: spaceId } },
-        // 登录 / 登出 / 初始化没有空间归属(targetType 是 user,detail 里也没有 spaceId),
-        // 但对安全审计来说「谁登录过」恰恰是最该看的一类。
-        // 这里按**操作者是不是本空间成员**认领 —— 空间管理员能看到自己成员的登录记录,
-        // 看不到别的空间的人。
-        ...(memberIds.length === 0
-          ? []
-          : [
-              {
-                action: { in: ['auth.login', 'auth.logout', 'auth.setup'] },
-                actorId: { in: memberIds.map((row) => row.userId) },
-              },
-            ]),
-      ],
-    };
+    const owned = await this.prisma.node.findMany({
+      where: { ownerId: operator.id },
+      select: { materializedPath: true },
+    });
+    if (owned.length === 0) return [];
+
+    const rows = await this.prisma.node.findMany({
+      where: {
+        OR: owned.flatMap((node) => [
+          { materializedPath: node.materializedPath },
+          // 前缀末尾的斜杠不能省:否则 /p-1 会被当成 /p-10 的祖先
+          { materializedPath: { startsWith: `${node.materializedPath}/` } },
+        ]),
+      },
+      select: { id: true },
+    });
+    return rows.map((row) => row.id);
   }
 
   /** 批量把 target_id 换成人看得懂的名字。一次查询解决,不做 N+1。 */
   private async resolveTargetLabels(
-    rows: readonly { targetType: string; targetId: string }[],
+    rows: readonly { target_type: string; target_id: string }[],
   ): Promise<Map<string, string>> {
-    const pageIds = rows.filter((r) => r.targetType === 'page').map((r) => r.targetId);
-    const spaceIds = rows.filter((r) => r.targetType === 'space').map((r) => r.targetId);
+    const nodeIds = rows.filter((r) => r.target_type === 'node').map((r) => r.target_id);
+    const userIds = rows.filter((r) => r.target_type === 'user').map((r) => r.target_id);
 
-    const [pages, spaces] = await Promise.all([
-      pageIds.length === 0
+    const [nodes, users] = await Promise.all([
+      nodeIds.length === 0
         ? Promise.resolve([])
-        : this.prisma.page.findMany({
-            where: { id: { in: pageIds } },
+        : this.prisma.node.findMany({
+            where: { id: { in: nodeIds } },
             select: { id: true, title: true },
           }),
-      spaceIds.length === 0
+      userIds.length === 0
         ? Promise.resolve([])
-        : this.prisma.space.findMany({
-            where: { id: { in: spaceIds } },
+        : this.prisma.user.findMany({
+            where: { id: { in: userIds } },
             select: { id: true, name: true },
           }),
     ]);
 
     const map = new Map<string, string>();
-    for (const row of pages) map.set(`page:${row.id}`, row.title);
-    for (const row of spaces) map.set(`space:${row.id}`, row.name);
+    for (const row of nodes) map.set(`node:${row.id}`, row.title);
+    for (const row of users) map.set(`user:${row.id}`, row.name);
     return map;
   }
 }

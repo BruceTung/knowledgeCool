@@ -1,15 +1,16 @@
 import { Controller, Get, HttpCode, HttpStatus, Query } from '@nestjs/common';
-import type { AuthUser, SearchResponse } from '@knowledgecool/shared';
+import type { SearchResponse } from '@knowledgecool/shared';
 
-import { CurrentUser } from '../auth/current-user.decorator.js';
 import { SearchService } from './search.service.js';
 
 /**
  * 检索接口(DESIGN.md §6.2)。
  *
- * 只有一条路由,但它是整个产品里**最容易出安全事故**的一条 ——
- * 结果是按权限过滤后返回的,过滤逻辑在 SQL 里(§8.3),
- * 见 SearchService 顶部的说明。
+ * ⚠️ **v2.0 起不做权限过滤** —— 读对所有登录用户开放(§5.3 规则一)。
+ * 所以这里既不需要当前用户,也不再需要 `spaceId` 限定范围。
+ *
+ * 这**不是**漏了过滤:代价与理由写在 `SearchService` 顶部。
+ * 简言之 —— 检索里没有任何"隐藏项",因为树上本来就没有。
  */
 @Controller('search')
 export class SearchController {
@@ -17,11 +18,7 @@ export class SearchController {
 
   @Get()
   @HttpCode(HttpStatus.OK)
-  run(
-    @CurrentUser() user: AuthUser,
-    @Query('q') q?: string,
-    @Query('spaceId') spaceId?: string,
-  ): Promise<SearchResponse> {
-    return this.search.search(user, q ?? '', spaceId === undefined || spaceId === '' ? {} : { spaceId });
+  run(@Query('q') q?: string): Promise<SearchResponse> {
+    return this.search.search(q ?? '');
   }
 }

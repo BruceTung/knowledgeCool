@@ -2,8 +2,8 @@
  * 认证核心逻辑测试。
  *
  * 重点不在"能不能登录",而在**失败路径不给攻击者额外信息**:
- *   - 邮箱不存在与密码错误必须返回完全一样的错误
- *   - 邮箱不存在时也要消耗一次 bcrypt(否则响应快慢就能枚举账号)
+ *   - 工号不存在与密码错误必须返回完全一样的错误
+ *   - 工号不存在时也要消耗一次 bcrypt(否则响应快慢就能枚举账号)
  *   - 账号停用后,其已签发的会话必须立刻失效
  */
 import { describe, expect, it, vi } from 'vitest';
@@ -12,13 +12,13 @@ import { AuthService } from './auth.service.js';
 
 const ACTIVE_USER = {
   id: 'u-1',
-  email: 'admin@example.com',
+  employeeNo: 'KC-admin',
   name: '管理员',
-  department: '产品部',
   avatarColor: 'gray',
   isSuperAdmin: true,
   passwordHash: '$2b$12$stub',
   status: 'active',
+  mustChangePassword: false,
 };
 
 function createService(overrides: { userCount?: number } = {}) {
@@ -26,14 +26,16 @@ function createService(overrides: { userCount?: number } = {}) {
     // update 是服务写 last_login_at 用的。桩必须跟着服务走 ——
     // 少了它,服务里那次写会以 TypeError 崩掉,而不是"静默失败"。
     user: { count: vi.fn(), findUnique: vi.fn(), create: vi.fn(), update: vi.fn() },
-    spaceMember: { findMany: vi.fn() },
+    orgAssignment: { findMany: vi.fn() },
+    node: { findMany: vi.fn() },
     $transaction: vi.fn(),
   };
   prisma.user.count.mockResolvedValue(overrides.userCount ?? 0);
   prisma.user.findUnique.mockResolvedValue(null);
   prisma.user.create.mockResolvedValue(ACTIVE_USER);
   prisma.user.update.mockResolvedValue(ACTIVE_USER);
-  prisma.spaceMember.findMany.mockResolvedValue([]);
+  prisma.orgAssignment.findMany.mockResolvedValue([]);
+  prisma.node.findMany.mockResolvedValue([]);
   // 事务桩:把同一套桩当 tx 传进回调,便于断言事务内的行为
   prisma.$transaction.mockImplementation(async (cb: (tx: unknown) => unknown) => cb(prisma));
 
@@ -63,7 +65,7 @@ describe('AuthService.setup —— 首次初始化', () => {
     const { service, prisma, sessions } = createService({ userCount: 0 });
 
     const result = await service.setup(
-      { email: 'admin@example.com', name: '管理员', password: 'a-strong-password' },
+      { employeeNo: 'KC-admin', name: '管理员', password: 'a-strong-passw0rd' },
       {},
     );
 
@@ -75,14 +77,14 @@ describe('AuthService.setup —— 首次初始化', () => {
     expect(created.data.isSuperAdmin).toBe(true);
     // 存进去的必须是哈希,不是明文
     expect(created.data.passwordHash).toBe('$2b$12$hashed');
-    expect(JSON.stringify(created)).not.toContain('a-strong-password');
+    expect(JSON.stringify(created)).not.toContain('a-strong-passw0rd');
   });
 
   it('库中已有用户 → 403,且绝不建号', async () => {
     const { service, prisma } = createService({ userCount: 1 });
 
     await expect(
-      service.setup({ email: 'x@example.com', name: 'x', password: 'a-strong-password' }, {}),
+      service.setup({ employeeNo: 'KC-x', name: 'x', password: 'a-strong-passw0rd' }, {}),
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
 
     expect(prisma.user.create).not.toHaveBeenCalled();
@@ -94,7 +96,7 @@ describe('AuthService.setup —— 首次初始化', () => {
     prisma.user.count.mockResolvedValueOnce(0).mockResolvedValueOnce(1);
 
     await expect(
-      service.setup({ email: 'x@example.com', name: 'x', password: 'a-strong-password' }, {}),
+      service.setup({ employeeNo: 'KC-x', name: 'x', password: 'a-strong-passw0rd' }, {}),
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
 
     expect(prisma.user.create).not.toHaveBeenCalled();
@@ -106,9 +108,9 @@ describe('AuthService.login —— 不给账号枚举留口子', () => {
     const { service, prisma, sessions } = createService();
     prisma.user.findUnique.mockResolvedValueOnce(ACTIVE_USER);
 
-    const result = await service.login({ email: ACTIVE_USER.email, password: 'right' }, {});
+    const result = await service.login({ employeeNo: ACTIVE_USER.employeeNo, password: 'right' }, {});
 
-    expect(result.user.email).toBe(ACTIVE_USER.email);
+    expect(result.user.employeeNo).toBe(ACTIVE_USER.employeeNo);
     expect(sessions.issue).toHaveBeenCalledTimes(1);
   });
 
@@ -118,17 +120,17 @@ describe('AuthService.login —— 不给账号枚举留口子', () => {
     passwords.verify.mockResolvedValueOnce(false);
 
     await expect(
-      service.login({ email: ACTIVE_USER.email, password: 'wrong' }, {}),
-    ).rejects.toMatchObject({ code: 'UNAUTHORIZED', message: '邮箱或密码不正确' });
+      service.login({ employeeNo: ACTIVE_USER.employeeNo, password: 'wrong' }, {}),
+    ).rejects.toMatchObject({ code: 'UNAUTHORIZED', message: '工号或密码不正确' });
   });
 
-  it('邮箱不存在 → 401,**且仍然消耗一次 bcrypt 校验**(抹平时序差异)', async () => {
+  it('工号不存在 → 401,**且仍然消耗一次 bcrypt 校验**(抹平时序差异)', async () => {
     const { service, prisma, passwords, sessions } = createService();
     prisma.user.findUnique.mockResolvedValueOnce(null);
 
     await expect(
-      service.login({ email: 'nobody@example.com', password: 'x' }, {}),
-    ).rejects.toMatchObject({ code: 'UNAUTHORIZED', message: '邮箱或密码不正确' });
+      service.login({ employeeNo: 'KC-nobody', password: 'x' }, {}),
+    ).rejects.toMatchObject({ code: 'UNAUTHORIZED', message: '工号或密码不正确' });
 
     // 关键断言:不能因为"查不到用户"就跳过哈希计算
     expect(passwords.verify).toHaveBeenCalledTimes(1);
@@ -138,7 +140,7 @@ describe('AuthService.login —— 不给账号枚举留口子', () => {
     expect(sessions.issue).not.toHaveBeenCalled();
   });
 
-  it('邮箱不存在与密码错误的响应完全一致(不可区分)', async () => {
+  it('工号不存在与密码错误的响应完全一致(不可区分)', async () => {
     const a = createService();
     a.prisma.user.findUnique.mockResolvedValueOnce(null);
     const b = createService();
@@ -146,10 +148,10 @@ describe('AuthService.login —— 不给账号枚举留口子', () => {
     b.passwords.verify.mockResolvedValueOnce(false);
 
     const errorA = (await a.service
-      .login({ email: 'nobody@example.com', password: 'x' }, {})
+      .login({ employeeNo: 'KC-nobody', password: 'x' }, {})
       .catch((e: unknown) => e)) as unknown as { code: string; message: string };
     const errorB = (await b.service
-      .login({ email: ACTIVE_USER.email, password: 'x' }, {})
+      .login({ employeeNo: ACTIVE_USER.employeeNo, password: 'x' }, {})
       .catch((e: unknown) => e)) as unknown as { code: string; message: string };
 
     expect(errorA.code).toBe(errorB.code);
@@ -161,7 +163,7 @@ describe('AuthService.login —— 不给账号枚举留口子', () => {
     prisma.user.findUnique.mockResolvedValueOnce({ ...ACTIVE_USER, status: 'disabled' });
 
     await expect(
-      service.login({ email: ACTIVE_USER.email, password: 'right' }, {}),
+      service.login({ employeeNo: ACTIVE_USER.employeeNo, password: 'right' }, {}),
     ).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
 
     expect(sessions.issue).not.toHaveBeenCalled();
@@ -171,9 +173,9 @@ describe('AuthService.login —— 不给账号枚举留口子', () => {
     const { service, prisma } = createService();
     prisma.user.findUnique.mockResolvedValueOnce(ACTIVE_USER);
 
-    await service.login({ email: 'ADMIN@Example.COM', password: 'right' }, {});
+    await service.login({ employeeNo: 'ADMIN@Example.COM', password: 'right' }, {});
 
-    expect(prisma.user.findUnique.mock.calls[0]?.[0].where.email).toBe('ADMIN@Example.COM');
+    expect(prisma.user.findUnique.mock.calls[0]?.[0].where.employeeNo).toBe('ADMIN@Example.COM');
   });
 });
 
@@ -183,7 +185,7 @@ describe('AuthService.resolveUserBySessionToken', () => {
     await expect(service.resolveUserBySessionToken('tok')).resolves.toBeNull();
   });
 
-  it('会话有效且账号正常 → 返回用户,且不带出哈希与状态', async () => {
+  it('会话有效且账号正常 → 返回用户,且不带出密码哈希', async () => {
     const { service, prisma, sessions } = createService();
     sessions.resolve.mockResolvedValueOnce({ sessionId: 's', userId: 'u-1' });
     prisma.user.findUnique.mockResolvedValueOnce(ACTIVE_USER);
@@ -191,7 +193,9 @@ describe('AuthService.resolveUserBySessionToken', () => {
     const user = await service.resolveUserBySessionToken('tok');
     expect(user?.id).toBe('u-1');
     expect(user).not.toHaveProperty('passwordHash');
-    expect(user).not.toHaveProperty('status');
+    // ⚠️ `status` 是**要**带出去的(v2.2):守卫靠它挡掉已离职 / 已停用的账号,
+    // 前端也要用它显示「已离职」。它不含敏感信息 —— 真正不该出去的是密码哈希。
+    expect(user?.status).toBe('active');
   });
 
   it('账号已停用 → null,并吊销其全部会话', async () => {
@@ -213,33 +217,35 @@ describe('AuthService.resolveUserBySessionToken', () => {
   });
 });
 
-describe('AuthService.me —— 可见空间列表', () => {
-  it('返回用户与其空间角色', async () => {
+describe('AuthService.me —— 组织归属', () => {
+  it('把归属节点的路径渲染成「技术部 / 后端组」', async () => {
     const { service, prisma } = createService();
     prisma.user.findUnique.mockResolvedValueOnce(ACTIVE_USER);
-    prisma.spaceMember.findMany.mockResolvedValueOnce([
-      { role: 'admin', space: { id: 's-1', name: '产品', slug: 'product', letter: '产', color: 'blue' } },
-      { role: 'viewer', space: { id: 's-2', name: '研发', slug: 'dev', letter: '研', color: 'green' } },
+    prisma.orgAssignment.findMany.mockResolvedValueOnce([
+      { node: { id: 'n-1', materializedPath: '/n-1' } },
+      { node: { id: 'n-2', materializedPath: '/n-1/n-2' } },
+    ]);
+    prisma.node.findMany.mockResolvedValueOnce([
+      { id: 'n-1', title: '技术部' },
+      { id: 'n-2', title: '后端组' },
     ]);
 
     const result = await service.me('u-1');
 
     expect(result.user.id).toBe('u-1');
-    expect(result.spaces.map((s) => s.role)).toEqual(['admin', 'viewer']);
+    expect(result.scopes.map((scope) => scope.path)).toEqual(['技术部', '技术部 / 后端组']);
   });
 
-  it('角色值异常时跳过该空间,而不是兜底成某个角色', async () => {
+  it('没有归属时返回空数组,而不是报错', async () => {
     const { service, prisma } = createService();
     prisma.user.findUnique.mockResolvedValueOnce(ACTIVE_USER);
-    prisma.spaceMember.findMany.mockResolvedValueOnce([
-      { role: 'owner', space: { id: 's-1', name: 'X', slug: 'x', letter: 'X', color: 'blue' } },
-      { role: 'viewer', space: { id: 's-2', name: 'Y', slug: 'y', letter: 'Y', color: 'blue' } },
-    ]);
+    prisma.orgAssignment.findMany.mockResolvedValueOnce([]);
 
     const result = await service.me('u-1');
 
-    // 权限相关的兜底必须偏向"不给"
-    expect(result.spaces.map((s) => s.id)).toEqual(['s-2']);
+    expect(result.scopes).toEqual([]);
+    // 没有归属就不该去查节点标题 —— 省一次无用查询
+    expect(prisma.node.findMany).not.toHaveBeenCalled();
   });
 
   it('用户不存在 → NOT_FOUND', async () => {
@@ -267,7 +273,7 @@ describe('last_login_at 写入(此前是死字段)', () => {
     const { service, prisma } = createService();
     prisma.user.findUnique.mockResolvedValueOnce(ACTIVE_USER);
 
-    await service.login({ email: ACTIVE_USER.email, password: 'right' }, {});
+    await service.login({ employeeNo: ACTIVE_USER.employeeNo, password: 'right' }, {});
 
     expect(prisma.user.update).toHaveBeenCalledTimes(1);
     const call = prisma.user.update.mock.calls[0]?.[0];
@@ -279,7 +285,7 @@ describe('last_login_at 写入(此前是死字段)', () => {
     const { service, prisma } = createService({ userCount: 0 });
 
     await service.setup(
-      { email: 'admin@example.com', name: '管理员', password: 'a-strong-password' },
+      { employeeNo: 'KC-admin', name: '管理员', password: 'a-strong-passw0rd' },
       {},
     );
 
@@ -292,7 +298,7 @@ describe('last_login_at 写入(此前是死字段)', () => {
     prisma.user.update.mockRejectedValueOnce(new Error('数据库写失败'));
 
     await expect(
-      service.login({ email: ACTIVE_USER.email, password: 'right' }, {}),
+      service.login({ employeeNo: ACTIVE_USER.employeeNo, password: 'right' }, {}),
     ).resolves.toBeDefined();
     expect(sessions.issue).toHaveBeenCalledTimes(1);
   });

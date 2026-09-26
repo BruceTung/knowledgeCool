@@ -1,61 +1,57 @@
-import {
-  Body,
-  Controller,
-  Get,
-  HttpCode,
-  HttpStatus,
-  Param,
-  ParseUUIDPipe,
-  Put,
-} from '@nestjs/common';
-import type {
-  AuthUser,
-  PagePermissionsResponse,
-  PermissionSubjectCandidate,
-} from '@knowledgecool/shared';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Put } from '@nestjs/common';
+import type { AuthUser, GrantCandidate, NodeGrantsResponse } from '@knowledgecool/shared';
 
 import { CurrentUser } from '../auth/current-user.decorator.js';
-import { SavePermissionsDto } from './dto/save-permissions.dto.js';
+import { SaveGrantsDto } from './dto/save-grants.dto.js';
 import { PermissionService } from './permission.service.js';
 
 /**
- * 页面权限接口(DESIGN.md §6.2)。
+ * 授权接口。
  *
- * 授权全部下沉到 PermissionService ——
- * 这里**不做任何权限判断**,包括"读权限也要登录"这件事都由全局 AuthGuard 保证。
+ * ⚠️ 两点与 v1.x 不同:
+ *   1. 是**节点级**的,不是页面级 —— 空间与页面已合并为一棵树(§4.1)
+ *   2. **没有 deny** —— 收回权限 = 把人从名单里删掉(§5.3)
+ *
+ * 权限设置做在**节点上的弹窗**里,而不是独立页面:节点会有几百个,
+ * 不可能每个都配一个页面(§7.2)。
  */
 @Controller()
 export class PermissionController {
   constructor(private readonly permissions: PermissionService) {}
 
-  /** 读本页显式规则 + 从根到自身的推导链。 */
-  @Get('pages/:pageId/permissions')
-  @HttpCode(HttpStatus.OK)
+  /**
+   * 读授权视图。**全员可读** —— 读是开放的(§5.3 规则一),
+   * 而且"谁能改这篇"本身就是该让所有人看到的信息。
+   */
+  @Get('nodes/:nodeId/grants')
   overview(
     @CurrentUser() user: AuthUser,
-    @Param('pageId', ParseUUIDPipe) pageId: string,
-  ): Promise<PagePermissionsResponse> {
-    return this.permissions.overview(user, pageId);
+    @Param('nodeId', ParseUUIDPipe) nodeId: string,
+  ): Promise<NodeGrantsResponse> {
+    return this.permissions.overview(user, nodeId);
   }
 
-  /** 整表替换本页的显式规则。需要空间管理员权限。 */
-  @Put('pages/:pageId/permissions')
-  @HttpCode(HttpStatus.OK)
-  replace(
-    @CurrentUser() user: AuthUser,
-    @Param('pageId', ParseUUIDPipe) pageId: string,
-    @Body() dto: SavePermissionsDto,
-  ): Promise<PagePermissionsResponse> {
-    return this.permissions.replaceRules(user, pageId, dto);
-  }
-
-  /** 权限弹窗的候选主体:空间成员 + 部门。 */
-  @Get('spaces/:spaceId/permission-candidates')
-  @HttpCode(HttpStatus.OK)
+  /**
+   * 可授权的候选人 —— 服务端**已按操作者组织范围过滤**。
+   *
+   * 前端拿它填选择器。这不是安全边界:写入时会逐个再校验
+   * (见 `replaceGrants`),否则改一下请求体就能越权。
+   */
+  @Get('nodes/:nodeId/grant-candidates')
   candidates(
     @CurrentUser() user: AuthUser,
-    @Param('spaceId', ParseUUIDPipe) spaceId: string,
-  ): Promise<PermissionSubjectCandidate[]> {
-    return this.permissions.candidates(user, spaceId);
+    @Param('nodeId', ParseUUIDPipe) nodeId: string,
+  ): Promise<GrantCandidate[]> {
+    return this.permissions.candidates(user, nodeId);
+  }
+
+  /** 整表替换名单。 */
+  @Put('nodes/:nodeId/grants')
+  save(
+    @CurrentUser() user: AuthUser,
+    @Param('nodeId', ParseUUIDPipe) nodeId: string,
+    @Body() body: SaveGrantsDto,
+  ): Promise<NodeGrantsResponse> {
+    return this.permissions.replaceGrants(user, nodeId, body);
   }
 }

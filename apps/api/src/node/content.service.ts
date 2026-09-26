@@ -1,10 +1,11 @@
 /**
  * 正文服务(DESIGN.md §6.2 的正文接口 + §7.4 的文档模型)。
  *
- * ## 三条硬约束的落地处
+ * v2.0 改名:`page` → `node`,表 `page_contents` → `node_contents`。
+ * 三条硬约束的落地处**没变**:
  *
  * 1. **存结构化文档树,不存 Markdown 字符串**(§10 约束 2)。
- *    `content_json` 列的类型就是 ProseMirror 的根节点,前端 `editor.getJSON()`
+ *    `content_json` 的类型就是 ProseMirror 的根节点,前端 `editor.getJSON()`
  *    直接落库,不经过任何序列化转换。阶段二挂 `y-prosemirror` 时不需要动存储层。
  * 2. **落库时同步拍纯文本**(§10 约束 6)。抽取逻辑在 `content/text-extract.ts`,
  *    是纯函数、有单测。这一列是检索的唯一数据源。
@@ -12,7 +13,7 @@
  *
  * ## 冲突检测的取舍
  *
- * 正文**不用** `pages.version`(那个号被改名/移动共用,两者耦合会导致
+ * 正文**不用** `nodes.version`(那个号被改名/移动共用,两者耦合会导致
  * "改正文让改名冲突"这种荒谬的行为)。改用 `baseUpdatedAt`:
  * 客户端把「我读到的那一版」的时间戳带回来,服务端发现更新更晚就返回 409。
  * 这是阶段一在没有协同的前提下,防止"两个人同时编辑、后写的静默吃掉前一个"的最小代价方案。
@@ -21,19 +22,20 @@
 import { Injectable } from '@nestjs/common';
 import {
   EMPTY_DOC,
-  isProseMirrorDoc,
-  type PageContentResponse,
+  type Actor,
+  type NodeContentResponse,
   type ProseMirrorDoc,
   type SaveContentInput,
+  isProseMirrorDoc,
 } from '@knowledgecool/shared';
 
 import { recordAudit } from '../audit/record.js';
 import { AppError } from '../common/errors/app-error.js';
+import { toMarkdown } from '../content/markdown.js';
+import { extractPlainText } from '../content/text-extract.js';
 import { Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { PermissionService, type Operator } from '../permission/permission.service.js';
-import { extractPlainText } from '../content/text-extract.js';
-import { toMarkdown } from '../content/markdown.js';
+import { PermissionService } from '../permission/permission.service.js';
 
 /**
  * 单篇正文的序列化上限。
@@ -45,8 +47,8 @@ import { toMarkdown } from '../content/markdown.js';
 export const CONTENT_JSON_MAX_BYTES = 2 * 1024 * 1024;
 
 /** 导出的结果。 */
-export interface PageExport {
-  pageId: string;
+export interface NodeExport {
+  nodeId: string;
   title: string;
   markdown: string;
 }
@@ -61,28 +63,32 @@ export class ContentService {
   /**
    * 取正文。
    *
-   * 页面刚建出来时 `page_contents` 里还没有行 —— 那**不是**错误,
+   * ⚠️ **不鉴权** —— 读是所有登录用户开放的(§5.3 规则一)。
+   * 但仍要确认节点**存在且未删除**,否则会返回一个"不存在的节点"的空正文,
+   * 前端无法区分"这篇是空的"与"这篇不存在"。
+   *
+   * 节点刚建出来时 `node_contents` 里还没有行 —— 那**不是**错误,
    * 返回空文档即可。刻意不在读路径上 upsert:GET 不该产生写操作,
-   * 否则一次爬虫式的遍历会给每个页面都插一行空内容。
+   * 否则一次爬虫式的遍历会给每个节点都插一行空内容。
    */
-  async get(operator: Operator, pageId: string): Promise<PageContentResponse> {
-    const access = await this.permissions.requireCapability(operator, pageId, 'page.view');
+  async get(nodeId: string): Promise<NodeContentResponse> {
+    const node = await this.prisma.node.findUnique({
+      where: { id: nodeId },
+      select: { deletedAt: true, updatedAt: true },
+    });
+    if (node === null || node.deletedAt !== null) throw AppError.notFound();
 
-    const row = await this.prisma.pageContent.findUnique({
-      where: { pageId },
+    const row = await this.prisma.nodeContent.findUnique({
+      where: { nodeId },
       select: { contentJson: true, updatedAt: true },
     });
 
     if (row === null) {
-      return {
-        pageId,
-        content: EMPTY_DOC,
-        updatedAt: access.page.deletedAt?.toISOString() ?? new Date(0).toISOString(),
-      };
+      return { nodeId, content: EMPTY_DOC, updatedAt: node.updatedAt.toISOString() };
     }
 
     return {
-      pageId,
+      nodeId,
       content: toDoc(row.contentJson),
       updatedAt: row.updatedAt.toISOString(),
     };
@@ -95,11 +101,11 @@ export class ContentService {
    * 两步在同一个 upsert 里完成,不存在"正文存了但索引没更新"的窗口。
    */
   async save(
-    operator: Operator,
-    pageId: string,
+    operator: Actor,
+    nodeId: string,
     input: SaveContentInput,
-  ): Promise<PageContentResponse> {
-    const access = await this.permissions.requireCapability(operator, pageId, 'page.edit');
+  ): Promise<NodeContentResponse> {
+    await this.permissions.requireEdit(operator, nodeId);
 
     if (!isProseMirrorDoc(input.content)) {
       throw AppError.validation('正文格式不合法:根节点必须是 type=doc 的文档树');
@@ -108,15 +114,15 @@ export class ContentService {
     const bytes = Buffer.byteLength(JSON.stringify(input.content), 'utf8');
     if (bytes > CONTENT_JSON_MAX_BYTES) {
       throw AppError.validation(
-        `正文过大(${Math.round(bytes / 1024)}KB),上限 ${CONTENT_JSON_MAX_BYTES / 1024 / 1024}MB`,
+        `正文过大(${String(Math.round(bytes / 1024))}KB),上限 ${String(CONTENT_JSON_MAX_BYTES / 1024 / 1024)}MB`,
       );
     }
 
     // 冲突检测:只在调用方给了 baseUpdatedAt 时才做。
     // 不给即"强制覆盖",用于导入、脚本修复这类场景。
     if (input.baseUpdatedAt !== undefined) {
-      const current = await this.prisma.pageContent.findUnique({
-        where: { pageId },
+      const current = await this.prisma.nodeContent.findUnique({
+        where: { nodeId },
         select: { updatedAt: true },
       });
       if (current !== null) {
@@ -129,10 +135,10 @@ export class ContentService {
 
     const textForSearch = extractPlainText(input.content);
 
-    const row = await this.prisma.pageContent.upsert({
-      where: { pageId },
+    const row = await this.prisma.nodeContent.upsert({
+      where: { nodeId },
       create: {
-        pageId,
+        nodeId,
         contentJson: input.content as unknown as Prisma.InputJsonValue,
         textForSearch,
       },
@@ -143,38 +149,29 @@ export class ContentService {
       select: { updatedAt: true },
     });
 
-    // 正文变动也算"这篇被改过",顺带推进结构版本号会让改名冲突 —— 所以不碰 pages 表。
+    // 正文变动**不碰 nodes.version** —— 那个号被结构操作共用,
+    // 推进它会让"改正文"引发"改名冲突"(§7.4)。
     await recordAudit(this.prisma, {
       actorId: operator.id,
-      action: 'page.content.update',
-      targetType: 'page',
-      targetId: pageId,
-      detail: { spaceId: access.page.spaceId, textLength: textForSearch.length, bytes },
+      action: 'node.content.update',
+      targetType: 'node',
+      targetId: nodeId,
+      detail: { textLength: textForSearch.length, bytes },
     });
 
-    if (access.viaSuperAdmin) {
-      await recordAudit(this.prisma, {
-        actorId: operator.id,
-        action: 'superadmin.bypass',
-        targetType: 'page',
-        targetId: pageId,
-        detail: { spaceId: access.page.spaceId, capability: 'page.edit' },
-      });
-    }
-
-    return {
-      pageId,
-      content: input.content,
-      updatedAt: row.updatedAt.toISOString(),
-    };
+    return { nodeId, content: input.content, updatedAt: row.updatedAt.toISOString() };
   }
 
   /** 导出为 Markdown(M6)。标题作为一级标题写在最前面。 */
-  async exportMarkdown(operator: Operator, pageId: string): Promise<PageExport> {
-    const access = await this.permissions.requireCapability(operator, pageId, 'page.view');
+  async exportMarkdown(nodeId: string): Promise<NodeExport> {
+    const node = await this.prisma.node.findUnique({
+      where: { id: nodeId },
+      select: { title: true, deletedAt: true },
+    });
+    if (node === null || node.deletedAt !== null) throw AppError.notFound();
 
-    const row = await this.prisma.pageContent.findUnique({
-      where: { pageId },
+    const row = await this.prisma.nodeContent.findUnique({
+      where: { nodeId },
       select: { contentJson: true },
     });
 
@@ -182,9 +179,9 @@ export class ContentService {
     const body = toMarkdown(doc);
 
     return {
-      pageId,
-      title: access.page.title,
-      markdown: `# ${access.page.title}\n\n${body}`.replace(/\n{3,}/g, '\n\n'),
+      nodeId,
+      title: node.title,
+      markdown: `# ${node.title}\n\n${body}`.replace(/\n{3,}/g, '\n\n'),
     };
   }
 }

@@ -41,9 +41,10 @@ export interface AuditEntry {
  * 但更稳的写法是在业务成功之后调用,并且不要为了日志而回滚事务。
  * (也刻意不放进业务事务:日志写失败不该把已经成功的业务操作一起回滚。)
  *
- * `detail` 里带上 `spaceId` 是有意的:审计查询要按空间过滤,
- * 而 `audit_logs` 表没有 `space_id` 列(加列意味着每个调用点都要填对,
- * 填漏一条就是一次越权可见)。见 `AuditService.spaceTargetFilter`。
+ * `detail` 里带上 `nodeId`(当 `targetId` 不是节点 id 时)是有意的:
+ * 审计查询要按「我拥有所有权的节点子树」过滤,而 `audit_logs` 表没有 `node_id` 列
+ * (加列意味着每个调用点都要填对,填漏一条就是一次越权可见)。
+ * 见 `AuditService.list` 的范围计算。
  */
 export async function recordAudit(prisma: PrismaService, entry: AuditEntry): Promise<void> {
   try {
