@@ -1,6 +1,6 @@
 import type { Editor } from '@tiptap/core';
 import { useCallback, useMemo, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 
 import { Button, ErrorNote } from '../components/ui';
 import { useMe } from '../features/auth/queries';
@@ -14,8 +14,8 @@ import {
 } from '../features/content/PageEditor';
 import { useGrantDialog } from '../features/grants/dialog-store';
 import { useMembersDialog } from '../features/members/dialog-store';
-import { useExportMarkdown, useNodeContent, useNodeDetail, useUpdateNode } from '../features/org/queries';
-import { T_BADGE, T_BODY } from '../lib/typography';
+import { useExportMarkdown, useNodeContent, useNodeDetail, useOrgTree, useUpdateNode } from '../features/org/queries';
+import { T_LABEL, T_META } from '../lib/typography';
 
 type RightTab = 'outline' | 'comments';
 
@@ -41,10 +41,96 @@ export function NodeDetailPage() {
   return <NodeDetailView nodeId={nodeId} />;
 }
 
+/**
+ * 这个节点下面的子页面(v2.8)。
+ *
+ * ⚠️ 为什么要有它:一个「组 / 部门」节点自身往往没有正文。打开之后如果只有一个
+ * 空白编辑器,用户看到的是"这里什么都没有" —— 而它下面其实挂着好几篇文档。
+ * 实测就是这么撞上的:打开「后端组」是一块白板,而「研发规范」「技术方案」
+ * 都在它下面。
+ *
+ * Confluence 在空间首页列的就是子页面,这里同理。
+ *
+ * 数据直接取自**已经缓存的**组织树(`useOrgTree`)—— 树里本来就带 `parentId`,
+ * 派生一次比多开一个接口划算得多,而且点进来时它通常已经在本地缓存里了。
+ */
+function ChildPages({ nodeId }: { nodeId: string }) {
+  const tree = useOrgTree();
+  const navigate = useNavigate();
+
+  const children = useMemo(
+    () =>
+      (tree.data?.nodes ?? [])
+        .filter((node) => node.parentId === nodeId)
+        .sort((a, b) => a.position - b.position),
+    [tree.data, nodeId],
+  );
+
+  // 没有子页面就什么都不渲染 —— 不要为了"结构完整"留一个空盒子
+  if (children.length === 0) return null;
+
+  return (
+    <section className="mx-8 mt-6 rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+      <h2 className={`mb-2.5 text-slate-500 ${T_LABEL}`}>子页面 · {children.length}</h2>
+      <ul>
+        {children.map((child) => (
+          <li key={child.id}>
+            <button
+              type="button"
+              onClick={() => void navigate(`/n/${child.id}`)}
+              className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-white"
+            >
+              <span
+                className={`flex h-5 w-5 flex-none items-center justify-center rounded text-xs font-medium ${
+                  child.kind === 'space'
+                    ? 'bg-teal-50 text-teal-700'
+                    : 'bg-slate-100 text-slate-500'
+                }`}
+              >
+                {child.kind === 'space' ? '组' : '页'}
+              </span>
+              <span className="min-w-0 flex-1 truncate text-sm text-slate-800">
+                {child.title}
+              </span>
+              {child.commentCount > 0 && (
+                <span
+                  className={`flex-none rounded-full bg-slate-100 px-1.5 py-0.5 font-medium tabular-nums text-slate-500 ${T_META}`}
+                >
+                  {child.commentCount}
+                </span>
+              )}
+              <span className="flex-none text-sm text-slate-400">{child.ownerName}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/**
+ * 更新时间的展示格式。
+ *
+ * 不用 `toLocaleString('zh-CN')` 的默认输出 —— 它带秒,而秒在这一行里
+ * 既没有信息量、又占宽度(窄内容列下会把整个值顶到换行)。
+ * 形如 `2026/9/27 02:35`。
+ */
+function formatUpdatedAt(iso: string): string {
+  return new Date(iso).toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
 /** 离职标记。历史记录不抹掉,只在名字旁注明(v2.2)。 */
 function DepartedBadge() {
   return (
-    <span className={`rounded bg-amber-50 px-1 text-amber-700 ring-1 ring-amber-200 ${T_BADGE}`}>
+    <span
+      className={`rounded bg-amber-50 px-1.5 py-0.5 font-medium text-amber-700 ring-1 ring-amber-200 ${T_META}`}
+    >
       已离职
     </span>
   );
@@ -133,22 +219,22 @@ function NodeDetailView({ nodeId }: { nodeId: string }) {
   return (
     <div className="flex h-full min-h-0">
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex-none border-b border-slate-200 px-6 pt-4 pb-3">
-          <nav className={`flex flex-wrap items-center gap-1 text-slate-400 text-xs`}>
-            <Link to="/" className="hover:text-slate-600">
+        <header className="flex-none border-b border-slate-200 px-8 pt-5 pb-4">
+          <nav className="flex flex-wrap items-center gap-1.5 text-sm text-slate-400">
+            <Link to="/" className="transition-colors hover:text-slate-700">
               全部
             </Link>
             {node.breadcrumb.slice(0, -1).map((crumb) => (
-              <span key={crumb.id} className="flex items-center gap-1">
-                <span>/</span>
-                <Link to={`/n/${crumb.id}`} className="hover:text-slate-600">
+              <span key={crumb.id} className="flex items-center gap-1.5">
+                <span className="text-slate-300">/</span>
+                <Link to={`/n/${crumb.id}`} className="transition-colors hover:text-slate-700">
                   {crumb.title}
                 </Link>
               </span>
             ))}
           </nav>
 
-          <div className="mt-1 flex items-start gap-3">
+          <div className="mt-2 flex items-start gap-4">
             <div className="min-w-0 flex-1">
               {titleDraft !== null ? (
                 <input
@@ -163,10 +249,14 @@ function NodeDetailView({ nodeId }: { nodeId: string }) {
                 />
               ) : (
                 <h1
-                  // `text-xl`(20px)而不是 `text-2xl`(24px):下面那行元信息是 12px,
-                  // 24px 配 12px 落差太大,标题像是"贴"在页面上而不是长在页面里。
-                  className={`text-xl font-semibold text-slate-900 ${
-                    canEdit ? 'cursor-text rounded-md px-2 py-1 hover:bg-slate-50' : 'px-2 py-1'
+                  /*
+                    `text-2xl`(24px)= Atlassian `font.heading.large`(Bold 24 / 28)。
+                    上一轮我把它压到 20px,理由是"24px 配 12px 的元信息落差太大" ——
+                    那是**拿错的那一头去迁就**:真正该改大的是元信息(12 → 14),
+                    而不是把标题压小。
+                  */
+                  className={`text-2xl font-semibold tracking-tight text-slate-900 ${
+                    canEdit ? 'cursor-text rounded-md px-2 py-0.5 hover:bg-slate-50' : 'px-2 py-0.5'
                   }`}
                   title={canEdit ? '点击可改名' : undefined}
                   onClick={() => {
@@ -176,20 +266,9 @@ function NodeDetailView({ nodeId }: { nodeId: string }) {
                   {node.title}
                 </h1>
               )}
-
-              <div className={`flex flex-wrap items-center gap-3 px-2 text-slate-400 text-xs`}>
-                <SaveStateLabel state={saveState} />
-                <span>所有者 {node.ownerName}</span>
-                {node.ownerDeparted && <DepartedBadge />}
-                <span>
-                  创建者 {node.createdByName}
-                  {node.createdByDeparted && <DepartedBadge />}
-                </span>
-                <span>更新于 {new Date(node.updatedAt).toLocaleString('zh-CN')}</span>
-              </div>
             </div>
 
-            <div className="flex flex-none items-center gap-2 pt-1">
+            <div className="flex flex-none items-center gap-2 pt-1.5">
               {/*
                 「成员」只出现在空间 / 组这类节点上。文档页面上也有"归属"这个概念,
                 但在那里加人没有实际意义(没人会"归属于某篇文档"),
@@ -229,6 +308,33 @@ function NodeDetailView({ nodeId }: { nodeId: string }) {
             </div>
           </div>
 
+          {/*
+            元信息行放在**标题那一行的外面**,占满整个页头宽度。
+
+            ⚠️ 原来它嵌在标题的 `flex-1` 容器里,于是右侧那排按钮
+            (成员 / 权限 / 导出 MD,合计约 220px)会把它挤到只剩一百多 px ——
+            「所有者 王思远」「创建者 林晗」「更新于 …」被迫**各占一行**,
+            页头凭空高出三行。这不是字号问题,是**谁和谁抢同一行**的问题。
+
+            每一项都 `whitespace-nowrap`:实测「更新于 2026/9/27 02:35:15」
+            会在日期与时间之间折行,同一个值被拆开是最难看的排版之一。
+            顺带去掉秒 —— 它没有信息量,却让这一行多占 30px。
+          */}
+          <div className="mt-2.5 flex flex-wrap items-center gap-x-5 gap-y-1 px-2 text-sm text-slate-500">
+            <SaveStateLabel state={saveState} />
+            <span className="whitespace-nowrap">
+              所有者 <span className="text-slate-700">{node.ownerName}</span>
+              {node.ownerDeparted && <DepartedBadge />}
+            </span>
+            <span className="whitespace-nowrap">
+              创建者 <span className="text-slate-700">{node.createdByName}</span>
+              {node.createdByDeparted && <DepartedBadge />}
+            </span>
+            <span className="whitespace-nowrap text-slate-400">
+              更新于 {formatUpdatedAt(node.updatedAt)}
+            </span>
+          </div>
+
           {updateNode.isError && (
             <div className="mt-2 px-2">
               <ErrorNote error={updateNode.error} />
@@ -240,6 +346,9 @@ function NodeDetailView({ nodeId }: { nodeId: string }) {
             </div>
           )}
         </header>
+
+        {/* 有子页面就先列出来 —— 组 / 部门节点通常自身没有正文(见 `ChildPages`) */}
+        <ChildPages nodeId={nodeId} />
 
         <PageEditor
           key={nodeId}
@@ -253,7 +362,12 @@ function NodeDetailView({ nodeId }: { nodeId: string }) {
       </div>
 
       <aside className="flex w-80 flex-none flex-col border-l border-slate-200 bg-slate-50">
-        <div className="flex flex-none border-b border-slate-200">
+        {/*
+          右栏是**组件**,它的标签走 14px + Medium 字重(Atlassian 的 `font.body` 档,
+          官方原话:"组件里用 14px;配合图标时用 Medium")。
+          tab 高度给到 44px —— 它是要被**点**的东西,不是一行说明文字。
+        */}
+        <div className="flex flex-none items-stretch border-b border-slate-200 px-1">
           {tabs.map((item) => (
             <button
               key={item.key}
@@ -261,10 +375,10 @@ function NodeDetailView({ nodeId }: { nodeId: string }) {
               onClick={() => {
                 setTab(item.key);
               }}
-              className={`flex-1 border-b-2 px-3 py-2.5 transition-colors text-xs ${
+              className={`flex-1 border-b-2 px-3 py-3 text-sm font-medium transition-colors ${
                 tab === item.key
                   ? 'border-slate-900 text-slate-900'
-                  : 'border-transparent text-slate-500 hover:text-slate-700'
+                  : 'border-transparent text-slate-500 hover:text-slate-800'
               }`}
             >
               {item.label}
@@ -273,11 +387,16 @@ function NodeDetailView({ nodeId }: { nodeId: string }) {
         </div>
 
         {tab === 'outline' ? (
-          <div className="min-h-0 flex-1 overflow-auto p-3">
+          <div className="min-h-0 flex-1 overflow-auto px-2 py-3">
             {outline.length === 0 ? (
-              <p className={`py-6 text-center text-slate-400 text-xs`}>
-                还没有标题。用工具栏的 H1/H2/H3 建结构,这里会自动出现目录。
-              </p>
+              <div className="px-4 py-8 text-center">
+                <p className="text-sm leading-relaxed text-slate-400">
+                  这一页还没有标题。
+                </p>
+                <p className={`mt-2 leading-relaxed text-slate-400 ${T_META}`}>
+                  用工具栏的 H1 / H2 / H3 建出结构,目录会自动出现在这里。
+                </p>
+              </div>
             ) : (
               <ul className="space-y-0.5">
                 {outline.map((item) => (
@@ -288,12 +407,12 @@ function NodeDetailView({ nodeId }: { nodeId: string }) {
                         scrollToHeading(item.index);
                       }}
                       /*
-                        目录项是 `T_BODY`(14px),不是 12px —— 它和左栏的树一样,
-                        是**要被读的内容**,不是装饰。缩进也跟着从 12px 提到 14px,
-                        否则 14px 的字配 12px 的缩进,层级差看不出来。
+                        目录项 = 内容档 14px(Atlassian `font.body`),不是 12px。
+                        它是**要被读、被点**的导航项;缩进按层级每级 16px,
+                        这样 14px 的字能看出层级差。
                       */
-                      className={`w-full truncate rounded px-2 py-1 text-left text-slate-600 hover:bg-white ${T_BODY}`}
-                      style={{ paddingLeft: `${String((item.level - 1) * 14 + 8)}px` }}
+                      className="w-full truncate rounded-md py-1.5 pr-2 text-left text-sm leading-5 text-slate-600 transition-colors hover:bg-white hover:text-slate-900"
+                      style={{ paddingLeft: `${String((item.level - 1) * 16 + 12)}px` }}
                       title={item.text}
                     >
                       {item.text}

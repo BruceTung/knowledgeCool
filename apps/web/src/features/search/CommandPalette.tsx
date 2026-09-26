@@ -17,7 +17,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { useModalOpen } from '../../lib/modal-store';
-import { T_BADGE } from '../../lib/typography';
+import { T_META } from '../../lib/typography';
 import { useSearch } from './queries';
 
 export function CommandPalette({ onClose }: { onClose: () => void }) {
@@ -87,15 +87,15 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
 
         <div className="min-h-0 flex-1 overflow-auto py-1">
           {query.trim() === '' ? (
-            <p className="px-4 py-6 text-center text-xs text-slate-400">
+            <p className="px-4 py-6 text-center text-sm text-slate-400">
               输入关键词开始搜索。
               <br />
               全公司可读的内容都会出现在这里 —— 系统不区分"能搜到"与"能打开"。
             </p>
           ) : search.isPending ? (
-            <p className="px-4 py-6 text-center text-xs text-slate-400">搜索中…</p>
+            <p className="px-4 py-6 text-center text-sm text-slate-400">搜索中…</p>
           ) : hits.length === 0 ? (
-            <p className="px-4 py-6 text-center text-xs text-slate-400">没有匹配的内容</p>
+            <p className="px-4 py-6 text-center text-sm text-slate-400">没有匹配的内容</p>
           ) : (
             <ul>
               {hits.map((hit, index) => (
@@ -117,16 +117,16 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
                         {hit.title}
                       </span>
                       {hit.matchedIn === 'title' && (
-                        <span className={`flex-none rounded bg-blue-50 px-1 text-blue-700 ${T_BADGE}`}>
+                        <span className={`flex-none rounded bg-blue-50 px-1 text-blue-700 ${T_META}`}>
                           标题
                         </span>
                       )}
                     </span>
-                    <span className="w-full truncate text-[11px] text-slate-400">
+                    <span className="w-full truncate text-xs text-slate-400">
                       {hit.breadcrumb.length > 0 && hit.breadcrumb.join(' / ')}
                     </span>
                     {hit.snippet !== '' && (
-                      <span className="w-full truncate text-[11px] text-slate-500">
+                      <span className="w-full truncate text-sm text-slate-500">
                         {hit.snippet}
                       </span>
                     )}
@@ -137,7 +137,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
           )}
         </div>
 
-        <footer className="flex flex-none items-center gap-3 border-t border-slate-200 px-4 py-2 text-[11px] text-slate-400">
+        <footer className="flex flex-none items-center gap-3 border-t border-slate-200 px-4 py-2 text-xs text-slate-400">
           <span>↑↓ 选择</span>
           <span>Enter 打开</span>
           <span>Esc 关闭</span>

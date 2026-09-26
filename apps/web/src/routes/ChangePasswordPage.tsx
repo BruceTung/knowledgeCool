@@ -164,7 +164,7 @@ export function ChangePasswordPage() {
         </Button>
       </form>
 
-      <p className="mt-4 text-xs leading-relaxed text-slate-400">
+      <p className="mt-4 text-sm leading-relaxed text-slate-400">
         {isFirstTime
           ? '设置完成后需要用新密码重新登录一次 —— 这样"这个密码真的能用"是当场验证的,而不是等你下次来才发现打错了。'
           : '改完之后当前会话继续有效,不用重新登录。'}
@@ -175,7 +175,7 @@ export function ChangePasswordPage() {
         用户明确反馈过:「用户在初次登录页面以后,无法回到 login 页面,
         必须改密码才行,这样是不合适的」。所以「返回登录页」永远在。
       */}
-      <p className="mt-4 text-center text-xs">
+      <p className="mt-4 text-center text-sm">
         <Link
           to="/login"
           className="text-slate-400 transition-colors hover:text-slate-600"

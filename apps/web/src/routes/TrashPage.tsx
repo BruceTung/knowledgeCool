@@ -67,7 +67,7 @@ export function TrashPage() {
 
   return (
     <div className="mx-auto max-w-3xl px-8 py-8">
-      <nav className="text-xs text-slate-400">回收站</nav>
+      <nav className="text-sm text-slate-400">回收站</nav>
 
       <div className="mt-2 flex items-start gap-3">
         <div className="min-w-0 flex-1">
@@ -77,7 +77,7 @@ export function TrashPage() {
           </p>
 
           {policy.data !== undefined && (
-            <p className="mt-1 text-xs leading-relaxed text-slate-400">
+            <p className="mt-1 text-sm leading-relaxed text-slate-400">
               {policy.data.retentionDays > 0
                 ? `这里的条目会在删除满 ${String(policy.data.retentionDays)} 天后被自动清理(每 ${String(policy.data.purgeIntervalHours)} 小时扫一次)。要留住某样东西,请在到期前恢复它。`
                 : '自动清理已关闭 —— 回收站里的条目会一直保留,只能手动彻底删除。'}
@@ -100,7 +100,7 @@ export function TrashPage() {
         )}
       </div>
 
-      <div className="mt-4 rounded-md bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">
+      <div className="mt-4 rounded-md bg-amber-50 px-3 py-2 text-sm leading-relaxed text-amber-800">
         彻底删除
         <strong className="font-medium">不可逆</strong>
         ,并且门槛比移入回收站高一级:能改这个节点还不够,得是它或它上级的所有者。
@@ -133,7 +133,7 @@ export function TrashPage() {
                   {item.subtreeSize > 1 && ` · 含 ${String(item.subtreeSize - 1)} 个子节点`}
                 </span>
                 {!item.parentAlive && (
-                  <span className="mt-0.5 block text-[11px] text-amber-700">
+                  <span className="mt-0.5 block text-xs text-amber-700">
                     原来的上级节点也不在了 —— 恢复后会挂到顶层
                   </span>
                 )}
@@ -172,7 +172,7 @@ export function TrashPage() {
 
       <div className="mt-4 space-y-2">
         <ErrorNote error={restore.error ?? purge.error ?? purgeByPolicy.error} />
-        <p className="text-[11px] leading-relaxed text-slate-400">
+        <p className="text-xs leading-relaxed text-slate-400">
           这里只列出你有编辑权的已删内容。别人的回收站不会出现在这里。
         </p>
       </div>

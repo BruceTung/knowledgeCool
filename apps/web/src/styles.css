@@ -8,6 +8,25 @@ body,
 }
 
 /* ============================================================
+   字体族(v2.8)
+   ============================================================
+   显式写出字体族,而不是依赖 Tailwind preflight 的默认值。
+   中文字体必须显式列 —— 各家平台的默认中文字体差别很大,不写就会出现
+   "开发机上是雅黑、服务器上变宋体"这种只在某台机器上难看的问题。
+
+   顺序取自 Ant Design 的规范(系统字体优先),中文字体按平台覆盖:
+   PingFang SC(macOS/iOS)→ Hiragino Sans GB → Microsoft YaHei(Windows)→ Noto Sans SC(Linux)。 */
+body {
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
+    'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', sans-serif,
+    'Apple Color Emoji', 'Segoe UI Emoji';
+  /* 中文不需要字形连写,关掉能避免部分字体把汉字间距压得过紧 */
+  font-synthesis-weight: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ============================================================
    编辑器正文排版(§7.4)
    ============================================================
    刻意**不引入 @tailwindcss/typography**:那个插件面向"博客正文",
@@ -16,8 +35,15 @@ body,
 
 .kc-prose {
   color: #1e293b;
-  font-size: 15px;
-  line-height: 1.75;
+  /*
+    正文 16px / 1.7(v2.8)。依据:
+      · Atlassian `font.body.large` = 16px / 24px,官方定位就是"长文阅读的默认档"
+      · Confluence 编辑器的正文也是 16px
+      · 行高压到 1.7(≈27px)而不是照抄 1.5:Ant Design 明确指出
+        **中文行高要在 1.5–1.8 之间**,因为汉字密实且字高一致,比西文更需要留白
+  */
+  font-size: 16px;
+  line-height: 1.7;
   max-width: 46rem;
 }
 

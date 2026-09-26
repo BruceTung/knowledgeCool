@@ -97,7 +97,7 @@ export function SetupPage() {
         </Button>
       </form>
 
-      <p className="mt-6 text-xs leading-relaxed text-slate-400">
+      <p className="mt-6 text-sm leading-relaxed text-slate-400">
         这个账号会成为超级管理员,负责建部门、导人员名单、任命各级所有者。
       </p>
     </AuthShell>

@@ -28,7 +28,7 @@ import { useState } from 'react';
 
 import { Button, ErrorNote, SelectField } from '../../components/ui';
 import { useModalOpen } from '../../lib/modal-store';
-import { T_BADGE } from '../../lib/typography';
+import { T_META } from '../../lib/typography';
 import { useAddNodeMember, useMemberCandidates, useNodeMembers, useRemoveNodeMember } from './queries';
 import { describeRemoval } from './removal-note';
 
@@ -39,7 +39,7 @@ function StatusBadge({ status }: { status: NodeMemberView['status'] }) {
       ? 'bg-amber-50 text-amber-700 ring-amber-200'
       : 'bg-slate-100 text-slate-500 ring-slate-200';
   return (
-    <span className={`ml-1 rounded px-1 ring-1 ${tone} ${T_BADGE}`}>
+    <span className={`ml-1 rounded px-1 ring-1 ${tone} ${T_META}`}>
       {USER_STATUS_LABELS[status]}
     </span>
   );
@@ -59,33 +59,33 @@ function MemberRow({
 }) {
   return (
     <div className="flex items-start gap-2 border-t border-slate-100 px-1 py-2 first:border-t-0">
-      <div className="flex h-7 w-7 flex-none items-center justify-center rounded-full bg-slate-100 text-xs text-slate-600">
+      <div className="flex h-7 w-7 flex-none items-center justify-center rounded-full bg-slate-100 text-sm text-slate-600">
         {member.name.slice(0, 1)}
       </div>
 
       <div className="min-w-0 flex-1">
-        <div className="truncate text-xs text-slate-800">
+        <div className="truncate text-sm text-slate-800">
           {member.name}
           <StatusBadge status={member.status} />
           {member.isOwnerHere && (
-            <span className={`ml-1 rounded bg-blue-50 px-1 text-blue-700 ring-1 ring-blue-200 ${T_BADGE}`}>
+            <span className={`ml-1 rounded bg-blue-50 px-1 text-blue-700 ring-1 ring-blue-200 ${T_META}`}>
               本节点所有者
             </span>
           )}
           {!member.isOwnerHere && member.isAncestorOwner && (
-            <span className={`ml-1 rounded bg-violet-50 px-1 text-violet-700 ring-1 ring-violet-200 ${T_BADGE}`}>
+            <span className={`ml-1 rounded bg-violet-50 px-1 text-violet-700 ring-1 ring-violet-200 ${T_META}`}>
               上级所有者
             </span>
           )}
         </div>
 
-        <div className="truncate text-[11px] text-slate-400">
+        <div className="truncate text-xs text-slate-400">
           {member.employeeNo}
           {showPaths.length > 0 && ` · ${showPaths.join('、')}`}
         </div>
 
         {member.otherPaths.length > 0 && (
-          <div className="truncate text-[11px] text-slate-400">
+          <div className="truncate text-xs text-slate-400">
             另有归属:{member.otherPaths.join('、')}
           </div>
         )}
@@ -143,22 +143,22 @@ export function MembersDialog({
 
         <div className="max-h-[70vh] space-y-5 overflow-auto px-5 py-4">
           {members.isError && <ErrorNote error={members.error} />}
-          {members.isPending && <p className="text-xs text-slate-400">加载中…</p>}
+          {members.isPending && <p className="text-sm text-slate-400">加载中…</p>}
 
           {members.data !== undefined && (
             <>
               {/* ---------- 第 1 段:直接成员 ---------- */}
               <div>
-                <div className="mb-1 text-xs font-medium text-slate-700">
+                <div className="mb-1 text-sm font-medium text-slate-700">
                   直接成员 · {direct.length}
                 </div>
-                <p className="mb-2 text-[11px] leading-relaxed text-slate-400">
+                <p className="mb-2 text-xs leading-relaxed text-slate-400">
                   他们的<b>组织归属</b>直接挂在这个节点上。这里管的是归属,
                   不是权限 —— 归属决定"他能授权给谁",权限在另一个弹窗里。
                 </p>
 
                 {direct.length === 0 ? (
-                  <p className="text-[11px] text-slate-400">
+                  <p className="text-xs text-slate-400">
                     还没有人归属在这个节点上。
                   </p>
                 ) : (
@@ -216,7 +216,7 @@ export function MembersDialog({
                 )}
 
                 {canManage && candidates.isSuccess && addable.length === 0 && (
-                  <p className="mt-1 text-[11px] text-slate-400">
+                  <p className="mt-1 text-xs text-slate-400">
                     没有可加入的人 —— 只能加你组织范围内、且尚未归属在这里的在职同事。
                   </p>
                 )}
@@ -225,15 +225,15 @@ export function MembersDialog({
 
               {/* ---------- 第 2 段:下属成员 ---------- */}
               <div>
-                <div className="mb-1 text-xs font-medium text-slate-700">
+                <div className="mb-1 text-sm font-medium text-slate-700">
                   下属成员 · {inherited.length}
                 </div>
-                <p className="mb-2 text-[11px] leading-relaxed text-slate-400">
+                <p className="mb-2 text-xs leading-relaxed text-slate-400">
                   他们归属在这个节点<b>下面的</b>节点上(这个部门的各个组)。
                   <b>不能在这里移出</b> —— 请到他们所属的那个节点上去操作。
                 </p>
                 {inherited.length === 0 ? (
-                  <p className="text-[11px] text-slate-400">下属节点里还没有人。</p>
+                  <p className="text-xs text-slate-400">下属节点里还没有人。</p>
                 ) : (
                   inherited.map((member) => (
                     <MemberRow
@@ -250,7 +250,7 @@ export function MembersDialog({
         </div>
 
         <footer className="flex items-center gap-2 border-t border-slate-200 px-5 py-3">
-          <p className="flex-1 text-[11px] leading-relaxed text-slate-400">
+          <p className="flex-1 text-xs leading-relaxed text-slate-400">
             调岗 = 在这里把人加进新节点 → 再到原节点把他移出。两步都要做。
           </p>
           <Button variant="secondary" className="flex-none" onClick={onClose}>

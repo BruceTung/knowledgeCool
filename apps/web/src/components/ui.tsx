@@ -52,7 +52,7 @@ export function AuthShell({
           </div>
           <div className="min-w-0">
             <h1 className="text-lg font-semibold text-slate-900">{title}</h1>
-            {subtitle !== undefined && <p className="text-xs text-slate-500">{subtitle}</p>}
+            {subtitle !== undefined && <p className="text-sm text-slate-500">{subtitle}</p>}
           </div>
         </div>
         <div className="mt-6">{children}</div>
@@ -71,7 +71,7 @@ export function TextField({
 }: { label: string; hint?: string } & InputHTMLAttributes<HTMLInputElement>) {
   return (
     <label className="block">
-      <span className="mb-1 block text-xs text-slate-600">{label}</span>
+      <span className="mb-1 block text-sm text-slate-600">{label}</span>
       <input {...rest} className={INPUT_CLASS} />
       {hint !== undefined && <span className="mt-1 block text-xs text-slate-400">{hint}</span>}
     </label>
@@ -91,7 +91,7 @@ export function SelectField({
   if (label === undefined) return select;
   return (
     <label className="block">
-      <span className="mb-1 block text-xs text-slate-600">{label}</span>
+      <span className="mb-1 block text-sm text-slate-600">{label}</span>
       {select}
     </label>
   );

@@ -8,7 +8,7 @@ import { COMMENT_BODY_MAX_LENGTH, type CommentView } from '@knowledgecool/shared
 import { useState } from 'react';
 
 import { avatarClass, Button, ErrorNote } from '../../components/ui';
-import { T_BADGE, T_BODY } from '../../lib/typography';
+import { T_BODY, T_META } from '../../lib/typography';
 import { useCreateComment, useDeleteComment, useComments, useUpdateComment } from './queries';
 
 export function CommentsPanel({ nodeId }: { nodeId: string }) {
@@ -17,7 +17,7 @@ export function CommentsPanel({ nodeId }: { nodeId: string }) {
   const [draft, setDraft] = useState('');
   const [replyTo, setReplyTo] = useState<string | null>(null);
 
-  if (comments.isPending) return <p className={`p-4 text-slate-400 text-xs`}>加载评论…</p>;
+  if (comments.isPending) return <p className="p-4 text-sm text-slate-400">加载评论…</p>;
   if (comments.isError) {
     return (
       <div className="p-4">
@@ -46,8 +46,8 @@ export function CommentsPanel({ nodeId }: { nodeId: string }) {
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="min-h-0 flex-1 overflow-auto px-4 py-3">
         {data.threads.length === 0 ? (
-          <p className={`py-6 text-center text-slate-400 text-xs`}>
-            还没有评论。评论区用于讨论这一页的内容 —— 阶段一不做行内锚定。
+          <p className="px-4 py-8 text-center text-sm leading-relaxed text-slate-400">
+            还没有评论。评论区用来讨论这一页的内容。
           </p>
         ) : (
           <ul className="space-y-4">
@@ -77,7 +77,7 @@ export function CommentsPanel({ nodeId }: { nodeId: string }) {
 
       <div className="flex-none border-t border-slate-200 p-3">
           {replyTo !== null && (
-            <div className={`mb-2 flex items-center justify-between text-slate-500 text-xs`}>
+            <div className="mb-2 flex items-center justify-between text-sm text-slate-500">
               <span>正在回复这条评论</span>
               <button type="button" className="hover:text-slate-700" onClick={() => setReplyTo(null)}>
                 取消
@@ -101,7 +101,7 @@ export function CommentsPanel({ nodeId }: { nodeId: string }) {
             className={`w-full resize-none rounded-md border border-slate-300 px-2 py-1.5 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 ${T_BODY}`}
           />
           <div className="mt-2 flex items-center justify-between">
-            <span className={`text-slate-400 ${T_BADGE}`}>
+            <span className={`text-slate-400 ${T_META}`}>
               {draft.length}/{COMMENT_BODY_MAX_LENGTH}
             </span>
             <Button disabled={create.isPending || draft.trim() === ''} onClick={submit}>
@@ -133,20 +133,26 @@ function CommentCard({
   const [draft, setDraft] = useState(comment.body);
 
   return (
-    <div className="rounded-md border border-slate-200 bg-white p-2.5">
+    <div className="rounded-lg border border-slate-200 bg-white p-3.5">
       <div className="flex items-center gap-2">
         <span
-          className={`flex h-6 w-6 flex-none items-center justify-center rounded-full ${T_BADGE} ring-1 ${avatarClass(comment.author.avatarColor)}`}
+          className={`flex h-7 w-7 flex-none items-center justify-center rounded-full text-sm font-medium ring-1 ${avatarClass(comment.author.avatarColor)}`}
         >
           {Array.from(comment.author.name)[0] ?? '?'}
         </span>
-        <span className={`font-medium text-slate-700 text-xs`}>{comment.author.name}</span>
+        {/*
+          作者名与时间是**评论区里要被读的信息**,走 14px 内容档。
+          上一轮把它们放在 12px,而正文也是 12px —— 于是整块看起来"一片小字"。
+        */}
+        <span className="text-sm font-medium text-slate-800">{comment.author.name}</span>
         {comment.author.departed && (
-          <span className={`rounded bg-amber-50 px-1 text-amber-700 ring-1 ring-amber-200 ${T_BADGE}`}>
+          <span
+            className={`rounded bg-amber-50 px-1.5 py-0.5 font-medium text-amber-700 ring-1 ring-amber-200 ${T_META}`}
+          >
             已离职
           </span>
         )}
-        <span className={`text-slate-400 ${T_BADGE}`}>
+        <span className={`ml-auto text-slate-400 ${T_META}`}>
           {new Date(comment.createdAt).toLocaleString('zh-CN')}
         </span>
       </div>
@@ -185,12 +191,13 @@ function CommentCard({
           </div>
         </div>
       ) : (
-        <p className={`mt-1.5 whitespace-pre-wrap leading-relaxed text-slate-700 ${T_BODY}`}>
+        <p className={`mt-2 whitespace-pre-wrap leading-6 text-slate-700 ${T_BODY}`}>
           {comment.body}
         </p>
       )}
 
-      <div className={`mt-2 flex items-center gap-3 text-slate-400 text-xs`}>
+      {/* 操作是**要被点的**,走 14px;不再和"计数"那种细字印刷混在一档。 */}
+      <div className="mt-2.5 flex items-center gap-4 text-sm text-slate-500">
         {onReply !== undefined && (
           <button type="button" className="hover:text-slate-600" onClick={onReply}>
             回复

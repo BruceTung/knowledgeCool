@@ -21,7 +21,7 @@ export function AuditPage() {
   return (
     <div className="mx-auto max-w-4xl px-8 py-8">
       <h1 className="text-lg font-semibold text-slate-900">审计日志</h1>
-      <p className="mt-1 text-xs leading-relaxed text-slate-500">
+      <p className="mt-1 text-sm leading-relaxed text-slate-500">
         只写不删。登录、节点变更、所有者变更、授权调整、评论都会留痕。
         你能看到的是<b>你拥有所有权的节点</b>范围内的记录;超级管理员看到全部。
       </p>
@@ -38,7 +38,7 @@ export function AuditPage() {
         <p className="mt-6 rounded-lg bg-slate-50 px-4 py-8 text-center text-sm text-slate-400">
           没有可见的审计记录。
           <br />
-          <span className="text-xs">
+          <span className="text-sm">
             你还没有任何节点的所有权 —— 部长对其部门下的记录、组长对其组下的记录可见。
           </span>
         </p>
@@ -46,7 +46,7 @@ export function AuditPage() {
 
       {items.length > 0 && (
         <>
-          <table className="mt-4 w-full text-left text-xs">
+          <table className="mt-4 w-full text-left text-sm">
             <thead className="text-slate-400">
               <tr className="border-b border-slate-200">
                 <th className="py-2 font-normal">时间</th>
@@ -82,7 +82,7 @@ export function AuditPage() {
               onClick={() => {
                 void logs.fetchNextPage();
               }}
-              className="mt-4 rounded-md border border-slate-300 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50"
+              className="mt-4 rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50"
             >
               {logs.isFetchingNextPage ? '加载中…' : '加载更多'}
             </button>

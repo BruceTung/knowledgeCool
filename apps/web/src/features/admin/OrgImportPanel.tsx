@@ -21,7 +21,7 @@ function CountRow({ label, count, children }: { label: string; count: number; ch
   return (
     <div className="border-t border-slate-100 py-2 first:border-t-0">
       <div className="flex items-center gap-2">
-        <span className="flex-none rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-600">
+        <span className="flex-none rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">
           {label}
         </span>
         <span className={`text-sm font-medium ${count === 0 ? 'text-slate-300' : 'text-slate-900'}`}>
@@ -29,7 +29,7 @@ function CountRow({ label, count, children }: { label: string; count: number; ch
         </span>
       </div>
       {count > 0 && children !== undefined && (
-        <div className="mt-1 max-h-40 overflow-auto pl-1 text-[11px] leading-relaxed text-slate-500">
+        <div className="mt-1 max-h-40 overflow-auto pl-1 text-xs leading-relaxed text-slate-500">
           {children}
         </div>
       )}
@@ -99,11 +99,11 @@ function PreviewBody({ preview }: { preview: OrgImportPreview }) {
 
 function ResultBody({ result }: { result: OrgImportResult }) {
   return (
-    <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900">
+    <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
       导入完成:新建人员 {result.createdUsers} 人、新建节点 {result.createdNodes} 个、新增归属{' '}
       {result.createdAssignments} 条、改名 {result.updatedNames} 处、换所有者 {result.updatedOwners}{' '}
       处。
-      <p className="mt-1 text-[11px] text-emerald-800">
+      <p className="mt-1 text-xs text-emerald-800">
         新账号的初始密码是 <code className="rounded bg-white px-1">123456</code>,首次登录会被要求改成
         「8 位以上且同时含字母与数字」的新密码。
       </p>
@@ -134,11 +134,11 @@ export function OrgImportPanel() {
     <section className="space-y-4">
       <div className="rounded-lg border border-slate-200 bg-white p-4">
         <h3 className="text-sm font-medium text-slate-900">用 Excel 维护全员名单</h3>
-        <p className="mt-1 text-xs leading-relaxed text-slate-500">
+        <p className="mt-1 text-sm leading-relaxed text-slate-500">
           模板里带着当前的组织架构与人员,你只需要在末尾<b>追加行</b>。
           一行 = 一个人在一个节点上的归属;同一个人写多行表示他同属多个部门 / 组 / 项目。
         </p>
-        <ol className="mt-2 list-inside list-decimal space-y-0.5 text-xs leading-relaxed text-slate-500">
+        <ol className="mt-2 list-inside list-decimal space-y-0.5 text-sm leading-relaxed text-slate-500">
           <li>下载模板(含当前全部数据)</li>
           <li>填好之后上传 —— <b>不会立即写入</b>,先给你看差异</li>
           <li>确认差异无误,再点「确认导入」</li>
@@ -157,7 +157,7 @@ export function OrgImportPanel() {
             ref={fileRef}
             type="file"
             accept=".xlsx"
-            className="text-xs text-slate-600"
+            className="text-sm text-slate-600"
             onChange={(event) => {
               const picked = event.target.files?.[0] ?? null;
               setFile(picked);
@@ -192,10 +192,10 @@ export function OrgImportPanel() {
 
           {hasBlockingErrors ? (
             <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2">
-              <div className="text-xs font-medium text-red-800">
+              <div className="text-sm font-medium text-red-800">
                 表格里有 {errorCount} 个问题,<b>不能导入</b>。请修正后重新上传。
               </div>
-              <div className="mt-1 max-h-48 overflow-auto text-[11px] leading-relaxed text-red-700">
+              <div className="mt-1 max-h-48 overflow-auto text-xs leading-relaxed text-red-700">
                 {preview.preview.errors.map((item, index) => (
                   <div key={`${String(item.row)}-${String(index)}`}>
                     {item.row === 0 ? '整体校验' : `第 ${item.row} 行`}:{item.reason}
@@ -204,7 +204,7 @@ export function OrgImportPanel() {
               </div>
             </div>
           ) : (
-            <p className="text-xs text-slate-500">
+            <p className="text-sm text-slate-500">
               下面这些是<b>将要发生的变化</b>。没有出现在列表里的东西一律不动 ——
               包括表格里没写的人与节点(增量语义)。
             </p>
@@ -227,7 +227,7 @@ export function OrgImportPanel() {
                 {importOrg.isPending ? '写入中…' : '③ 确认导入'}
               </Button>
               {hasBlockingErrors && (
-                <span className="text-[11px] text-red-600">有问题时不能导入</span>
+                <span className="text-xs text-red-600">有问题时不能导入</span>
               )}
             </div>
           ) : (

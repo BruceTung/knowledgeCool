@@ -70,7 +70,7 @@ export function LoginPage() {
   return (
     <AuthShell title="登录知源知识库" subtitle="内网自托管 · 企业内部知识库">
       {justChanged && (
-        <p className="mb-4 rounded-md bg-emerald-50 px-3 py-2 text-xs leading-relaxed text-emerald-800">
+        <p className="mb-4 rounded-md bg-emerald-50 px-3 py-2 text-sm leading-relaxed text-emerald-800">
           密码已设置成功。<b>请用新密码登录</b> —— 首次登录不会直接进系统。
         </p>
       )}
@@ -104,7 +104,7 @@ export function LoginPage() {
         </Button>
       </form>
 
-      <p className="mt-6 text-xs leading-relaxed text-slate-400">
+      <p className="mt-6 text-sm leading-relaxed text-slate-400">
         账号由管理员通过组织架构导入统一预置,不需要自行注册。
         <br />
         首次登录的初始密码是 <code className="rounded bg-slate-100 px-1">123456</code>,

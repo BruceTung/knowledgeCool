@@ -16,14 +16,14 @@ import { useState } from 'react';
 
 import { Button, ErrorNote, SelectField } from '../../components/ui';
 import { useModalOpen } from '../../lib/modal-store';
-import { T_BADGE } from '../../lib/typography';
+import { T_META } from '../../lib/typography';
 import { useMe } from '../auth/queries';
 import { useOwnerCandidates, useSetOwner } from '../admin/queries';
 import { useGrantCandidates, useNodeGrants, useSaveGrants } from './queries';
 
 function DepartedBadge() {
   return (
-    <span className={`ml-1 rounded bg-amber-50 px-1 text-amber-700 ring-1 ring-amber-200 ${T_BADGE}`}>
+    <span className={`ml-1 rounded bg-amber-50 px-1 text-amber-700 ring-1 ring-amber-200 ${T_META}`}>
       已离职
     </span>
   );
@@ -47,15 +47,15 @@ function PersonRow({
 }) {
   return (
     <div className="flex items-center gap-2 border-t border-slate-100 px-1 py-2 first:border-t-0">
-      <div className="flex h-7 w-7 flex-none items-center justify-center rounded-full bg-slate-100 text-xs text-slate-600">
+      <div className="flex h-7 w-7 flex-none items-center justify-center rounded-full bg-slate-100 text-sm text-slate-600">
         {name.slice(0, 1)}
       </div>
       <div className="min-w-0 flex-1">
-        <div className="truncate text-xs text-slate-800">
+        <div className="truncate text-sm text-slate-800">
           {name}
           {departed === true && <DepartedBadge />}
         </div>
-        <div className="truncate text-[11px] text-slate-400">
+        <div className="truncate text-xs text-slate-400">
           {employeeNo}
           {scopePaths !== undefined && scopePaths.length > 0 && ` · ${scopePaths.join('、')}`}
           {note !== undefined && ` · ${note}`}
@@ -141,18 +141,18 @@ export function GrantDialog({
 
         <div className="max-h-[70vh] space-y-5 overflow-auto px-5 py-4">
           {grants.isError && <ErrorNote error={grants.error} />}
-          {grants.isPending && <p className="text-xs text-slate-400">加载中…</p>}
+          {grants.isPending && <p className="text-sm text-slate-400">加载中…</p>}
 
           {grants.data !== undefined && (
             <>
               {/* ---------- 第 1 段:所有者 ---------- */}
               <div>
-                <div className="mb-1 text-xs font-medium text-slate-700">所有者</div>
-                <p className="mb-2 text-[11px] leading-relaxed text-slate-400">
+                <div className="mb-1 text-sm font-medium text-slate-700">所有者</div>
+                <p className="mb-2 text-xs leading-relaxed text-slate-400">
                   每个节点都有且只有一个所有者。部门的所有者就是部长,组长由部长任命。
                 </p>
                 {canAppointOwner && !canManage && (
-                  <p className="mb-2 text-[11px] leading-relaxed text-amber-700">
+                  <p className="mb-2 text-xs leading-relaxed text-amber-700">
                     你是超级管理员,所以能换部长;但你不是这个部门的内容所有者,
                     下面的授权名单你改不了 —— 组织权限与内容权限是分开的两件事。
                   </p>
@@ -198,15 +198,15 @@ export function GrantDialog({
 
               {/* ---------- 第 2 段:祖先链上的所有者 ---------- */}
               <div>
-                <div className="mb-1 text-xs font-medium text-slate-700">
+                <div className="mb-1 text-sm font-medium text-slate-700">
                   上级所有者 · {grants.data.inherited.length}
                 </div>
-                <p className="mb-2 text-[11px] leading-relaxed text-slate-400">
+                <p className="mb-2 text-xs leading-relaxed text-slate-400">
                   他们能改这一篇,是因为在上级链上拥有所有权(例如部长对本部门的全部内容)。
                   <b>不能在这里移除</b> —— 要改变这一点只能调整组织架构或所有者。
                 </p>
                 {grants.data.inherited.length === 0 ? (
-                  <p className="text-[11px] text-slate-400">这是顶层节点,没有上级所有者。</p>
+                  <p className="text-xs text-slate-400">这是顶层节点,没有上级所有者。</p>
                 ) : (
                   grants.data.inherited.map((item) => (
                     <PersonRow
@@ -222,16 +222,16 @@ export function GrantDialog({
 
               {/* ---------- 第 3 段:显式授权 ---------- */}
               <div>
-                <div className="mb-1 text-xs font-medium text-slate-700">
+                <div className="mb-1 text-sm font-medium text-slate-700">
                   额外授权 · {rows.length}
                 </div>
-                <p className="mb-2 text-[11px] leading-relaxed text-slate-400">
+                <p className="mb-2 text-xs leading-relaxed text-slate-400">
                   只影响<b>这一个节点</b>,不会往下传。收回权限就把人从名单里移除 ——
                   没有"拒绝访问"这种设置。
                 </p>
 
                 {rows.length === 0 ? (
-                  <p className="text-[11px] text-slate-400">还没有额外授权。</p>
+                  <p className="text-xs text-slate-400">还没有额外授权。</p>
                 ) : (
                   rows.map((row) => (
                     <PersonRow
@@ -287,7 +287,7 @@ export function GrantDialog({
                   </div>
                 )}
                 {canManage && candidates.data?.length === 0 && (
-                  <p className="mt-1 text-[11px] text-slate-400">
+                  <p className="mt-1 text-xs text-slate-400">
                     没有可授权的人 —— 只能授权给你组织范围内的人。
                   </p>
                 )}

@@ -198,16 +198,39 @@ const TOOL_NODE_TITLES = [
 ];
 
 /**
+ * 演示数据的**归属基线** —— 与 `seed-dev.mjs` 那份 Excel 一致。
+ *
+ * ⚠️ 为什么需要它:L 组验「组员不能移出别人」时,请求的目标是**王思远**
+ * (`DELETE /nodes/后端组/members/KC003`)。正常情况下服务端回 403(断言正是这么写的),
+ * **但一旦前提状态不对**(比如某次崩溃后赵敏恰好成了那个组的所有者),
+ * 这一刀就会**真的砍下去** —— 王思远从此不在「后端组」里,
+ * 于是后面所有"组长能改自己组里东西"的断言跟着失败。
+ *
+ * 实测踩到过:服务器上王思远的归属只剩「CRM 项目」,
+ * 表现成"组长改不动自己组的东西"。又一次是脚本自己造成的。
+ *
+ * 教训和 v2.6/v2.7 完全一样:**脚本改了什么,就要能收回什么** ——
+ * 密码、节点、所有者都收了,唯独归属没收。
+ */
+const EXPECTED_ASSIGNMENTS = {
+  KC002: ['技术部'],
+  KC003: ['后端组', 'CRM 项目'],
+  KC004: ['后端组'],
+  KC005: ['市场部'],
+};
+
+/**
  * 把脚本改过的东西放回去。
  *
  * **正常路径在 N 组结尾调一次;异常时在 `finally` 里再兜一次**(见文件末尾)。
  * 这是 v2.6 教训的推广:v2.6 只还原了**密码**,v2.7 补上**节点**与**所有者** ——
  * 脚本对系统状态做的任何修改,都必须由脚本自己收回。
  *
- * 三件事:
+ * 四件事:
  *   1. 清掉脚本建出来的残留节点
  *   2. 把「后端组」的所有者放回王思远(F 组会临时改成赵敏)
- *   3. 把 KC003 / KC004 的密码放回「初始密码 + 待首次登录」
+ *   3. 把演示账号的**组织归属**放回基线(v2.8 补 —— L 组会真的移出归属)
+ *   4. 把 KC003 / KC004 的密码放回「初始密码 + 待首次登录」
  *
  * ⚠️ 第 1 步为什么需要**换几个身份试**:
  *
@@ -291,7 +314,31 @@ async function restoreToolState() {
       }
     }
 
-    // 3) 演示账号密码(超管才能做)
+    // 3) 组织归属回到基线。
+    //
+    // 这一步是 v2.8 补的。脚本会**真的移出某人的归属**(见 `EXPECTED_ASSIGNMENTS`
+    // 的注释),而在此之前它只还原密码、节点、所有者 —— 归属没收,
+    // 于是王思远的「后端组」丢了,后面所有"组长能管本组"的断言全部失败。
+    for (const [employeeNo, titles] of Object.entries(EXPECTED_ASSIGNMENTS)) {
+      const user = users.find((u) => u.employeeNo === employeeNo);
+      if (user === undefined) continue;
+
+      const wantIds = titles
+        .map((title) => arr(tree.nodes).find((n) => n.title === title)?.id)
+        .filter((id) => id !== undefined);
+      const have = [...(user.scopeNodeIds ?? [])].sort().join('|');
+      const want = [...wantIds].sort().join('|');
+      if (have === want) continue;
+
+      const fixed = await api('PATCH', `/admin/users/${user.id}/assignments`, {
+        nodeIds: wantIds,
+      });
+      notes.push(
+        `把 ${employeeNo} 的归属放回「${titles.join('、')}」${fixed.status === 200 ? '' : `**失败**(${String(fixed.status)})`}`,
+      );
+    }
+
+    // 4) 演示账号密码(超管才能做)
     cookie = '';
     await login('KC001', [ADMIN_PASSWORD]);
     for (const employeeNo of ['KC003', 'KC004']) {
@@ -494,10 +541,25 @@ async function main() {
   const residue = tree.nodes.filter((node) => TOOL_NODE_TITLES.includes(node.title));
   const ownerWrong = groupOwnerNo !== 'KC003';
 
-  if (residue.length > 0 || ownerWrong) {
+  // 归属也要查 —— L 组会真的移出某人的归属(见 `EXPECTED_ASSIGNMENTS`)。
+  // 少了这一条,残留会以"组长改不动自己组里的东西"的形式暴露,极难往脚本上想。
+  const assignmentIssues = Object.entries(EXPECTED_ASSIGNMENTS).flatMap(([employeeNo, titles]) => {
+    const user = users.find((u) => u.employeeNo === employeeNo);
+    if (user === undefined) return [`缺账号 ${employeeNo}`];
+    const have = [...(user.scopeNodeIds ?? [])].sort().join('|');
+    const want = titles
+      .map((title) => nodeId(title))
+      .filter((id) => id !== undefined)
+      .sort()
+      .join('|');
+    return have === want ? [] : [`${employeeNo} 的归属与基线不一致`];
+  });
+
+  if (residue.length > 0 || ownerWrong || assignmentIssues.length > 0) {
     const why = [
       residue.length > 0 ? `多余测试节点 ${String(residue.length)} 个` : '',
       ownerWrong ? `「后端组」所有者是 ${String(groupOwnerNo)}` : '',
+      ...assignmentIssues,
     ]
       .filter((x) => x !== '')
       .join('、');

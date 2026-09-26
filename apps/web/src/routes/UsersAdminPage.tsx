@@ -12,7 +12,7 @@ import {
 } from '../features/admin/queries';
 import { describeReset } from '../features/admin/reset-note';
 import { useMe } from '../features/auth/queries';
-import { T_BADGE } from '../lib/typography';
+import { T_META } from '../lib/typography';
 
 /**
  * 人员管理(超管)。
@@ -57,12 +57,12 @@ function AssignmentsEditor({ user }: { user: OrgUserView }) {
 
   return (
     <div className="mt-2 rounded-md border border-slate-200 bg-slate-50 p-3">
-      <div className="text-[11px] text-slate-500">
+      <div className="text-xs text-slate-500">
         勾选他所属的部门 / 组。可多选 —— 一个人可以同属多个组或项目。
       </div>
 
       {outsideIds.length > 0 && (
-        <div className="mt-2 rounded border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] leading-relaxed text-amber-800">
+        <div className="mt-2 rounded border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs leading-relaxed text-amber-800">
           他还有 {outsideIds.length} 条归属挂在这张列表之外的节点上
           {outsidePaths.length > 0 && `(${outsidePaths.join('、')})`}。
           <b>这里保存会把这些归属删掉</b> —— 因为它们不在可选项里,而保存是整表替换。
@@ -71,7 +71,7 @@ function AssignmentsEditor({ user }: { user: OrgUserView }) {
 
       <div className="mt-2 max-h-40 space-y-1 overflow-auto">
         {options.map((scope) => (
-          <label key={scope.nodeId} className="flex items-center gap-2 text-xs text-slate-700">
+          <label key={scope.nodeId} className="flex items-center gap-2 text-sm text-slate-700">
             <input
               type="checkbox"
               checked={selected.has(scope.nodeId)}
@@ -86,7 +86,7 @@ function AssignmentsEditor({ user }: { user: OrgUserView }) {
           </label>
         ))}
         {options.length === 0 && (
-          <p className="text-xs text-slate-400">还没有任何组织节点,先去「组织架构」建部门。</p>
+          <p className="text-sm text-slate-400">还没有任何组织节点,先去「组织架构」建部门。</p>
         )}
       </div>
 
@@ -115,7 +115,7 @@ function AssignmentsEditor({ user }: { user: OrgUserView }) {
         >
           保存归属
         </Button>
-        <span className="text-[11px] text-slate-400">已选 {selected.size} 条</span>
+        <span className="text-xs text-slate-400">已选 {selected.size} 条</span>
       </div>
       <ErrorNote error={save.error} />
     </div>
@@ -147,7 +147,7 @@ export function UsersAdminPage() {
     <div className="mx-auto max-w-6xl space-y-8 px-8 py-8">
       <div>
         <h1 className="text-lg font-semibold text-slate-900">人员管理</h1>
-        <p className="mt-1 text-xs leading-relaxed text-slate-500">
+        <p className="mt-1 text-sm leading-relaxed text-slate-500">
           人员是<b>预置</b>的,不是自行注册的。几百人请用「组织架构 → 下载模板」批量导入,
           这里适合零星加人或单人调整。
         </p>
@@ -156,7 +156,7 @@ export function UsersAdminPage() {
       {/* ---------------- 建人 ---------------- */}
       <section className="rounded-lg border border-slate-200 bg-white p-4">
         <h2 className="text-sm font-medium text-slate-900">新建人员</h2>
-        <p className="mt-1 text-xs text-slate-500">
+        <p className="mt-1 text-sm text-slate-500">
           初始密码固定为 <code className="rounded bg-slate-100 px-1">123456</code>,
           对方首次登录会被要求改成「8 位以上且同时含字母与数字」的密码。
         </p>
@@ -213,11 +213,11 @@ export function UsersAdminPage() {
               setQuery(event.target.value);
             }}
             placeholder="按工号或姓名搜索"
-            className="w-56 rounded-md border border-slate-300 px-3 py-1.5 text-xs outline-none focus:border-blue-500"
+            className="w-56 rounded-md border border-slate-300 px-3 py-1.5 text-sm outline-none focus:border-blue-500"
           />
         </div>
 
-        {users.isPending && <p className="px-4 py-6 text-xs text-slate-400">加载中…</p>}
+        {users.isPending && <p className="px-4 py-6 text-sm text-slate-400">加载中…</p>}
         {users.isError && (
           <div className="px-4 py-3">
             <ErrorNote error={users.error} />
@@ -228,7 +228,7 @@ export function UsersAdminPage() {
           {(users.data ?? []).map((user) => (
             <li key={user.id} className="px-4 py-3">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="w-24 flex-none font-mono text-xs text-slate-500">
+                <span className="w-24 flex-none font-mono text-sm text-slate-500">
                   {user.employeeNo}
                 </span>
 
@@ -281,14 +281,14 @@ export function UsersAdminPage() {
                 */}
                 <span className="flex w-24 flex-none flex-wrap items-center gap-1">
                   {user.isSuperAdmin && (
-                    <span className={`rounded bg-violet-50 px-1 text-violet-700 ring-1 ring-violet-200 ${T_BADGE}`}>
+                    <span className={`rounded bg-violet-50 px-1 text-violet-700 ring-1 ring-violet-200 ${T_META}`}>
                       管理员
                     </span>
                   )}
 
                   {user.mustChangePassword && (
                     <span
-                      className={`rounded bg-amber-50 px-1 text-amber-700 ring-1 ring-amber-200 ${T_BADGE}`}
+                      className={`rounded bg-amber-50 px-1 text-amber-700 ring-1 ring-amber-200 ${T_META}`}
                       title="密码还是初始值 123456 —— 在本人改密之前,任何知道他工号的人都能登进这个账号"
                     >
                       初始密码未改
@@ -296,11 +296,11 @@ export function UsersAdminPage() {
                   )}
                 </span>
 
-                <span className="w-52 flex-none truncate text-[11px] text-slate-400">
+                <span className="w-52 flex-none truncate text-sm text-slate-400">
                   {user.scopePaths.length === 0 ? '未归属任何节点' : user.scopePaths.join('、')}
                 </span>
 
-                <span className="w-28 flex-none text-[11px] text-slate-400">
+                <span className="w-28 flex-none text-sm text-slate-400">
                   {user.lastLoginAt === null
                     ? '从未登录'
                     : `上次登录 ${new Date(user.lastLoginAt).toLocaleDateString('zh-CN')}`}
@@ -374,19 +374,19 @@ export function UsersAdminPage() {
         </ul>
 
         {users.data?.length === 0 && (
-          <p className="px-4 py-8 text-center text-xs text-slate-400">
+          <p className="px-4 py-8 text-center text-sm text-slate-400">
             没有匹配的人员。
           </p>
         )}
       </section>
 
-      <div className="rounded-md bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">
+      <div className="rounded-md bg-amber-50 px-3 py-2 text-sm leading-relaxed text-amber-800">
         ⚠️ 这里的下拉是改<b>账号状态</b>:选「已离职」会立刻踢他下线,
         并在他留下的每篇内容旁显示「已离职」。<b>不会</b>删除账号 ——
         删了他写的文档会变成「佚名」,审计日志也会断链。
       </div>
 
-      <div className="rounded-md bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-600">
+      <div className="rounded-md bg-slate-50 px-3 py-2 text-sm leading-relaxed text-slate-600">
         <b>同事忘了密码</b>,用上面每人右侧的「重置密码」:密码会回到
         <code className="mx-1 rounded bg-white px-1">123456</code>,
         他下次登录必须先改成自己的。这个动作会<b>立刻吊销他当前的登录</b>,

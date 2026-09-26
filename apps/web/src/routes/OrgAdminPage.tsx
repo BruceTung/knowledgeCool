@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 
 import { Button, ErrorNote, SelectField, TextField } from '../components/ui';
-import { T_BADGE, T_BODY } from '../lib/typography';
+import { T_BODY, T_META } from '../lib/typography';
 import { useCreateOrgNode, useOrgScopes, useOrgUsers } from '../features/admin/queries';
 import { OrgImportPanel } from '../features/admin/OrgImportPanel';
 import { useOrgTree } from '../features/org/queries';
@@ -35,7 +35,7 @@ export function OrgAdminPage() {
     <div className="mx-auto max-w-3xl space-y-8 px-8 py-8">
       <div>
         <h1 className="text-lg font-semibold text-slate-900">组织架构</h1>
-        <p className="mt-1 text-xs leading-relaxed text-slate-500">
+        <p className="mt-1 text-sm leading-relaxed text-slate-500">
           一级是<b>部门</b>(所有者 = 部长),二级是<b>组 / 项目</b>(所有者由部长任命)。
           再往下是使用者自己建的内容,不在这里维护。
         </p>
@@ -44,7 +44,7 @@ export function OrgAdminPage() {
       {/* ---------------- 建部门 ---------------- */}
       <section className="rounded-lg border border-slate-200 bg-white p-4">
         <h2 className="text-sm font-medium text-slate-900">新建部门</h2>
-        <p className="mt-1 text-xs text-slate-500">
+        <p className="mt-1 text-sm text-slate-500">
           部门必须有一个负责人(部长),否则这个部门没人能管。负责人必须是<b>在职</b>账号。
         </p>
         <div className="mt-3 flex flex-wrap items-end gap-2">
@@ -98,7 +98,7 @@ export function OrgAdminPage() {
       {/* ---------------- 建组 ---------------- */}
       <section className="rounded-lg border border-slate-200 bg-white p-4">
         <h2 className="text-sm font-medium text-slate-900">新建组 / 项目</h2>
-        <p className="mt-1 text-xs text-slate-500">
+        <p className="mt-1 text-sm text-slate-500">
           组必须挂在某个部门下面。不指定负责人时,由部门负责人代管
           —— 他本来就能改本部门的全部内容。
         </p>
@@ -175,7 +175,7 @@ export function OrgAdminPage() {
       {/* ---------------- 现有结构 ---------------- */}
       <section className="rounded-lg border border-slate-200 bg-white p-4">
         <h2 className="text-sm font-medium text-slate-900">现有结构</h2>
-        {tree.isPending && <p className="mt-2 text-xs text-slate-400">加载中…</p>}
+        {tree.isPending && <p className="mt-2 text-sm text-slate-400">加载中…</p>}
         {tree.data !== undefined && (
           <ul className="mt-2 space-y-1">
             {buildTree(tree.data.nodes).map((department) => (
@@ -184,7 +184,7 @@ export function OrgAdminPage() {
                   <Link to={`/n/${department.id}`} className="text-slate-900 hover:underline">
                     {department.title}
                   </Link>
-                  <span className="text-[11px] text-slate-400">
+                  <span className="text-xs text-slate-400">
                     部长 {department.ownerName} · {department.children.length} 个子节点
                   </span>
                 </div>
@@ -195,7 +195,7 @@ export function OrgAdminPage() {
                         {/* ⚠️ 必须按 kind 区分:空间与页面在同一棵树上(§4.1),
                             把文档也标成「组长」会让人以为它是个组 */}
                         <span
-                          className={`flex-none rounded px-1 ${T_BADGE} ${
+                          className={`flex-none rounded px-1 ${T_META} ${
                             child.kind === 'space'
                               ? 'bg-teal-50 text-teal-700'
                               : 'bg-slate-100 text-slate-500'
@@ -206,7 +206,7 @@ export function OrgAdminPage() {
                         <Link to={`/n/${child.id}`} className="text-slate-600 hover:underline">
                           {child.title}
                         </Link>
-                        <span className="text-[11px] text-slate-400">
+                        <span className="text-xs text-slate-400">
                           {child.kind === 'space' ? '组长' : '所有者'} {child.ownerName}
                         </span>
                       </li>
@@ -218,7 +218,7 @@ export function OrgAdminPage() {
           </ul>
         )}
         {tree.data?.nodes.length === 0 && (
-          <p className="mt-2 text-xs text-slate-400">
+          <p className="mt-2 text-sm text-slate-400">
             还没有任何部门。可以手工建,也可以用下面的 Excel 一次导入。
           </p>
         )}

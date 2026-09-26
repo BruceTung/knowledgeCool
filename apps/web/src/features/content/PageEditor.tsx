@@ -221,7 +221,7 @@ export function PageEditor({
       )}
 
       {state === 'conflict' && (
-        <div className="mx-6 mt-3 flex items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+        <div className="mx-8 mt-3 flex items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
           <span>这篇文档在你编辑期间被其他人改过了。为避免覆盖对方的修改,本次内容没有保存。</span>
           <Button variant="secondary" onClick={() => window.location.reload()}>
             重新加载
@@ -230,12 +230,12 @@ export function PageEditor({
       )}
 
       {state === 'error' && (
-        <div className="mx-6 mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+        <div className="mx-8 mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
           保存失败。内容还留在编辑器里,继续输入会自动重试。
         </div>
       )}
 
-      <div className="min-h-0 flex-1 overflow-auto px-6 py-5">
+      <div className="min-h-0 flex-1 overflow-auto px-8 py-5">
         <EditorContent editor={editor} />
       </div>
 
@@ -288,10 +288,10 @@ export function SaveStateLabel({ state }: { state: SaveState }) {
  * 收敛成常量:固定高度 + 最小宽度 + 居中对齐,新增按钮不会再各写一份。
  */
 const TOOL_BUTTON_CLASS =
-  'flex h-6 min-w-[26px] items-center justify-center rounded px-1.5 text-xs leading-none transition-colors';
-const TOOL_BUTTON_IDLE_CLASS = 'text-slate-600 hover:bg-slate-100';
+  'flex h-7 min-w-[32px] items-center justify-center rounded-md px-2 text-sm leading-none transition-colors';
+const TOOL_BUTTON_IDLE_CLASS = 'text-slate-600 hover:bg-slate-100 hover:text-slate-900';
 const TOOL_BUTTON_ACTIVE_CLASS = 'bg-slate-900 text-white';
-const TOOL_DIVIDER_CLASS = 'mx-1.5 h-3.5 w-px bg-slate-200';
+const TOOL_DIVIDER_CLASS = 'mx-1.5 h-4 w-px bg-slate-200';
 
 function Toolbar({
   editor,
@@ -325,7 +325,7 @@ function Toolbar({
   );
 
   return (
-    <div className="flex flex-wrap items-center gap-0.5 border-b border-slate-200 px-6 py-2">
+    <div className="flex flex-wrap items-center gap-0.5 border-b border-slate-200 px-8 py-2">
       {button('B', editor.isActive('bold'), () => editor.chain().focus().toggleBold().run(), '粗体')}
       {button('I', editor.isActive('italic'), () => editor.chain().focus().toggleItalic().run(), '斜体')}
       {button('U', editor.isActive('underline'), () => editor.chain().focus().toggleUnderline().run(), '下划线')}

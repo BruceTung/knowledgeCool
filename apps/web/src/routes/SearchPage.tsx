@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 
 import { ErrorNote } from '../components/ui';
 import { useSearch } from '../features/search/queries';
-import { T_BADGE } from '../lib/typography';
+import { T_META } from '../lib/typography';
 
 /**
  * 检索结果页(DESIGN.md §7.2 的 `/search`)。
@@ -30,7 +30,7 @@ export function SearchPage() {
   return (
     <div className="mx-auto max-w-3xl px-8 py-8">
       <h1 className="text-lg font-semibold text-slate-900">检索</h1>
-      <p className="mt-1 text-xs text-slate-500">
+      <p className="mt-1 text-sm text-slate-500">
         搜的是标题与正文,中文可直接搜。全公司可读的内容都能搜到。
       </p>
 
@@ -59,7 +59,7 @@ export function SearchPage() {
 
       {query.trim() !== '' && search.data !== undefined && (
         <>
-          <p className="mt-4 text-xs text-slate-400">
+          <p className="mt-4 text-sm text-slate-400">
             「{search.data.query}」命中 {search.data.hits.length} 条 · {search.data.tookMs}ms
           </p>
           {search.data.hits.length === 0 ? (
@@ -99,17 +99,17 @@ function ResultRow({ hit }: { hit: SearchHit }) {
       <div className="flex items-center gap-2">
         <span className="text-sm font-medium text-slate-800">{hit.title}</span>
         {hit.matchedIn === 'title' && (
-          <span className={`rounded bg-blue-50 px-1 text-blue-700 ${T_BADGE}`}>标题命中</span>
+          <span className={`rounded bg-blue-50 px-1 text-blue-700 ${T_META}`}>标题命中</span>
         )}
         <span className={`ml-auto text-slate-400 text-xs`}>
           {new Date(hit.updatedAt).toLocaleDateString('zh-CN')}
         </span>
       </div>
       {hit.breadcrumb.length > 0 && (
-        <div className="mt-0.5 text-[11px] text-slate-400">{hit.breadcrumb.join(' / ')}</div>
+        <div className="mt-0.5 text-xs text-slate-400">{hit.breadcrumb.join(' / ')}</div>
       )}
       {hit.snippet !== '' && (
-        <p className="mt-1 line-clamp-2 text-xs text-slate-500">{hit.snippet}</p>
+        <p className="mt-1 line-clamp-2 text-sm text-slate-500">{hit.snippet}</p>
       )}
     </button>
   );

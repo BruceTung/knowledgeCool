@@ -15,7 +15,7 @@ import { useMemo, useState, type DragEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { ErrorNote } from '../../components/ui';
-import { T_BADGE, T_BODY } from '../../lib/typography';
+import { T_BODY, T_LABEL, T_META } from '../../lib/typography';
 import { useCreateNode, useDeleteNode, useMoveNode, useUpdateNode } from './queries';
 import {
   buildTree,
@@ -58,17 +58,16 @@ function kindBadge(node: OrgTreeNode): string {
 /**
  * 行内操作按钮的统一规格。
  *
- * ⚠️ 这几个按钮原来是**各写各的** —— 有的带 `text-[11px]`,有的不写
+ * ⚠️ 这几个按钮原来是**各写各的** —— 有的带 `text-xs`,有的不写
  * (于是继承父级的字号),于是一行里 6 个按钮出现两种字号。
  * 这就是「图标、字体大小、字样都不对称」最直接的来源(用户 2026-09-27 反馈)。
  *
- * 收敛成常量之后,新增按钮不会再各写一份规格。
- *
- * v2.6 起尺寸跟着刻度走:字形 12px(`text-xs`)、点击区 24px(`h-6 w-6`)——
- * 原来字形 13px 挤在 20px 的方框里,鼠标也不好点。
+ * v2.8:点击区 24px、字形跟着内容档(14px)。Atlassian 的规范里
+ * "配合图标时用 Medium 字重",所以这里也给 `font-medium` —— 字形小、
+ * 又细的时候,图标会显得脏。
  */
-const ROW_ACTION_CLASS = `flex h-6 w-6 flex-none items-center justify-center rounded text-xs text-slate-400 hover:bg-slate-100 hover:text-slate-700`;
-const ROW_ACTION_DANGER_CLASS = `flex h-6 w-6 flex-none items-center justify-center rounded text-xs text-slate-400 hover:bg-red-50 hover:text-red-600`;
+const ROW_ACTION_CLASS = `flex h-6 w-6 flex-none items-center justify-center rounded text-sm font-medium text-slate-400 transition-colors hover:bg-slate-200/70 hover:text-slate-700`;
+const ROW_ACTION_DANGER_CLASS = `flex h-6 w-6 flex-none items-center justify-center rounded text-sm font-medium text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600`;
 
 export function OrgTreePanel({
   tree,
@@ -223,10 +222,9 @@ export function OrgTreePanel({
     const nodeManageable = manageable.has(node.id) || (isSuperAdmin && node.depth === 0);
 
     const rowClass = [
-      // `h-8`(32px)配内容级字号。原来是 `h-7` 配 13px —— 用户两次反馈左栏
-      // "字体太小",根子就是这里:树行是**要被读的内容**(`T_BODY`),
-      // 却比正文(15px)小了两级、和标签一个尺寸。
-      `group relative flex h-8 items-center gap-1 rounded-md pr-1 ${T_BODY} transition-colors`,
+      // `h-9`(36px)配 14px 内容。Atlassian 的 `font.body` = 14/20,
+      // 20px 行高的文字放进 36px 的行里,上下各留 8px —— 这是列表项的常规留白。
+      `group relative flex h-9 items-center gap-1.5 rounded-md pr-1.5 ${T_BODY} transition-colors`,
       isActive ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:bg-white',
       forbidden && dragId !== null ? 'opacity-40' : '',
       target === 'into' ? 'ring-2 ring-blue-400' : '',
@@ -292,13 +290,33 @@ export function OrgTreePanel({
             <span className="pointer-events-none absolute inset-x-1 -bottom-px h-0.5 rounded bg-blue-500" />
           )}
 
+          {/*
+            层级引导线(v2.8)。
+
+            ⚠️ 只有缩进是不够的:第三级以下,"这个页面属于哪个组"要靠数像素去猜 ——
+            用户在最早的反馈里就说过「第三级组下面的页面没有缩进了,这样看不到递进关系」。
+            Confluence 与 Notion 都用这种细竖线把层级**画**出来,而不是让人去算。
+
+            位置:第 i 级祖先的引导线落在 `16 + i*13`。
+            缩进公式是 `depth*13 + 6`,箭头占 20px,**`+10` 正好是箭头的中心** ——
+            所以竖线看起来是从上一级的展开箭头正中延伸下来的。
+            用 `inset-y-0` 让它在相邻行之间连成一条,而不是一段一段的。
+          */}
+          {Array.from({ length: Math.min(node.depth, 8) }, (_, level) => (
+            <span
+              key={`guide-${String(level)}`}
+              aria-hidden
+              className="pointer-events-none absolute inset-y-0 w-px bg-slate-200"
+              style={{ left: `${String(16 + level * 13)}px` }}
+            />
+          ))}
+
           {node.children.length > 0 ? (
             <button
               type="button"
-              // ⚠️ 展开箭头原来只有 9px —— 那么小的 ▾/▸ 几乎看不出是箭头。
-              // (这里刻意不写出那个类名:字号扫描器不区分注释,见 `lib/typography.ts`。)
-              // 它是**要能被认出**的控件,不是装饰,所以跟着徽章一档走。
-              className="flex h-5 w-5 flex-none items-center justify-center text-xs text-slate-400 hover:text-slate-700"
+              // 展开箭头:12px 的 ▾/▸。它是"一眼认出"的控件,不是要被读的内容,
+              // 所以留在最小档 —— 但**不再是 9px**(那是用户看到的那版)。
+              className="flex h-5 w-5 flex-none items-center justify-center text-xs text-slate-400 transition-colors hover:text-slate-700"
               onClick={(event) => {
                 event.stopPropagation();
                 toggleExpanded(node.id);
@@ -312,7 +330,7 @@ export function OrgTreePanel({
           )}
 
           <span
-            className={`flex h-5 w-5 flex-none items-center justify-center rounded ${T_BADGE} font-medium ${
+            className={`flex h-5 w-5 flex-none items-center justify-center rounded text-xs font-medium ${
               node.depth === 0
                 ? 'bg-blue-50 text-blue-700'
                 : node.kind === 'space'
@@ -346,7 +364,7 @@ export function OrgTreePanel({
               // ⚠️ 颜色刻意是**中性灰**,不是琥珀色。
               // 琥珀色等于暗示"有待处理的事",而评论只是评论 ——
               // 这个角标数的是"有几条评论",不是"有几个待解决问题"。
-              className={`flex-none rounded-full bg-slate-100 px-1.5 ${T_BADGE} tabular-nums text-slate-500`}
+              className="flex-none rounded-full bg-slate-100 px-1.5 py-0.5 text-xs font-medium tabular-nums text-slate-500"
               title={`${String(node.commentCount)} 条评论`}
             >
               {node.commentCount}
@@ -354,7 +372,7 @@ export function OrgTreePanel({
           )}
 
           {node.status !== 'published' && (
-            <span className={`flex-none rounded bg-slate-100 px-1 ${T_BADGE} text-slate-500`}>
+            <span className="flex-none rounded bg-slate-100 px-1.5 py-0.5 text-xs font-medium text-slate-500">
               {node.status === 'draft' ? '草稿' : '归档'}
             </span>
           )}
@@ -470,51 +488,66 @@ export function OrgTreePanel({
       加宽比缩字更对 —— 被截掉的名字是**信息丢失**,字小了只是**读着费劲**。
     */
     <div className="flex h-full w-80 flex-none flex-col border-r border-slate-200 bg-slate-50">
-      <div className="flex flex-none items-center gap-2 border-b border-slate-200 px-3 py-2.5">
-        <span className={`flex-1 font-medium text-slate-500 text-xs`}>
-          组织结构 · {countNodes(nodes)}
-        </span>
+      <div className="flex flex-none items-center justify-between gap-2 border-b border-slate-200 px-4 py-3">
+        <span className={`text-slate-500 ${T_LABEL}`}>组织结构 · {countNodes(nodes)}</span>
         <button
           type="button"
           title="新建页面(不挂在任何部门下,只有管理员可以)"
           disabled={createNode.isPending}
-          className={`rounded px-1.5 py-0.5 text-slate-500 hover:bg-white hover:text-slate-800 disabled:opacity-50 text-xs`}
+          className="rounded-md px-2 py-1 text-sm text-slate-500 transition-colors hover:bg-white hover:text-slate-900 disabled:opacity-50"
           onClick={() => handleCreate(null, 'document')}
         >
           + 顶层
         </button>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto px-2 pb-3">
+      <div className="min-h-0 flex-1 overflow-auto px-2 pb-4">
         {dragging && (
-          <div
-            className={`mb-1 rounded-md border border-dashed px-2 py-1 text-center transition-colors text-xs ${
-              rootDropActive
-                ? 'border-blue-400 bg-blue-50 text-blue-700'
-                : 'border-slate-300 text-slate-400'
-            }`}
-            onDragOver={(event) => {
-              event.preventDefault();
-              setRootDropActive(true);
-            }}
-            onDragLeave={() => setRootDropActive(false)}
-            onDrop={(event) => {
-              event.preventDefault();
-              setRootDropActive(false);
-              if (dragId === null) return;
-              const dragged = findNode(nodes, dragId);
-              setDragId(null);
-              if (dragged !== undefined) {
-                moveNode.mutate({ nodeId: dragged.id, newParentId: null, version: dragged.version });
-              }
-            }}
-          >
-            放到这里 → 移到顶层
+          /*
+            ⚠️ 拖拽说明**只在拖拽时出现**,不再常驻在侧栏底部。
+
+            原来它是一段固定的三行灰字,永久占着左下角 —— 那是最典型的
+            "信息架构没做,用说明书补"的味道:一块常驻的小字说明既难看,
+            又因为一直在那儿而没人会读。放到**拖拽进行中**之后,
+            它正好出现在需要它的那一刻,而且旁边就是落点提示框。
+          */
+          <div className="mb-1 space-y-1">
+            <div
+              className={`rounded-md border border-dashed px-2 py-1.5 text-center text-xs transition-colors ${
+                rootDropActive
+                  ? 'border-blue-400 bg-blue-50 text-blue-700'
+                  : 'border-slate-300 text-slate-400'
+              }`}
+              onDragOver={(event) => {
+                event.preventDefault();
+                setRootDropActive(true);
+              }}
+              onDragLeave={() => setRootDropActive(false)}
+              onDrop={(event) => {
+                event.preventDefault();
+                setRootDropActive(false);
+                if (dragId === null) return;
+                const dragged = findNode(nodes, dragId);
+                setDragId(null);
+                if (dragged !== undefined) {
+                  moveNode.mutate({
+                    nodeId: dragged.id,
+                    newParentId: null,
+                    version: dragged.version,
+                  });
+                }
+              }}
+            >
+              放到这里 → 移到顶层
+            </div>
+            <p className={`px-1 text-slate-400 ${T_META}`}>
+              上 / 下四分之一排到前 / 后,中间成为子节点。
+            </p>
           </div>
         )}
 
         {nodes.length === 0 ? (
-          <p className={`px-2 py-6 text-center leading-relaxed text-slate-400 text-xs`}>
+          <p className={`px-3 py-8 text-center leading-relaxed text-slate-400 ${T_BODY}`}>
             组织架构还是空的。
             <br />
             管理员可以到「组织架构」里建部门,或用 Excel 一次性导入全员名单。
@@ -524,17 +557,24 @@ export function OrgTreePanel({
         )}
       </div>
 
+      {/*
+        ⚠️ 这里原来有一段**常驻的三行灰色说明文字**(讲拖拽怎么分上/下四分之一、
+        悬停能看到 ⚙ 与 ☰)。它已经挪走了:
+          · 拖拽说明 → 只在拖拽时出现(见上方)
+          · 悬停能看到什么 → 是按钮的 `title` 该回答的事,不是侧栏该常驻的字
+        一个侧栏的底部塞满小字说明,是"信息架构没做、用说明书补"的典型味道。
+      */}
       <div className="flex-none space-y-0.5 border-t border-slate-200 p-2">
         <button
           type="button"
-          className={`block w-full rounded-md px-2 py-1.5 text-left text-slate-500 hover:bg-white hover:text-slate-800 text-xs`}
+          className={`block w-full rounded-md px-3 py-2 text-left text-slate-500 transition-colors hover:bg-white hover:text-slate-900 ${T_BODY}`}
           onClick={() => void navigate('/trash')}
         >
           回收站 →
         </button>
         <button
           type="button"
-          className={`block w-full rounded-md px-2 py-1.5 text-left text-slate-500 hover:bg-white hover:text-slate-800 text-xs`}
+          className={`block w-full rounded-md px-3 py-2 text-left text-slate-500 transition-colors hover:bg-white hover:text-slate-900 ${T_BODY}`}
           onClick={() => void navigate('/audit')}
         >
           审计日志 →
@@ -542,10 +582,6 @@ export function OrgTreePanel({
         <ErrorNote
           error={moveNode.error ?? createNode.error ?? updateNode.error ?? deleteNode.error}
         />
-        <p className={`px-2 pt-1 leading-relaxed text-slate-400 text-xs`}>
-          可直接拖拽调整层级与顺序:上/下四分之一是"排到前/后",中间是"成为子节点"。
-          悬停节点行可见 ⚙(权限 · 谁能改)与 ☰(成员 · 归属在哪)。
-        </p>
       </div>
     </div>
   );
