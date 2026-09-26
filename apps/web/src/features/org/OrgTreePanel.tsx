@@ -1,78 +1,88 @@
-import { can, type PageNode, type SpaceRole } from '@knowledgecool/shared';
+/**
+ * 组织树面板(DESIGN.md §7.2 的左侧栏)。
+ *
+ * ⚠️ 这是 v2.0 与前几版差别最大的界面:以前是"选了某个空间才出现一棵页面树",
+ * 现在是**登录后直接看到整个公司的组织架构**,点开任意节点就是它的内容。
+ *
+ * 权限在这里**只用来决定显示什么**。服务端仍是唯一裁判:
+ * 即使有人把按钮抠出来点,后端照样 403。
+ * 前端判断用的是服务端算好的 `editableNodeIds` / `manageableNodeIds` ——
+ * **不在前端重算一遍权限**(那必然与服务端漂移,而漂移的表现是
+ * "按钮在但点了报错"或反之)。
+ */
+import type { MyScope, NodeTreeResponse } from '@knowledgecool/shared';
 import { useMemo, useState, type DragEvent } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 
 import { ErrorNote } from '../../components/ui';
-import { useCreatePage, useDeletePage, useMovePage, useUpdatePage } from './queries';
+import { useCreateNode, useDeleteNode, useMoveNode, useUpdateNode } from './queries';
 import {
-  countPages,
+  buildTree,
+  countNodes,
   defaultExpandedIds,
   expandedIdsFor,
   findNode,
   isInsideSubtree,
   locateNode,
+  type OrgTreeNode,
 } from './tree-utils';
 
-/** 拖拽落点的三种语义。与原型一致:上四分之一=前,下四分之一=后,中间=成为子节点。 */
+/** 拖拽落点的三种语义:上四分之一=前,下四分之一=后,中间=成为子节点。 */
 type DropZone = 'before' | 'into' | 'after';
 
-interface PageTreePanelProps {
-  spaceId: string;
-  nodes: readonly PageNode[];
-  role: SpaceRole;
-  /** 当前打开的页面 —— 高亮它,并自动展开到它的路径。 */
-  activePageId: string | undefined;
+interface OrgTreePanelProps {
+  tree: NodeTreeResponse;
   /**
-   * 各页面的未解决评论数(§8.4:阶段一不发通知,靠这个角标让人知道有讨论)。
-   * 缺省为空对象 —— 评论数拿不到不该影响树的渲染。
+   * 超管对**一级部门**也有管理入口 —— 换部长只有他能做。
+   * 服务端给的 `manageableNodeIds` 里不含他(他不是内容所有者),
+   * 所以这一条得单独放行,否则"换部长"在界面上没有入口。
    */
-  commentCounts?: Record<string, number>;
+  isSuperAdmin: boolean;
+  /** 我的组织归属 —— 用来判断"我能在这里新建吗" */
+  scopes: readonly MyScope[];
+  /** 当前打开的节点,高亮并自动展开到它 */
+  activeNodeId: string | undefined;
+  onOpenGrants: (nodeId: string, title: string) => void;
 }
 
-/**
- * 页面树面板(DESIGN.md §7.2 的左侧栏)。
- *
- * 折叠状态、拖拽状态都是**本地 UI 状态**,不进全局 store ——
- * 它们只在这个面板内有意义(Zustand 留给 M4 之后真正跨组件的选中态)。
- *
- * 权限在这里只用来**决定显示什么**。服务端仍是唯一裁判:
- * 即使有人把按钮抠出来点,后端照样 403。
- */
-export function PageTreePanel({
-  spaceId,
-  nodes,
-  role,
-  activePageId,
-  commentCounts,
-}: PageTreePanelProps) {
-  const navigate = useNavigate();
-  const createPage = useCreatePage(spaceId);
-  const updatePage = useUpdatePage(spaceId);
-  const movePage = useMovePage(spaceId);
-  const deletePage = useDeletePage(spaceId);
+/** 节点类型的中文短标。 */
+function kindBadge(node: OrgTreeNode): string {
+  if (node.depth === 0) return '部';
+  if (node.kind === 'space') return '组';
+  return '页';
+}
 
-  // 与后端共用同一份能力矩阵,不手写 role === 'editor' || role === 'admin'
-  const canCreate = can(role, 'page.create');
-  const canEdit = can(role, 'page.edit');
-  const canDelete = can(role, 'page.delete');
+export function OrgTreePanel({
+  tree,
+  scopes,
+  isSuperAdmin,
+  activeNodeId,
+  onOpenGrants,
+}: OrgTreePanelProps) {
+  const navigate = useNavigate();
+  const createNode = useCreateNode();
+  const updateNode = useUpdateNode();
+  const moveNode = useMoveNode();
+  const deleteNode = useDeleteNode();
+
+  const nodes = useMemo(() => buildTree(tree.nodes), [tree.nodes]);
+  const editable = useMemo(() => new Set(tree.editableNodeIds), [tree.editableNodeIds]);
+  const manageable = useMemo(() => new Set(tree.manageableNodeIds), [tree.manageableNodeIds]);
 
   /**
-   * 展开状态用「派生 + 覆盖」,而不是把最终结果存进 state。
+   * 展开状态用「派生 + 覆盖」而不是把最终结果存进 state。
    *
-   * 自动展开的部分(前两层 + 当前页所在路径)完全由 nodes 算出来,state 只存
-   * 用户**手动改过**的节点。两个好处:
-   *  1. 不需要 effect —— 在 effect 里同步 setState 会触发级联渲染
-   *     (eslint 的 react-hooks 规则会直接拦下来);
-   *  2. 树刷新后不会出现莫名的开合跳变:自动部分随时跟着数据走,
-   *     手动部分不会被覆盖掉。
+   * 自动展开的部分(部门层 + 当前节点所在路径)完全由数据算出来,
+   * state 只存用户**手动改过**的节点。这样既不需要 effect(在 effect 里
+   * 同步 setState 会触发级联渲染),树刷新后也不会出现莫名的开合跳变。
    */
   const autoExpanded = useMemo(() => {
     const ids = new Set(defaultExpandedIds(nodes));
-    if (activePageId !== undefined) {
-      for (const id of expandedIdsFor(nodes, activePageId)) ids.add(id);
+    if (activeNodeId !== undefined) {
+      for (const id of expandedIdsFor(nodes, activeNodeId)) ids.add(id);
     }
     return ids;
-  }, [nodes, activePageId]);
+  }, [nodes, activeNodeId]);
 
   const [overrides, setOverrides] = useState<ReadonlyMap<string, boolean>>(() => new Map());
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -80,7 +90,6 @@ export function PageTreePanel({
   const [dropTarget, setDropTarget] = useState<{ id: string; zone: DropZone } | null>(null);
   const [rootDropActive, setRootDropActive] = useState(false);
 
-  /** 手动设置优先于自动展开。 */
   const isNodeExpanded = (id: string): boolean => overrides.get(id) ?? autoExpanded.has(id);
 
   const setExpandedState = (id: string, open: boolean): void => {
@@ -90,6 +99,21 @@ export function PageTreePanel({
   const toggleExpanded = (id: string): void => {
     setExpandedState(id, !isNodeExpanded(id));
   };
+
+  /** 我的组织归属覆盖到的节点集合(含各自子树)。 */
+  function assignedWithin(nodeId: string): boolean {
+    return scopes.some((scope) => scope.nodeId === nodeId || isInsideSubtree(nodes, scope.nodeId, nodeId));
+  }
+
+  /**
+   * 能在这一行下面新建吗?
+   *
+   * 与服务端 `requireCreateUnder` 同一套判据:能改这个节点,或归属在它范围内。
+   * 这只是"要不要显示 + 号";真正的拒绝在服务端。
+   */
+  function canCreateUnder(node: OrgTreeNode): boolean {
+    return editable.has(node.id) || assignedWithin(node.id);
+  }
 
   function zoneFromEvent(event: DragEvent<HTMLElement>): DropZone {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -106,7 +130,7 @@ export function PageTreePanel({
     return isInsideSubtree(nodes, dragId, targetId);
   }
 
-  function performMove(targetId: string, zone: DropZone) {
+  function performMove(targetId: string, zone: DropZone): void {
     if (dragId === null) return;
     const dragged = findNode(nodes, dragId);
     if (dragged === undefined) return;
@@ -135,46 +159,49 @@ export function PageTreePanel({
       return;
     }
 
-    movePage.mutate({
-      pageId: dragged.id,
+    moveNode.mutate({
+      nodeId: dragged.id,
       newParentId,
       version: dragged.version,
       ...(newPosition === undefined ? {} : { newPosition }),
     });
   }
 
-  function handleCreate(parentId: string | null) {
-    createPage.mutate(
-      { parentId },
+  function handleCreate(parentId: string | null, kind: 'space' | 'document'): void {
+    createNode.mutate(
+      { parentId, kind },
       {
         onSuccess: (created) => {
-          // 新建后要保证父节点是展开的,否则新页面看不见
+          // 新建后保证父节点是展开的,否则新节点看不见
           if (parentId !== null) setExpandedState(parentId, true);
           setRenamingId(created.id);
-          void navigate(`/s/${spaceId}/p/${created.id}`);
+          void navigate(`/n/${created.id}`);
         },
       },
     );
   }
 
-  function handleRename(node: PageNode, value: string) {
+  function handleRename(node: OrgTreeNode, value: string): void {
     setRenamingId(null);
     const next = value.trim();
     if (next === '' || next === node.title) return;
-    updatePage.mutate({ pageId: node.id, title: next, version: node.version });
+    updateNode.mutate({ nodeId: node.id, title: next, version: node.version });
   }
 
-  function handleDelete(node: PageNode) {
-    const label = node.children.length > 0 ? `「${node.title}」及其所有子页面` : `「${node.title}」`;
+  function handleDelete(node: OrgTreeNode): void {
+    const size = countNodes([node]);
+    const label = size > 1 ? `「${node.title}」及其下 ${String(size - 1)} 个节点` : `「${node.title}」`;
     if (!window.confirm(`将 ${label} 移入回收站?`)) return;
-    deletePage.mutate(node.id);
+    deleteNode.mutate(node.id);
   }
 
-  function renderNode(node: PageNode) {
+  function renderNode(node: OrgTreeNode) {
     const isExpanded = isNodeExpanded(node.id);
-    const isActive = node.id === activePageId;
+    const isActive = node.id === activeNodeId;
     const forbidden = dragId !== null && isForbiddenTarget(node.id);
     const target = dropTarget?.id === node.id ? dropTarget.zone : null;
+    const nodeEditable = editable.has(node.id);
+    const nodeManageable = manageable.has(node.id) || (isSuperAdmin && node.depth === 0);
 
     const rowClass = [
       'group relative flex items-center gap-1 rounded-md pr-1 text-sm transition-colors',
@@ -189,12 +216,12 @@ export function PageTreePanel({
           role="treeitem"
           aria-selected={isActive}
           tabIndex={0}
-          draggable={canEdit && renamingId !== node.id}
+          draggable={nodeEditable && renamingId !== node.id}
           className={rowClass}
-          style={{ paddingLeft: `${String(node.depth * 12 + 4)}px` }}
-          onClick={() => void navigate(`/s/${spaceId}/p/${node.id}`)}
+          style={{ paddingLeft: `${String((node.depth > 2 ? 2 : node.depth) * 12 + 4)}px` }}
+          onClick={() => void navigate(`/n/${node.id}`)}
           onKeyDown={(event) => {
-            if (event.key === 'Enter') void navigate(`/s/${spaceId}/p/${node.id}`);
+            if (event.key === 'Enter') void navigate(`/n/${node.id}`);
           }}
           onDragStart={(event) => {
             setDragId(node.id);
@@ -228,7 +255,6 @@ export function PageTreePanel({
             performMove(node.id, zone);
           }}
         >
-          {/* 落位指示线:before / after */}
           {target === 'before' && (
             <span className="pointer-events-none absolute inset-x-1 -top-px h-0.5 rounded bg-blue-500" />
           )}
@@ -252,6 +278,18 @@ export function PageTreePanel({
             <span className="h-4 w-4 flex-none" />
           )}
 
+          <span
+            className={`flex h-4 w-4 flex-none items-center justify-center rounded text-[9px] ${
+              node.depth === 0
+                ? 'bg-blue-50 text-blue-700'
+                : node.kind === 'space'
+                  ? 'bg-teal-50 text-teal-700'
+                  : 'bg-slate-100 text-slate-500'
+            }`}
+          >
+            {kindBadge(node)}
+          </span>
+
           {renamingId === node.id ? (
             <input
               autoFocus
@@ -270,12 +308,12 @@ export function PageTreePanel({
             </span>
           )}
 
-          {(commentCounts?.[node.id] ?? 0) > 0 && renamingId !== node.id && (
+          {node.openCommentCount > 0 && renamingId !== node.id && (
             <span
               className="flex-none rounded-full bg-amber-50 px-1.5 text-[10px] text-amber-700 ring-1 ring-amber-200"
-              title={`${String(commentCounts?.[node.id] ?? 0)} 条未解决评论`}
+              title={`${String(node.openCommentCount)} 条未解决评论`}
             >
-              {commentCounts?.[node.id] ?? 0}
+              {node.openCommentCount}
             </span>
           )}
 
@@ -285,22 +323,48 @@ export function PageTreePanel({
             </span>
           )}
 
-          {(canCreate || canEdit || canDelete) && renamingId !== node.id && (
+          {renamingId !== node.id && (
             <span className="flex flex-none items-center opacity-0 transition-opacity group-hover:opacity-100">
-              {canCreate && (
+              {canCreateUnder(node) && (
+                <>
+                  <button
+                    type="button"
+                    title="在此新建页面"
+                    className="h-5 w-5 rounded text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      handleCreate(node.id, 'document');
+                    }}
+                  >
+                    +
+                  </button>
+                  <button
+                    type="button"
+                    title="在此新建子空间 / 组"
+                    className="h-5 w-5 rounded text-[11px] text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      handleCreate(node.id, 'space');
+                    }}
+                  >
+                    ⊞
+                  </button>
+                </>
+              )}
+              {nodeManageable && (
                 <button
                   type="button"
-                  title="新建子页面"
-                  className="h-5 w-5 rounded text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                  title="权限设置"
+                  className="h-5 w-5 rounded text-[11px] text-slate-400 hover:bg-slate-100 hover:text-slate-700"
                   onClick={(event) => {
                     event.stopPropagation();
-                    handleCreate(node.id);
+                    onOpenGrants(node.id, node.title);
                   }}
                 >
-                  +
+                  ⚙
                 </button>
               )}
-              {canEdit && (
+              {nodeEditable && (
                 <button
                   type="button"
                   title="重命名"
@@ -313,7 +377,7 @@ export function PageTreePanel({
                   ✎
                 </button>
               )}
-              {canDelete && (
+              {nodeEditable && (
                 <button
                   type="button"
                   title="移入回收站"
@@ -343,19 +407,17 @@ export function PageTreePanel({
     <div className="flex h-full w-72 flex-none flex-col border-r border-slate-200 bg-slate-50">
       <div className="flex flex-none items-center gap-2 px-3 py-2">
         <span className="flex-1 text-[11px] font-medium tracking-wide text-slate-400">
-          页面 · {countPages(nodes)}
+          组织结构 · {countNodes(nodes)}
         </span>
-        {canCreate && (
-          <button
-            type="button"
-            title="新建顶层页面"
-            disabled={createPage.isPending}
-            className="rounded px-1.5 text-xs text-slate-500 hover:bg-white hover:text-slate-800 disabled:opacity-50"
-            onClick={() => handleCreate(null)}
-          >
-            + 新建
-          </button>
-        )}
+        <button
+          type="button"
+          title="新建页面(不挂在任何部门下,只有管理员可以)"
+          disabled={createNode.isPending}
+          className="rounded px-1.5 text-xs text-slate-500 hover:bg-white hover:text-slate-800 disabled:opacity-50"
+          onClick={() => handleCreate(null, 'document')}
+        >
+          + 顶层
+        </button>
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto px-2 pb-3">
@@ -378,22 +440,19 @@ export function PageTreePanel({
               const dragged = findNode(nodes, dragId);
               setDragId(null);
               if (dragged !== undefined) {
-                movePage.mutate({
-                  pageId: dragged.id,
-                  newParentId: null,
-                  version: dragged.version,
-                });
+                moveNode.mutate({ nodeId: dragged.id, newParentId: null, version: dragged.version });
               }
             }}
           >
-            放到这里 → 移为顶层页面
+            放到这里 → 移到顶层
           </div>
         )}
 
         {nodes.length === 0 ? (
-          <p className="px-2 py-6 text-center text-xs text-slate-400">
-            还没有页面。
-            {canCreate ? '点右上角「新建」开始。' : '请联系空间管理员创建。'}
+          <p className="px-2 py-6 text-center text-xs leading-relaxed text-slate-400">
+            组织架构还是空的。
+            <br />
+            管理员可以到「组织架构」里建部门,或用 Excel 一次性导入全员名单。
           </p>
         ) : (
           <ul role="tree">{nodes.map((node) => renderNode(node))}</ul>
@@ -401,18 +460,26 @@ export function PageTreePanel({
       </div>
 
       <div className="flex-none space-y-1 border-t border-slate-200 p-2">
-        <Link
-          to={`/s/${spaceId}/trash`}
-          className="block rounded-md px-2 py-1 text-xs text-slate-500 hover:bg-white hover:text-slate-800"
+        <button
+          type="button"
+          className="block w-full rounded-md px-2 py-1 text-left text-xs text-slate-500 hover:bg-white hover:text-slate-800"
+          onClick={() => void navigate('/trash')}
         >
           回收站 →
-        </Link>
-        <ErrorNote error={movePage.error ?? createPage.error ?? updatePage.error ?? deletePage.error} />
-        {canEdit && (
-          <p className="px-2 text-[10px] leading-relaxed text-slate-400">
-            可直接拖拽调整层级与顺序。
-          </p>
-        )}
+        </button>
+        <button
+          type="button"
+          className="block w-full rounded-md px-2 py-1 text-left text-xs text-slate-500 hover:bg-white hover:text-slate-800"
+          onClick={() => void navigate('/audit')}
+        >
+          审计日志 →
+        </button>
+        <ErrorNote
+          error={moveNode.error ?? createNode.error ?? updateNode.error ?? deleteNode.error}
+        />
+        <p className="px-2 text-[10px] leading-relaxed text-slate-400">
+          可直接拖拽调整层级与顺序:上/下四分之一是"排到前/后",中间是"成为子节点"。
+        </p>
       </div>
     </div>
   );

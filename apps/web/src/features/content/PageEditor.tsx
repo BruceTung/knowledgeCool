@@ -27,11 +27,12 @@ import StarterKit from '@tiptap/starter-kit';
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 
 import type { Editor, EditorEvents } from '@tiptap/core';
-import type { PageContentResponse, ProseMirrorNode } from '@knowledgecool/shared';
+import type { NodeContentResponse, ProseMirrorNode } from '@knowledgecool/shared';
 
 import { ApiError } from '../../lib/api';
 import { Button } from '../../components/ui';
-import { useImageUpload, useSaveContent } from './queries';
+import { useSaveContent } from '../org/queries';
+import { useImageUpload } from './queries';
 
 /** 自动保存的防抖间隔。太短会在输入法组合期间频繁写库,太长会丢更多内容。 */
 const AUTOSAVE_DELAY_MS = 1200;
@@ -72,22 +73,22 @@ function plainTextOf(node: ProseMirrorNode): string {
 }
 
 export function PageEditor({
-  pageId,
+  nodeId,
   initial,
   canEdit,
   onOutline,
   onSaveStateChange,
   onReady,
 }: {
-  pageId: string;
-  initial: PageContentResponse;
+  nodeId: string;
+  initial: NodeContentResponse;
   canEdit: boolean;
   onOutline: (items: OutlineItem[]) => void;
   onSaveStateChange: (state: SaveState) => void;
   /** 把编辑器实例交出去 —— 右栏大纲要跳转到某个标题,而滚动容器在编辑器内部。 */
   onReady?: (editor: Editor) => void;
 }) {
-  const save = useSaveContent(pageId);
+  const save = useSaveContent(nodeId);
   const upload = useImageUpload();
 
   const [state, setState] = useState<SaveState>('idle');
@@ -163,7 +164,7 @@ export function PageEditor({
       updateState('saving');
       try {
         const saved = await save.mutateAsync({
-          content: instance.getJSON() as PageContentResponse['content'],
+          content: instance.getJSON() as NodeContentResponse['content'],
           baseUpdatedAt: baseRef.current,
         });
         baseRef.current = saved.updatedAt;

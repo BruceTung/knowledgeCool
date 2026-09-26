@@ -38,6 +38,15 @@ export interface NodeSummary {
   title: string;
   position: number;
   depth: number;
+  status: NodeStatus;
+  /**
+   * 乐观锁版本号。
+   *
+   * ⚠️ 必须出现在树上:前端拖拽排序要拿它当 `MoveNodeInput.version`。
+   * 若让前端"拖之前先拉一次详情",两次读之间数据可能已经变了,
+   * 结果是**拖拽静默落到错误位置**,而且不报错。
+   */
+  version: number;
   /** 所有者 */
   ownerId: string;
   ownerName: string;

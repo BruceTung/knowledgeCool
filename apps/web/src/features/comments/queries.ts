@@ -1,5 +1,10 @@
 /**
- * 页面评论的服务端状态(DESIGN.md §8.4)。
+ * 节点评论的服务端状态(DESIGN.md §8.4)。
+ *
+ * ⚠️ v2.0 起**全员都能评论**(读是开放的,评论跟着读走)。
+ * 权限只区分两件事:改**别人的**评论不行;标为已解决要作者本人或该节点的
+ * 祖先所有者。两者都由服务端判定,这里拿到的 `canResolve` / `canDelete`
+ * 只用于显示按钮。
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
@@ -11,47 +16,34 @@ import type {
 
 import { apiFetch, apiSend } from '../../lib/api';
 
-export function useComments(pageId: string | undefined) {
+export function useComments(nodeId: string | undefined) {
   return useQuery({
-    queryKey: ['pages', pageId, 'comments'],
-    queryFn: () => apiFetch<CommentListResponse>(`/pages/${String(pageId)}/comments`),
-    enabled: pageId !== undefined && pageId !== '',
+    queryKey: ['node', nodeId ?? '', 'comments'],
+    queryFn: () => apiFetch<CommentListResponse>(`/nodes/${String(nodeId)}/comments`),
+    enabled: nodeId !== undefined && nodeId !== '',
   });
 }
 
-/** 空间内各页面的未解决评论数 —— 页面树角标。 */
-export function useCommentCounts(spaceId: string | undefined) {
-  return useQuery({
-    queryKey: ['spaces', spaceId, 'comment-counts'],
-    queryFn: () => apiFetch<Record<string, number>>(`/spaces/${String(spaceId)}/comment-counts`),
-    enabled: spaceId !== undefined && spaceId !== '',
-    // 角标不需要秒级准确,少发点请求
-    staleTime: 30_000,
-  });
-}
-
-function useInvalidateComments(spaceId: string | undefined, pageId: string) {
+function useInvalidateComments(nodeId: string) {
   const queryClient = useQueryClient();
   return () => {
-    void queryClient.invalidateQueries({ queryKey: ['pages', pageId, 'comments'] });
-    // 页面树角标跟着变
-    if (spaceId !== undefined) {
-      void queryClient.invalidateQueries({ queryKey: ['spaces', spaceId, 'comment-counts'] });
-    }
+    void queryClient.invalidateQueries({ queryKey: ['node', nodeId, 'comments'] });
+    // 树上的角标跟着变。角标是服务端算的(openCommentCount),本地推不出来。
+    void queryClient.invalidateQueries({ queryKey: ['org', 'tree'] });
   };
 }
 
-export function useCreateComment(spaceId: string | undefined, pageId: string) {
-  const invalidate = useInvalidateComments(spaceId, pageId);
+export function useCreateComment(nodeId: string) {
+  const invalidate = useInvalidateComments(nodeId);
   return useMutation({
     mutationFn: (input: CreateCommentInput) =>
-      apiSend<CommentView>('POST', `/pages/${pageId}/comments`, input),
+      apiSend<CommentView>('POST', `/nodes/${nodeId}/comments`, input),
     onSuccess: invalidate,
   });
 }
 
-export function useUpdateComment(spaceId: string | undefined, pageId: string) {
-  const invalidate = useInvalidateComments(spaceId, pageId);
+export function useUpdateComment(nodeId: string) {
+  const invalidate = useInvalidateComments(nodeId);
   return useMutation({
     mutationFn: (vars: { commentId: string } & UpdateCommentInput) =>
       apiSend<CommentView>('PATCH', `/comments/${vars.commentId}`, {
@@ -62,8 +54,8 @@ export function useUpdateComment(spaceId: string | undefined, pageId: string) {
   });
 }
 
-export function useDeleteComment(spaceId: string | undefined, pageId: string) {
-  const invalidate = useInvalidateComments(spaceId, pageId);
+export function useDeleteComment(nodeId: string) {
+  const invalidate = useInvalidateComments(nodeId);
   return useMutation({
     mutationFn: (commentId: string) => apiSend<void>('DELETE', `/comments/${commentId}`),
     onSuccess: invalidate,

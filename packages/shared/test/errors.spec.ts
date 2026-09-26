@@ -13,13 +13,14 @@ import {
 } from '../src/errors.js';
 
 describe('错误码表', () => {
-  it('恰好是 DESIGN.md §6.1 列出的 7 个', () => {
+  it('恰好是 DESIGN.md §6.1 列出的 8 个', () => {
     expect([...ERROR_CODES]).toEqual([
       'UNAUTHORIZED',
       'FORBIDDEN',
       'NOT_FOUND',
       'VALIDATION_FAILED',
       'VERSION_CONFLICT',
+      'PASSWORD_CHANGE_REQUIRED',
       'RATE_LIMITED',
       'INTERNAL_ERROR',
     ]);
@@ -32,6 +33,7 @@ describe('错误码表', () => {
       NOT_FOUND: 404,
       VALIDATION_FAILED: 400,
       VERSION_CONFLICT: 409,
+      PASSWORD_CHANGE_REQUIRED: 403,
       RATE_LIMITED: 429,
       INTERNAL_ERROR: 500,
     });
@@ -43,10 +45,27 @@ describe('错误码表', () => {
     }
   });
 
-  it('NOT_FOUND 的文案刻意不区分「不存在」与「无权限」', () => {
+  /**
+   * ⚠️ v2.0 起这条规则**反过来了**。
+   *
+   * 旧模型用 404 掩盖"存在但无权限",理由是防枚举。现在读对所有登录用户
+   * 开放(§5.3 规则一),不存在"存在但读不到"的资源,所以没有需要掩盖的东西;
+   * 写被拒时回 `FORBIDDEN` 是更有用的回应 —— 用户需要知道"东西在那儿,
+   * 只是你不能改",而不是被误导成"它不存在"。
+   */
+  it('NOT_FOUND 不再掩盖「无权限」—— 文案只说内容不存在', () => {
     const message = DEFAULT_ERROR_MESSAGES.NOT_FOUND;
     expect(message).toContain('不存在');
-    expect(message).toContain('没有访问权限');
+    expect(message).not.toContain('权限');
+  });
+
+  /**
+   * 这个码必须**独立存在**,不能并进通用 403 —— 前端要靠它跳转改密页。
+   * 混进 FORBIDDEN 的话,用户只会看到一句"没有权限",然后卡死在原地。
+   */
+  it('PASSWORD_CHANGE_REQUIRED 是独立的码(前端据此跳转改密页)', () => {
+    expect(ERROR_CODES).toContain('PASSWORD_CHANGE_REQUIRED');
+    expect(DEFAULT_ERROR_MESSAGES.PASSWORD_CHANGE_REQUIRED).toContain('密码');
   });
 });
 

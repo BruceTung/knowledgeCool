@@ -56,6 +56,11 @@ COPY --from=builder /app/apps/api/package.json ./apps/api/package.json
 COPY --from=builder /app/apps/api/dist ./apps/api/dist
 COPY --from=builder /app/apps/api/prisma ./apps/api/prisma
 COPY --from=builder /app/apps/api/prisma7.config.ts ./apps/api/prisma7.config.ts
+# 验收与运维脚本也带上:`verify-db`(数据库契约自检)、`verify-org`(端到端验收)、
+# `seed-dev`(演示数据)。它们依赖的 pg / exceljs 都在 node_modules 里,
+# 所以进了镜像就能 `docker compose exec api node scripts/xxx.mjs` 直接跑,
+# 不必在宿主机上再装一份 Node 与依赖。
+COPY --from=builder /app/apps/api/scripts ./apps/api/scripts
 # api 通过 workspace 链接引用 shared,所以它的产物也要带上
 COPY --from=builder /app/packages/shared ./packages/shared
 

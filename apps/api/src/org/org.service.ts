@@ -362,7 +362,14 @@ export class OrgService {
    * 否则部长可以把别的部门的人任命成自己组的组长。
    */
   async ownerCandidates(operator: Actor, nodeId: string): Promise<GrantCandidate[]> {
-    await this.permissions.requireManage(operator, nodeId);
+    // ⚠️ 与 `setOwner` 必须用**同一套规则**,否则会出现「看得到候选人但改不了」
+    // (或反过来),而超管换部长正是靠这两条一起工作的。
+    const { chain } = await this.permissions.chainOf(nodeId);
+    if (chain.ancestors.length === 0) {
+      this.requireSuperAdmin(operator);
+    } else {
+      await this.permissions.requireManage(operator, nodeId);
+    }
 
     const myScopes = await this.permissions.scopePathsOf(operator.id);
     const node = await this.prisma.node.findUnique({
@@ -515,6 +522,7 @@ function toView(
     status: toUserStatus(row.status),
     isSuperAdmin: row.isSuperAdmin,
     scopePaths: nodes.map((node) => renderPath(node.materializedPath, titles)),
+    scopeNodeIds: nodes.map((node) => node.id),
     lastLoginAt: row.lastLoginAt?.toISOString() ?? null,
   };
 }

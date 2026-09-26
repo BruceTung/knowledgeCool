@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { Link, Navigate, useNavigate } from 'react-router-dom';
+import { Navigate, useNavigate } from 'react-router-dom';
 
 import { AuthShell, Button, ErrorNote, FullScreenNote, TextField } from '../components/ui';
 import { useLogin, useMe, useSetupState } from '../features/auth/queries';
@@ -7,9 +7,11 @@ import { useLogin, useMe, useSetupState } from '../features/auth/queries';
 /**
  * 登录页(DESIGN.md §7.2 的 `/login`)。
  *
- * 错误提示直接沿用后端的「邮箱或密码不正确」—— §6.1 刻意不区分
- * 「邮箱不存在」与「密码错误」,前端不能自作聪明地补一句
- * 「该邮箱尚未注册」,那等于把后端堵上的账号枚举口子又捅开。
+ * ⚠️ **v2.2 起用工号登录,不是邮箱。**
+ *
+ * 错误提示直接沿用后端的文案 —— §6.1 刻意不区分「工号不存在」与「密码错误」,
+ * 前端不能自作聪明地补一句「该工号尚未注册」,那等于把后端堵上的
+ * 账号枚举口子又捅开。
  */
 export function LoginPage() {
   const me = useMe();
@@ -17,7 +19,7 @@ export function LoginPage() {
   const login = useLogin();
   const navigate = useNavigate();
 
-  const [email, setEmail] = useState('');
+  const [employeeNo, setEmployeeNo] = useState('');
   const [password, setPassword] = useState('');
 
   if (me.isPending || setupState.isPending) {
@@ -29,20 +31,24 @@ export function LoginPage() {
 
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
-    login.mutate({ email, password }, { onSuccess: () => void navigate('/', { replace: true }) });
+    login.mutate(
+      { employeeNo: employeeNo.trim(), password },
+      { onSuccess: () => void navigate('/', { replace: true }) },
+    );
   }
 
   return (
     <AuthShell title="登录知源知识库" subtitle="内网自托管 · 企业内部知识库">
       <form onSubmit={handleSubmit} className="space-y-4">
         <TextField
-          label="企业邮箱"
-          type="email"
+          label="工号"
           autoComplete="username"
           required
-          value={email}
-          onChange={(e) => void setEmail(e.target.value)}
-          placeholder="you@example.com"
+          value={employeeNo}
+          onChange={(event) => {
+            setEmployeeNo(event.target.value);
+          }}
+          placeholder="例如 KC2026001"
         />
         <TextField
           label="密码"
@@ -50,7 +56,9 @@ export function LoginPage() {
           autoComplete="current-password"
           required
           value={password}
-          onChange={(e) => void setPassword(e.target.value)}
+          onChange={(event) => {
+            setPassword(event.target.value);
+          }}
         />
 
         <ErrorNote error={login.error} />
@@ -60,12 +68,11 @@ export function LoginPage() {
         </Button>
       </form>
 
-      <p className="mt-6 text-xs text-slate-400">
-        还没有账号?阶段一的账号由空间管理员在「成员管理」里创建。
+      <p className="mt-6 text-xs leading-relaxed text-slate-400">
+        账号由管理员通过组织架构导入统一预置,不需要自行注册。
         <br />
-        <Link to="/setup" className="text-slate-500 underline hover:text-slate-700">
-          系统尚未初始化?
-        </Link>
+        首次登录的初始密码是 <code className="rounded bg-slate-100 px-1">123456</code>,
+        登录后会被要求改成自己的密码。
       </p>
     </AuthShell>
   );

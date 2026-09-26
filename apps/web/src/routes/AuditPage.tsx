@@ -1,37 +1,29 @@
-import { AUDIT_ACTION_LABELS, can } from '@knowledgecool/shared';
-import { useParams } from 'react-router-dom';
+import { AUDIT_ACTION_LABELS } from '@knowledgecool/shared';
 
 import { ErrorNote } from '../components/ui';
 import { useAuditLogs } from '../features/audit/queries';
-import { usePageTree } from '../features/pages/queries';
 
 /**
  * 审计日志(DESIGN.md §6.2 的 `GET /audit-logs`)。
  *
- * 授权在服务端:有该空间的 `audit.view`(admin 起)才能看到该空间的记录;
- * 跨空间只给超管。前端在这里只负责"别让没有权限的人看到一个空表格"。
+ * ⚠️ v2.0 的范围规则变了:不是"我选了哪个空间",而是
+ * **我拥有所有权的那些节点子树里的记录**。所以这一页不再接受任何范围参数 ——
+ * 传空间 id 反而会绕开那条规则,服务端也不接受它。
+ *
+ * 超管能看到全部;其他人看不到任何一条时会得到一个明确的说明,
+ * 而不是一个空表格(空表格会让人以为是"没有记录",而不是"没有权限")。
  */
 export function AuditPage() {
-  const { spaceId } = useParams<{ spaceId: string }>();
-  const tree = usePageTree(spaceId);
-  const allowed = can(tree.data?.role ?? 'viewer', 'audit.view');
-  const logs = useAuditLogs(spaceId, allowed && spaceId !== undefined);
-
-  if (!allowed) {
-    return (
-      <div className="p-8">
-        <p className="text-sm text-slate-500">查看审计日志需要空间管理员权限。</p>
-      </div>
-    );
-  }
+  const logs = useAuditLogs(true);
 
   const items = logs.data?.pages.flatMap((page) => page.items) ?? [];
 
   return (
     <div className="mx-auto max-w-4xl px-8 py-8">
       <h1 className="text-lg font-semibold text-slate-900">审计日志</h1>
-      <p className="mt-1 text-xs text-slate-500">
-        只写不删。登录、页面变更、权限变更、评论都会留痕 —— 事后追责靠的就是这一页。
+      <p className="mt-1 text-xs leading-relaxed text-slate-500">
+        只写不删。登录、节点变更、所有者变更、授权调整、评论都会留痕。
+        你能看到的是<b>你拥有所有权的节点</b>范围内的记录;超级管理员看到全部。
       </p>
 
       {logs.isError && (
@@ -43,7 +35,13 @@ export function AuditPage() {
       {logs.isPending && <p className="mt-6 text-sm text-slate-400">加载中…</p>}
 
       {!logs.isPending && items.length === 0 && (
-        <p className="mt-6 text-sm text-slate-400">还没有审计记录。</p>
+        <p className="mt-6 rounded-lg bg-slate-50 px-4 py-8 text-center text-sm text-slate-400">
+          没有可见的审计记录。
+          <br />
+          <span className="text-xs">
+            你还没有任何节点的所有权 —— 部长对其部门下的记录、组长对其组下的记录可见。
+          </span>
+        </p>
       )}
 
       {items.length > 0 && (

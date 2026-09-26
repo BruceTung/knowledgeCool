@@ -4,27 +4,17 @@
  * 阶段一的评论**不锚定到文字** —— 只有"挂在这一页上"这一层。
  * 所以界面上也没有"选中一段再评论"的入口,这不是漏做,是范围。
  */
-import { COMMENT_BODY_MAX_LENGTH, can, type CommentView, type SpaceRole } from '@knowledgecool/shared';
+import { COMMENT_BODY_MAX_LENGTH, type CommentView } from '@knowledgecool/shared';
 import { useState } from 'react';
 
 import { avatarClass, Button, ErrorNote } from '../../components/ui';
 import { useCreateComment, useDeleteComment, useComments, useUpdateComment } from './queries';
 
-export function CommentsPanel({
-  pageId,
-  spaceId,
-  role,
-}: {
-  pageId: string;
-  spaceId: string;
-  role: SpaceRole;
-}) {
-  const comments = useComments(pageId);
-  const create = useCreateComment(spaceId, pageId);
+export function CommentsPanel({ nodeId }: { nodeId: string }) {
+  const comments = useComments(nodeId);
+  const create = useCreateComment(nodeId);
   const [draft, setDraft] = useState('');
   const [replyTo, setReplyTo] = useState<string | null>(null);
-
-  const canComment = can(role, 'comment.create');
 
   if (comments.isPending) return <p className="p-4 text-xs text-slate-400">加载评论…</p>;
   if (comments.isError) {
@@ -64,8 +54,7 @@ export function CommentsPanel({
               <li key={thread.id} className="space-y-2">
                 <CommentCard
                   comment={thread}
-                  pageId={pageId}
-                  spaceId={spaceId}
+                  nodeId={nodeId}
                   onReply={() => {
                     setReplyTo(thread.id);
                   }}
@@ -74,7 +63,7 @@ export function CommentsPanel({
                   <ul className="ml-7 space-y-2 border-l border-slate-200 pl-3">
                     {thread.replies.map((reply) => (
                       <li key={reply.id}>
-                        <CommentCard comment={reply} pageId={pageId} spaceId={spaceId} />
+                        <CommentCard comment={reply} nodeId={nodeId} />
                       </li>
                     ))}
                   </ul>
@@ -85,8 +74,7 @@ export function CommentsPanel({
         )}
       </div>
 
-      {canComment ? (
-        <div className="flex-none border-t border-slate-200 p-3">
+      <div className="flex-none border-t border-slate-200 p-3">
           {replyTo !== null && (
             <div className="mb-2 flex items-center justify-between text-xs text-slate-500">
               <span>正在回复这条评论</span>
@@ -124,29 +112,22 @@ export function CommentsPanel({
               <ErrorNote error={create.error} />
             </div>
           )}
-        </div>
-      ) : (
-        <p className="flex-none border-t border-slate-200 px-3 py-3 text-xs text-slate-400">
-          你的角色是「{roleLabel(role)}」,可以查看评论但没有留言权限。
-        </p>
-      )}
+      </div>
     </div>
   );
 }
 
 function CommentCard({
   comment,
-  pageId,
-  spaceId,
+  nodeId,
   onReply,
 }: {
   comment: CommentView;
-  pageId: string;
-  spaceId: string;
+  nodeId: string;
   onReply?: () => void;
 }) {
-  const update = useUpdateComment(spaceId, pageId);
-  const remove = useDeleteComment(spaceId, pageId);
+  const update = useUpdateComment(nodeId);
+  const remove = useDeleteComment(nodeId);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(comment.body);
 
@@ -159,6 +140,11 @@ function CommentCard({
           {Array.from(comment.author.name)[0] ?? '?'}
         </span>
         <span className="text-xs font-medium text-slate-700">{comment.author.name}</span>
+        {comment.author.departed && (
+          <span className="rounded bg-amber-50 px-1 text-[10px] text-amber-700 ring-1 ring-amber-200">
+            已离职
+          </span>
+        )}
         <span className="text-[11px] text-slate-400">
           {new Date(comment.createdAt).toLocaleString('zh-CN')}
         </span>
@@ -251,12 +237,3 @@ function CommentCard({
   );
 }
 
-function roleLabel(role: SpaceRole): string {
-  const labels: Record<SpaceRole, string> = {
-    admin: '空间管理员',
-    editor: '编辑者',
-    commenter: '评论者',
-    viewer: '只读成员',
-  };
-  return labels[role];
-}

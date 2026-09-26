@@ -1,51 +1,21 @@
 /**
- * 正文与导出的服务端状态(DESIGN.md §7.4)。
+ * 正文与附件相关的服务端状态。
+ *
+ * 正文本身的读取/保存/导出在 `features/org/queries.ts`(它们与节点是同一族)——
+ * 这里只留图片上传,因为它是纯粹的附件能力,与节点无关。
  */
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { PageContentResponse, SaveContentInput } from '@knowledgecool/shared';
+import { useMutation } from '@tanstack/react-query';
 
-import { apiDownload, apiFetch, apiSend, apiUpload } from '../../lib/api';
+import { apiUpload } from '../../lib/api';
 
-export function usePageContent(pageId: string | undefined) {
-  return useQuery({
-    queryKey: ['pages', pageId, 'content'],
-    queryFn: () => apiFetch<PageContentResponse>(`/pages/${String(pageId)}/content`),
-    enabled: pageId !== undefined && pageId !== '',
-    // 正文的冲突检测靠自己带回 baseUpdatedAt,不需要 react-query 的重新拉取
-    // 来"顺手改掉"编辑器里的内容 —— 那种自动刷新会把正在打字的人搞疯。
-    refetchOnWindowFocus: false,
-    staleTime: Infinity,
-  });
-}
-
-export function useSaveContent(pageId: string) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (input: SaveContentInput) =>
-      apiSend<PageContentResponse>('PUT', `/pages/${pageId}/content`, input),
-    onSuccess: (saved) => {
-      // 只更新缓存里的时间戳,不 invalidate ——
-      // invalidate 会触发重新拉取,把编辑器里的内容重置一遍。
-      queryClient.setQueryData<PageContentResponse>(['pages', pageId, 'content'], saved);
-      // 正文变了,检索结果就旧了
-      void queryClient.invalidateQueries({ queryKey: ['search'] });
-      // 页面详情上的 updatedAt 也该跟着变
-      void queryClient.invalidateQueries({ queryKey: ['pages', pageId] });
-    },
-  });
-}
-
-/** 上传图片,返回可直接当 `src` 用的 URL。 */
+/**
+ * 上传图片,返回可直接当 `src` 用的 URL。
+ *
+ * 返回值里的 `url` 是服务端生成的 `/uploads/<uuid>.<ext>` —— 不使用原始文件名,
+ * 因为那可能带路径分隔符或伪装成图片的 HTML。
+ */
 export function useImageUpload() {
   return useMutation({
     mutationFn: (file: File) => apiUpload<{ url: string }>('/uploads', file),
-  });
-}
-
-/** 导出为 Markdown 并触发下载。 */
-export function useExportMarkdown() {
-  return useMutation({
-    mutationFn: (vars: { pageId: string; title: string }) =>
-      apiDownload(`/pages/${vars.pageId}/export?format=md`, `${vars.title || 'page'}.md`),
   });
 }

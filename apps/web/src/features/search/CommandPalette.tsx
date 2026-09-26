@@ -18,19 +18,13 @@ import { useNavigate } from 'react-router-dom';
 
 import { useSearch } from './queries';
 
-export function CommandPalette({
-  onClose,
-  spaceId,
-}: {
-  onClose: () => void;
-  spaceId?: string;
-}) {
+export function CommandPalette({ onClose }: { onClose: () => void }) {
   const [query, setQuery] = useState('');
   const [activeIndex, setActiveIndex] = useState(0);
   const navigate = useNavigate();
   const inputRef = useRef<HTMLInputElement | null>(null);
 
-  const search = useSearch(query, spaceId);
+  const search = useSearch(query);
   const hits: SearchHit[] = search.data?.hits ?? [];
 
   // 挂载后聚焦。必须等一帧:面板还在渲染中,立刻 focus 会被丢掉。
@@ -45,7 +39,7 @@ export function CommandPalette({
   const safeIndex = hits.length === 0 ? 0 : Math.min(activeIndex, hits.length - 1);
 
   function go(hit: SearchHit) {
-    navigate(`/s/${hit.spaceId}/p/${hit.pageId}`);
+    navigate(`/n/${hit.nodeId}`);
     onClose();
   }
 
@@ -89,19 +83,18 @@ export function CommandPalette({
         <div className="min-h-0 flex-1 overflow-auto py-1">
           {query.trim() === '' ? (
             <p className="px-4 py-6 text-center text-xs text-slate-400">
-              输入关键词开始搜索。结果会按你的权限过滤 —— 看不到的文档不会出现在这里。
+              输入关键词开始搜索。
+              <br />
+              全公司可读的内容都会出现在这里 —— 系统不区分"能搜到"与"能打开"。
             </p>
           ) : search.isPending ? (
             <p className="px-4 py-6 text-center text-xs text-slate-400">搜索中…</p>
           ) : hits.length === 0 ? (
-            <p className="px-4 py-6 text-center text-xs text-slate-400">
-              没有匹配的内容
-              {spaceId === undefined ? '' : '(仅搜索当前空间)'}
-            </p>
+            <p className="px-4 py-6 text-center text-xs text-slate-400">没有匹配的内容</p>
           ) : (
             <ul>
               {hits.map((hit, index) => (
-                <li key={hit.pageId}>
+                <li key={hit.nodeId}>
                   <button
                     type="button"
                     onMouseEnter={() => {
@@ -125,8 +118,7 @@ export function CommandPalette({
                       )}
                     </span>
                     <span className="w-full truncate text-[11px] text-slate-400">
-                      {hit.spaceName}
-                      {hit.breadcrumb.length > 0 && ` / ${hit.breadcrumb.join(' / ')}`}
+                      {hit.breadcrumb.length > 0 && hit.breadcrumb.join(' / ')}
                     </span>
                     {hit.snippet !== '' && (
                       <span className="w-full truncate text-[11px] text-slate-500">

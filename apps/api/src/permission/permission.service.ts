@@ -116,33 +116,63 @@ export class PermissionService {
     };
   }
 
-  /** 判定某人某节点。带 Redis 缓存 —— **Redis 不可用时自动回源,判定正确性不依赖它**。 */
-  async access(operator: Actor, nodeId: string): Promise<AccessContext> {
-    const { chain, row } = await this.chainOf(nodeId);
-    const rootId = rootIdOf(chain);
+  /**
+   * 判定某人某节点。带 Redis 缓存 —— **Redis 不可用时自动回源,判定正确性不依赖它**。
+   *
+   * ⚠️ `allowDeleted` 必须能传下去。回收站列表、恢复、彻底删除这三处
+   * 都要对**已经删掉的**节点做判定;少了这个开关,它们会在判定这一步
+   * 就抛 404 —— 表现是"回收站打不开、恢复和彻底删除都用不了"。
+   * (这条在实跑验收时才发现,见 DESIGN §9.3。)
+   *
+   * 传了 `allowDeleted` 就**不走缓存**:已删节点是极少数,而缓存里
+   * 那点省下的开销不值得冒"缓存了删除前/删除后两种语义"的风险。
+   */
+  async access(
+    operator: Actor,
+    nodeId: string,
+    options: { allowDeleted?: boolean } = {},
+  ): Promise<AccessContext> {
+    const { chain, row } = await this.chainOf(nodeId, options);
 
+    const compute = async (): Promise<{ canEdit: boolean; canManage: boolean }> => {
+      const granted = await this.grantedUserIdsOf(nodeId);
+      return {
+        canEdit: canEditPure(operator, chain, granted),
+        canManage: canManagePure(operator, chain),
+      };
+    };
+
+    if (options.allowDeleted === true) {
+      return { nodeId, chain, row, ...(await compute()) };
+    }
+
+    const rootId = rootIdOf(chain);
     const cached = await this.readCache(operator.id, nodeId, rootId);
     if (cached !== null) return { nodeId, chain, row, ...cached };
 
-    const granted = await this.grantedUserIdsOf(nodeId);
-    const result = {
-      canEdit: canEditPure(operator, chain, granted),
-      canManage: canManagePure(operator, chain),
-    };
+    const result = await compute();
     await this.writeCache(operator.id, nodeId, rootId, result);
     return { nodeId, chain, row, ...result };
   }
 
   /** 断言可改。**这里是唯一入口** —— 调用点不要自己判断。 */
-  async requireEdit(operator: Actor, nodeId: string): Promise<AccessContext> {
-    const context = await this.access(operator, nodeId);
+  async requireEdit(
+    operator: Actor,
+    nodeId: string,
+    options: { allowDeleted?: boolean } = {},
+  ): Promise<AccessContext> {
+    const context = await this.access(operator, nodeId, options);
     if (!context.canEdit) throw AppError.forbidden('你没有编辑该节点的权限');
     return context;
   }
 
   /** 断言可管(决定这个节点还有谁能改)。 */
-  async requireManage(operator: Actor, nodeId: string): Promise<AccessContext> {
-    const context = await this.access(operator, nodeId);
+  async requireManage(
+    operator: Actor,
+    nodeId: string,
+    options: { allowDeleted?: boolean } = {},
+  ): Promise<AccessContext> {
+    const context = await this.access(operator, nodeId, options);
     if (!context.canManage) {
       throw AppError.forbidden('只有该节点或其上级的所有者才能修改权限');
     }

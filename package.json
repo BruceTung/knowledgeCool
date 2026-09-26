@@ -23,7 +23,7 @@
     "seed:dev": "pnpm --filter @knowledgecool/api run seed:dev",
     "test": "pnpm -r --if-present run test",
     "typecheck": "pnpm -r --if-present run typecheck",
-    "verify:m4m5": "pnpm --filter @knowledgecool/api run verify:m4m5"
+    "verify:org": "pnpm --filter @knowledgecool/api run verify:org"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

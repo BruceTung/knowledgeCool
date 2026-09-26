@@ -106,7 +106,17 @@ export class AuthController {
     response.clearCookie(SESSION_COOKIE_NAME, this.cookieBaseOptions());
   }
 
+  /**
+   * 当前用户。
+   *
+   * ⚠️ **必须在白名单里。** 前端要靠它读出 `mustChangePassword` 才知道
+   * 该把人送到改密页;把它一起 403 掉的话,前端只会看到一个"不是 401 的错误"
+   * 然后显示「无法连接到服务」—— 用户卡在原地,连改密页都进不去。
+   *
+   * 放行它是安全的:返回的全是他**自己的**画像与组织归属,没有任何业务数据。
+   */
   @Get('me')
+  @AllowDuringPasswordChange()
   @HttpCode(HttpStatus.OK)
   async me(@CurrentUser() user: AuthUser): Promise<MeResponse> {
     return this.auth.me(user.id);

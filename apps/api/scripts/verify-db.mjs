@@ -1,10 +1,10 @@
 /**
- * 数据库契约自检 —— M1 验收用。
+ * 数据库契约自检 —— M1 验收用,v2.0 已按新模型更新。
  *
  * 为什么用原生 pg 而不是 Prisma Client:
  * 这是个**验收脚本**,要能在 Prisma Client 生成失败、甚至依赖装了一半的情况下
  * 仍然告诉你数据库本身对不对。少一层依赖,少一个失败点。
- * (Prisma Client 自身能否工作,由 API 的 /health/ready 与后续接口验证。)
+ * (Prisma Client 自身能否工作,由 API 的 `/health/ready` 与后续接口验证。)
  *
  * 用法:pnpm --filter @knowledgecool/api run db:verify
  */
@@ -12,31 +12,50 @@ import 'dotenv/config';
 
 import pg from 'pg';
 
-const REQUIRED_EXTENSIONS = ['citext', 'pg_trgm'];
+/** `citext` 不再需要 —— v2.2 起登录标识是工号(text),不是邮箱。 */
+const REQUIRED_EXTENSIONS = ['pg_trgm'];
+
 const REQUIRED_TABLES = [
   'users',
-  'spaces',
-  'space_members',
-  'pages',
-  'page_contents',
-  'page_permissions',
+  'sessions',
+  // 空间与页面合并后的统一资源(§4.1)
+  'nodes',
+  'node_contents',
+  // v2.0 新增的两张关系表
+  'org_assignments',
+  'node_grants',
   'comments',
   'audit_logs',
 ];
+
+/**
+ * ⚠️ 这张清单里**没有** `spaces` / `space_members` / `page_permissions` /
+ * `pages` / `page_contents` —— 它们在 v2.0 被废除。
+ * 如果哪天有人把它们加回来,说明有人在往回改模型,应该先改 DESIGN。
+ */
+const FORBIDDEN_TABLES = [
+  'spaces',
+  'space_members',
+  'page_permissions',
+  'pages',
+  'page_contents',
+];
+
 const REQUIRED_INDEXES = [
-  'pages_tree_idx',
-  'pages_path_idx',
-  'pages_alive_idx',
-  'page_contents_trgm_idx',
-  'comments_page_idx',
+  'nodes_tree_idx',
+  'nodes_path_idx',
+  'nodes_alive_idx',
+  'nodes_owner_idx',
+  'org_assignments_node_idx',
+  'node_contents_trgm_idx',
+  'comments_node_idx',
   'audit_created_idx',
 ];
+
 const REQUIRED_CHECKS = [
   'users_status_check',
-  'space_members_role_check',
-  'pages_status_check',
-  'page_permissions_subject_type_check',
-  'page_permissions_role_check',
+  'nodes_kind_check',
+  'nodes_status_check',
   'comments_status_check',
 ];
 
@@ -50,7 +69,8 @@ if (!connectionString) {
 const failures = [];
 const client = new pg.Client({ connectionString });
 
-const column = async (sql) => (await client.query(sql)).rows.map((row) => String(Object.values(row)[0]));
+const column = async (sql) =>
+  (await client.query(sql)).rows.map((row) => String(Object.values(row)[0]));
 
 async function main() {
   await client.connect();
@@ -66,6 +86,11 @@ async function main() {
   for (const name of REQUIRED_TABLES) {
     if (!tables.includes(name)) failures.push(`缺少表 ${name}`);
   }
+  for (const name of FORBIDDEN_TABLES) {
+    if (tables.includes(name)) {
+      failures.push(`表 ${name} 属于 v1.x 模型,应当在 v2.0 被删除 —— 有人改回去了?`);
+    }
+  }
   for (const name of REQUIRED_INDEXES) {
     if (!indexes.includes(name)) failures.push(`缺少索引 ${name}`);
   }
@@ -78,17 +103,34 @@ async function main() {
     (await client.query('select indexdef from pg_indexes where indexname = $1', [name])).rows[0]
       ?.indexdef ?? '';
 
-  const pathDef = await indexDef('pages_path_idx');
+  const pathDef = await indexDef('nodes_path_idx');
   if (!pathDef.includes('text_pattern_ops')) {
-    failures.push('pages_path_idx 未使用 text_pattern_ops,前缀查询会退化成全表扫描');
+    failures.push('nodes_path_idx 未使用 text_pattern_ops,子孙前缀查询会退化成全表扫描');
   }
-  const aliveDef = await indexDef('pages_alive_idx');
+  const aliveDef = await indexDef('nodes_alive_idx');
   if (!/where/i.test(aliveDef)) {
-    failures.push('pages_alive_idx 不是部分索引(缺少 WHERE deleted_at IS NULL)');
+    failures.push('nodes_alive_idx 不是部分索引(缺少 WHERE deleted_at IS NULL)');
   }
-  const trgmDef = await indexDef('page_contents_trgm_idx');
+  const trgmDef = await indexDef('node_contents_trgm_idx');
   if (!trgmDef.includes('gin_trgm_ops')) {
-    failures.push('page_contents_trgm_idx 未使用 gin_trgm_ops');
+    failures.push('node_contents_trgm_idx 未使用 gin_trgm_ops');
+  }
+  // 树的同级排序索引必须带 position —— 少了它每次渲染组织树都要排序
+  const treeDef = await indexDef('nodes_tree_idx');
+  if (!treeDef.includes('position')) {
+    failures.push('nodes_tree_idx 未包含 position,同级排序无法走索引');
+  }
+
+  // 组织归属是复合主键(user_id, node_id):重复归属必须由数据库挡住,
+  // 因为导入是"幂等追加"的语义,靠应用层去重一旦漏了就会长出重复行。
+  const assignmentPk = (
+    await client.query(
+      `select pg_get_constraintdef(oid) as def from pg_constraint
+        where conrelid = 'org_assignments'::regclass and contype = 'p'`,
+    )
+  ).rows[0]?.def;
+  if (assignmentPk === undefined || !assignmentPk.includes('user_id')) {
+    failures.push('org_assignments 缺少 (user_id, node_id) 复合主键');
   }
 
   // 中文检索方案实测 —— 验证 DESIGN.md §2.3 的判断。
@@ -106,16 +148,26 @@ async function main() {
     failures.push('ILIKE 中文子串匹配失败 —— pg_trgm 检索方案不成立');
   }
 
-  const count = (list, required) => `${list.filter((x) => required.includes(x)).length}/${required.length}`;
+  const count = (list, required) =>
+    `${list.filter((x) => required.includes(x)).length}/${required.length}`;
 
   console.log('');
-  console.log('  扩展  :', extensions.filter((e) => REQUIRED_EXTENSIONS.includes(e)).join(', ') || '(无)');
+  console.log(
+    '  扩展  :',
+    extensions.filter((e) => REQUIRED_EXTENSIONS.includes(e)).join(', ') || '(无)',
+  );
   console.log('  表    :', count(tables, REQUIRED_TABLES));
   console.log('  索引  :', count(indexes, REQUIRED_INDEXES));
   console.log('  CHECK :', count(checks, REQUIRED_CHECKS));
+  const leftovers = tables.filter((t) => FORBIDDEN_TABLES.includes(t));
+  console.log('  v1 残留:', leftovers.length === 0 ? '无 ✓' : leftovers.join(', '));
   console.log('');
   console.log('  中文检索方案实测(『空间成员按职责划分』搜『空间』):');
-  console.log('    tsvector 命中  :', probe.ts_hit, probe.ts_hit === false ? '← 印证 DESIGN.md §2.3:分词器确实不支持' : '');
+  console.log(
+    '    tsvector 命中  :',
+    probe.ts_hit,
+    probe.ts_hit === false ? '← 印证 DESIGN.md §2.3:分词器确实不支持' : '',
+  );
   console.log('    ILIKE 子串命中 :', probe.ilike_hit);
   console.log('    三元组相似度   :', probe.sim);
   console.log('');

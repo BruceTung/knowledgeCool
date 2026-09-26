@@ -1,457 +1,416 @@
 /**
- * 开发/验收用的种子数据。
+ * 开发 / 验收用种子数据(v2.0 组织架构模型)。
  *
- * 造出:
- *  - 两个空间 —— 验证「看不见的空间根本不出现在列表里」(§5.3 最小可见)
- *  - 五个账号,覆盖全部四种空间角色 + 一个跨空间隔离账号
- *  - 一棵**三层**页面树 —— M3 的验收口径正是「把一棵三层子树拖到另一个分支下」
- *  - **带正文的页面** —— 标题、列表、表格、代码块、图片,让检索(M4)一登录就有东西可搜
- *  - **评论与回复** —— 让评论面板不是空的
- *  - **一条 deny 规则 + 一条子级 allow** —— 用来亲眼看到「拒绝优先会短路,子级翻不了案」(§5.3)
- *  - 一个已删除的页面(带子页面),让回收站不是空的
- *
- * 用法(容器起来之后):
+ * 用法(**必须先清库**,它不做幂等):
+ *   docker compose down -v && docker compose up -d
  *   pnpm seed:dev
- *   # 或指定接口与密码:
- *   KC_API=http://127.0.0.1:8080/api/v1 KC_SEED_PASSWORD=xxx node scripts/seed-dev.mjs
  *
- * ⚠️ 脚本只在**库为空**时可用(它要跑 /auth/setup)。要重来:
- *   docker compose down -v && docker compose up -d && pnpm seed:dev
+ * ⚠️ 它会**走真实的 Excel 导入接口**来建组织与人员,而不是直接写库。
+ * 两个好处:
+ *   1. 导入功能顺带被端到端验一遍(出问题时种子会直接失败,而不是等到用户点);
+ *   2. 造出来的数据一定符合"系统能表达的形状",不会出现库里能存、
+ *      界面表达不了的状态。
  *
- * ⚠️ 这是开发数据,密码公开写死在这里。**不要把种子数据带到真实部署**。
+ * ⚠️ 三件要知道的事:
+ *   - **KC001 / KC004 / KC005 的密码仍是 `123456`**,登录后会被强制改密 ——
+ *     这正是新账号的真实流程,拿来验收最合适。
+ *   - **KC002(陈默)的密码被改成种子密码**:他是技术部部长,种子里由他
+ *     创建内容,而"首次强制改密"会挡住所有其他接口,不改就什么都做不了。
+ *   - 列顺序必须与 `apps/api/src/org/import.core.ts` 的 `IMPORT_COLUMNS` 一致,
+ *     所以下面有一段自检:解析出来的行数与预期不符就直接失败。
  */
-const BASE = process.env.KC_API ?? 'http://127.0.0.1:8080/api/v1';
-const PASSWORD = process.env.KC_SEED_PASSWORD ?? 'Kc-verify-2026';
 
-/** 1×1 的透明 PNG,用来验证「上传 → Nginx 直出」整条链路。 */
-const TINY_PNG_BASE64 =
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==';
+import { existsSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import ExcelJS from 'exceljs';
+
+const BASE = process.env.KC_API ?? 'http://127.0.0.1:8080/api/v1';
+const ROOT = process.env.KC_ROOT ?? 'http://127.0.0.1:8080';
+const PASSWORD = process.env.KC_SEED_PASSWORD ?? 'Kc-verify-2026';
+const ADMIN_PASSWORD = process.env.KC_ADMIN_PASSWORD ?? 'Kc-admin-2026';
+
+// 与 import.core.ts 的 IMPORT_COLUMNS 一一对应(顺序不能变)
+const COLUMNS = ['工号', '姓名', '部门', '组 / 项目', '负责人', '部门ID(勿改)', '组ID(勿改)'];
+
+/** 全员名单:一行 = 一个人在一个节点上的归属。 */
+const ROSTER = [
+  // 工号, 姓名, 部门, 组/项目, 是否负责人
+  ['KC002', '陈默', '技术部', null, true],
+  ['KC003', '王思远', '技术部', '后端组', true],
+  ['KC004', '赵敏', '技术部', '后端组', false],
+  ['KC003', '王思远', '技术部', 'CRM 项目', true],
+  ['KC005', '孙浩', '市场部', null, true],
+];
 
 let cookie = '';
 
-function syncCookie(res) {
-  const raw =
-    typeof res.headers.getSetCookie === 'function'
-      ? res.headers.getSetCookie().join('\n')
-      : (res.headers.get('set-cookie') ?? '');
-  const matched = /kc_session=([^;]*)/.exec(raw);
-  if (matched !== null) cookie = matched[1] === '' ? '' : `kc_session=${matched[1]}`;
+function syncCookie(response) {
+  const raw = response.headers.getSetCookie?.() ?? [];
+  for (const item of raw) {
+    const match = /kc_session=([^;]*)/.exec(item);
+    if (match?.[1] !== undefined) cookie = `kc_session=${match[1]}`;
+  }
 }
 
-async function api(method, path, body) {
-  const res = await fetch(`${BASE}${path}`, {
+async function api(method, path, body, options = {}) {
+  const headers = { Accept: 'application/json' };
+  if (cookie !== '') headers.Cookie = cookie;
+  if (body !== undefined && !options.formData) headers['Content-Type'] = 'application/json';
+
+  const response = await fetch(`${BASE}${path}`, {
     method,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(cookie === '' ? {} : { Cookie: cookie }),
-    },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    headers,
+    body: options.formData ?? (body === undefined ? undefined : JSON.stringify(body)),
   });
-  syncCookie(res);
-  const text = await res.text();
+  syncCookie(response);
+
+  const text = await response.text();
   let json;
   try {
     json = text === '' ? null : JSON.parse(text);
   } catch {
     json = null;
   }
-  if (!res.ok) {
-    throw new Error(`${method} ${path} → ${String(res.status)} ${text.slice(0, 300)}`);
+  return { status: response.status, body: json };
+}
+
+function expectOk(label, result) {
+  if (result.status >= 200 && result.status < 300) {
+    console.log(`✓ ${label}`);
+    return result.body;
   }
-  return json;
+  console.error(`✗ ${label} → HTTP ${String(result.status)}`);
+  console.error(JSON.stringify(result.body, null, 2));
+  process.exit(1);
 }
 
-/** 以某个账号登录(覆盖 cookie 变量)。 */
-async function loginAs(email) {
-  cookie = '';
-  await api('POST', '/auth/login', { email, password: PASSWORD });
-}
-
-// ------------------------------------------------------------------
-// 文档树构造小工具 —— 手写 JSON 太啰嗦
-// ------------------------------------------------------------------
+// ---------------------------------------------------------------- 文档构造
 
 const text = (value, marks) => ({ type: 'text', text: value, ...(marks ? { marks } : {}) });
-const p = (value) => ({ type: 'paragraph', content: value === '' ? [] : [text(value)] });
-const h = (level, value) => ({ type: 'heading', attrs: { level }, content: [text(value)] });
-const bullets = (...items) => ({
+const para = (...content) => ({ type: 'paragraph', content });
+const heading = (level, value) => ({ type: 'heading', attrs: { level }, content: [text(value)] });
+const bullet = (...items) => ({
   type: 'bulletList',
-  content: items.map((item) => ({ type: 'listItem', content: [p(item)] })),
+  content: items.map((item) => ({ type: 'listItem', content: [para(text(item))] })),
 });
-const codeBlock = (language, value) => ({
-  type: 'codeBlock',
-  attrs: { language },
-  content: [text(value)],
-});
-const image = (src, alt) => ({ type: 'image', attrs: { src, alt } });
-const table = (rows) => ({
-  type: 'table',
-  content: rows.map((cells, rowIndex) => ({
-    type: 'tableRow',
-    content: cells.map((cell) => ({
-      type: rowIndex === 0 ? 'tableHeader' : 'tableCell',
-      content: [p(cell)],
+const code = (value) => ({ type: 'codeBlock', content: [text(value)] });
+
+function table(rows) {
+  return {
+    type: 'table',
+    content: rows.map((cells, index) => ({
+      type: 'tableRow',
+      content: cells.map((cell) => ({
+        type: index === 0 ? 'tableHeader' : 'tableCell',
+        content: [para(text(cell))],
+      })),
     })),
-  })),
-});
+  };
+}
+
 const doc = (...content) => ({ type: 'doc', content });
 
-async function createPage(spaceId, parentId, title) {
-  const page = await api('POST', '/pages', { spaceId, parentId, title });
-  return page.id;
-}
+const DOCS = {
+  研发规范: doc(
+    heading(1, '研发规范'),
+    para(text('本文约定技术部的研发流程与提交规范,由部长维护,全员可读。')),
+    heading(2, '一、分支模型'),
+    bullet(
+      'main 保持随时可发布:任何时刻从 main 拉出来的代码都能跑起来',
+      '功能分支从 main 切出,合并前必须通过全部检查',
+      '紧急修复走 hotfix 分支,修完同时回合 main',
+    ),
+    heading(2, '二、提交信息'),
+    para(text('提交信息用「类型: 说明」的格式,类型取值为 feat / fix / docs / refactor / test / chore。')),
+    code('feat: 支持按工号登录\nfix: 移动节点后子孙路径未重建'),
+    heading(2, '三、代码评审'),
+    para(text('所有改动必须经过至少一人评审。评审看三件事:正确性、可读性、有没有把复杂度藏起来。')),
+  ),
+  技术方案: doc(
+    heading(1, '技术方案'),
+    para(text('本页记录后端组当前的技术选型与演进方向。')),
+    heading(2, '技术栈'),
+    table([
+      ['层', '选型', '为什么'],
+      ['前端', 'React + Vite', '生态最全'],
+      ['后端', 'Node + NestJS', '与前端同语言'],
+      ['主库', 'PostgreSQL 16', '递归查询与中文检索一个库全解决'],
+      ['缓存', 'Redis 7', '权限判定缓存'],
+    ]),
+    heading(2, '权限模型'),
+    para(
+      text('读对所有登录用户开放;'),
+      text('编辑权', [{ type: 'bold' }]),
+      text('由所有者、祖先链与显式授权三者共同决定。系统不提供保密能力。'),
+    ),
+    heading(2, '待办'),
+    bullet('回收站自动清理', '节点规模上来后的检索迁移', '实时协同(阶段二)'),
+  ),
+  接口规范: doc(
+    heading(1, '接口规范'),
+    para(text('后端组内部 API 的约定。')),
+    heading(2, '命名'),
+    bullet('路径用复数资源名:/nodes、/comments', '错误体统一为 { error: { code, message } }'),
+    heading(2, '错误码'),
+    code('UNAUTHORIZED        401 未登录\nFORBIDDEN           403 已登录但无权限\nNOT_FOUND           404 内容不存在'),
+  ),
+  'CRM 项目概览': doc(
+    heading(1, 'CRM 项目概览'),
+    para(text('CRM 项目的目标与边界。')),
+    heading(2, '目标'),
+    para(text('把散落在个人表格里的客户信息收进来,统一口径。')),
+    heading(2, '不做什么'),
+    bullet('不做营销自动化', '不做呼叫中心'),
+  ),
+  市场部工作方式: doc(
+    heading(1, '市场部工作方式'),
+    para(text('市场部的对外口径与素材规范。')),
+    para(text('按季度更新对外话术;所有对外材料需经部长确认。')),
+  ),
+};
 
-async function setContent(pageId, content) {
-  await api('PUT', `/pages/${pageId}/content`, { content });
-}
+// ---------------------------------------------------------------- 主流程
 
 async function main() {
-  console.log(`接口: ${BASE}`);
+  console.log(`接口: ${BASE}\n`);
 
-  const state = await api('GET', '/auth/setup-state');
-  if (state.required === false) {
-    console.error('\n✗ 库里已经有数据了,种子脚本只能在空库上跑。');
-    console.error('  要重来:docker compose down -v && docker compose up -d && pnpm seed:dev');
-    process.exitCode = 1;
-    return;
+  const setupState = await api('GET', '/auth/setup-state');
+  if (setupState.body?.required === false) {
+    console.error('✗ 库里已经有数据了。这个种子只适用于**全新数据库**,请先执行:');
+    console.error('    docker compose down -v && docker compose up -d');
+    process.exit(1);
   }
 
-  // ---------------- 初始化管理员 ----------------
-  await api('POST', '/auth/setup', {
-    email: 'admin@example.com',
-    name: '管理员·林晓',
-    password: PASSWORD,
-  });
-  console.log('✓ 初始化管理员 admin@example.com');
+  // ---- 1. 初始化超级管理员 ----
+  expectOk(
+    '创建超级管理员 KC001 · 林晓',
+    await api('POST', '/auth/setup', {
+      employeeNo: 'KC001',
+      name: '林晓',
+      password: ADMIN_PASSWORD,
+    }),
+  );
 
-  // ---------------- 空间 1:研发中心 ----------------
-  const dev = await api('POST', '/spaces', { name: '研发中心' });
-  console.log(`✓ 空间「研发中心」 ${dev.id}`);
-
-  // 带部门:阶段一的「用户组」就是部门,没有部门的账号无法演示组级权限规则
-  const members = [
-    ['editor@example.com', '编辑者·陈默', 'editor', '技术部'],
-    ['commenter@example.com', '评论者·王思远', 'commenter', '技术部'],
-    ['viewer@example.com', '只读·赵敏', 'viewer', '设计部'],
-  ];
-  for (const [email, name, role, department] of members) {
-    await api('POST', `/spaces/${dev.id}/members`, {
-      email,
-      name,
-      role,
-      password: PASSWORD,
-      department,
-    });
+  // ---- 2. 用 Excel 导入组织架构与人员 ----
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet('人员名单');
+  sheet.addRow(COLUMNS);
+  for (const [employeeNo, name, department, group, isOwner] of ROSTER) {
+    // 部门ID / 组ID 留空 = 让系统按名字匹配或新建(导入也支持这条路径,顺带验它)
+    sheet.addRow([employeeNo, name, department, group ?? null, isOwner ? '是' : null, null, null]);
   }
-  console.log('✓ 加入 3 位不同角色的成员(技术部 ×2、设计部 ×1)');
+  const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
 
-  // ---------------- 三层页面树 ----------------
-  // 产品文档 ─┬ 需求规格说明书 ─┬ 权限模型
-  //           │                └ 分享链接
-  //           └ 版本迭代记录
-  // 技术方案 ── 接口设计约定
-  // 新人手册 / 会议纪要
-  const product = await createPage(dev.id, null, '产品文档');
-  const spec = await createPage(dev.id, product, '需求规格说明书');
-  const permModel = await createPage(dev.id, spec, '权限模型');
-  const shareLink = await createPage(dev.id, spec, '分享链接');
-  const release = await createPage(dev.id, product, '版本迭代记录');
+  const form = new FormData();
+  form.append('file', new Blob([buffer]), 'roster.xlsx');
 
-  const tech = await createPage(dev.id, null, '技术方案');
-  const apiConvention = await createPage(dev.id, tech, '接口设计约定');
+  const preview = expectOk(
+    '上传名单并预览差异',
+    await api('POST', '/admin/org/import?dryRun=true', undefined, { formData: form }),
+  );
 
-  const handbook = await createPage(dev.id, null, '新人手册');
-  const meeting = await createPage(dev.id, null, '会议纪要');
+  const previewErrors = preview.preview.errors;
+  if (previewErrors.length > 0) {
+    console.error('✗ 导入预览报错,种子的表格或解析逻辑有问题:');
+    for (const item of previewErrors) {
+      console.error(`    第 ${item.row} 行:${item.reason}`);
+    }
+    process.exit(1);
+  }
+  const nodeCount = preview.preview.newNodes.length;
+  if (nodeCount !== 4) {
+    console.error(`✗ 预期新建 4 个节点(技术部/后端组/CRM 项目/市场部),实际 ${String(nodeCount)}:`);
+    for (const item of preview.preview.newNodes) console.error(`    ${item.path}`);
+    process.exit(1);
+  }
+  if (preview.preview.newUsers.length !== 4) {
+    console.error(`✗ 预期新建 4 个人,实际 ${String(preview.preview.newUsers.length)}`);
+    process.exit(1);
+  }
+  console.log(
+    `  新增节点 ${String(nodeCount)} 个 / 人员 ${String(preview.preview.newUsers.length)} 人 / 归属 ${String(preview.preview.newAssignments.length)} 条`,
+  );
 
-  // ---------------- 正文(让检索有东西可搜) ----------------
-  await setContent(
-    product,
-    doc(
-      h(1, '产品文档'),
-      p('本空间存放研发中心的内部产品与技术资料。写作约定:能用表格就别写长段落,能举例就别讲道理。'),
-      h(2, '资料分区'),
-      bullets(
-        '需求规格说明书 —— 需求的口径以这里为准,变更必须同步更新',
-        '技术方案 —— 架构决策与取舍记录',
-        '新人手册 —— 入职第一周需要知道的全部事情',
-        '会议纪要 —— 决议与跟进项',
-      ),
-      h(2, '写作约定'),
-      table([
-        ['场景', '约定'],
-        ['术语', '首次出现写全称,后续可用简称'],
-        ['截图', '必须带说明文字,否则搜不到'],
-        ['待确认', '用「待确认」开头,方便统一搜出来'],
-      ]),
+  const form2 = new FormData();
+  form2.append('file', new Blob([buffer]), 'roster.xlsx');
+  expectOk(
+    '确认导入',
+    await api(
+      'POST',
+      `/admin/org/import?dryRun=false&contentHash=${preview.contentHash}`,
+      undefined,
+      { formData: form2 },
     ),
   );
 
-  await setContent(
-    spec,
-    doc(
-      h(1, '需求规格说明书'),
-      p('本文描述知识库阶段一的完整需求。阶段一的目标不是功能多,而是让一个同事在内网里能完整用起来。'),
-      h(2, '1. 范围'),
-      p('阶段一交付:身份与权限、空间与页面树、正文编辑、中文检索、页面级评论、审计日志、备份与恢复。'),
-      h(2, '2. 权限模型'),
-      p('权限分四层继承:空间 → 页面链 → 显式规则 → 就近覆盖。拒绝优先,且拒绝会立即短路。'),
-      table([
-        ['角色', '能力'],
-        ['空间管理员', '成员管理、页面彻底删除、权限设置、审计'],
-        ['编辑者', '建页、改页、移动、软删除、恢复'],
-        ['评论者', '查看、留言、标记自己的评论已解决'],
-        ['只读成员', '仅查看'],
-      ]),
-      h(2, '3. 分享链接'),
-      p('分享链接属于阶段二,阶段一只有站内访问。这里留一个标题是为了目录结构完整。'),
-      h(2, '4. 非功能需求'),
-      bullets(
-        '中文检索必须可用 —— 这是选 pg_trgm 而不是 tsvector 的原因',
-        '同一篇文档被两人同时编辑时,不能静默覆盖对方的修改',
-        '页面移动之后,所有子孙的路径与深度必须一起重建',
-      ),
-    ),
+  // ---- 3. 摸清树的形状 ----
+  const tree = expectOk('读取组织树', await api('GET', '/org/tree'));
+  const byTitle = (title) => tree.nodes.find((node) => node.title === title);
+  const titles = tree.nodes.map((node) => node.title).join('、');
+  console.log(`  节点:${titles}`);
+
+  for (const required of ['技术部', '后端组', 'CRM 项目', '市场部']) {
+    if (byTitle(required) === undefined) {
+      console.error(`✗ 树里找不到「${required}」`);
+      process.exit(1);
+    }
+  }
+
+  // ---- 4. 陈默(技术部部长)登场:他要改密才能做任何事 ----
+  console.log('\n—— 以陈默(技术部部长)的身份创建内容 ——');
+  const login = await api('POST', '/auth/login', { employeeNo: 'KC002', password: '123456' });
+  if (login.status !== 201 && login.status !== 200) {
+    console.error('✗ 陈默(KC002)用初始密码 123456 登录失败:', JSON.stringify(login.body));
+    process.exit(1);
+  }
+  console.log('✓ KC002 用初始密码 123456 登录成功');
+
+  // 先证明拦截真的生效:改密之前访问别的接口必须是 403 PASSWORD_CHANGE_REQUIRED
+  const blocked = await api('GET', '/org/tree');
+  if (blocked.status !== 403 || blocked.body?.error?.code !== 'PASSWORD_CHANGE_REQUIRED') {
+    console.error('✗ 未改密却能访问其他接口 —— 强制改密的拦截没生效:', JSON.stringify(blocked.body));
+    process.exit(1);
+  }
+  console.log('✓ 未改密时其他接口被拦(403 PASSWORD_CHANGE_REQUIRED)');
+
+  expectOk(
+    'KC002 改密为种子密码',
+    await api('POST', '/auth/change-password', {
+      currentPassword: '123456',
+      newPassword: PASSWORD,
+    }),
   );
 
-  await setContent(
-    permModel,
-    doc(
-      h(1, '权限模型'),
-      p('权限判定只存显式规则,不存最终结果 —— 运行时沿物化路径向上回溯计算。'),
-      h(2, '四条铁律'),
-      bullets(
-        '拒绝优先:任一命中规则 deny=true 即短路,不受层级影响',
-        '就近覆盖:更靠近自身的层覆盖更浅的层',
-        '同层多规则:单个用户的规则强于部门的规则',
-        '最小可见:无权访问一律返回未找到,不区分「不存在」与「无权」',
-      ),
-      h(2, '判定伪代码'),
-      codeBlock(
-        'text',
-        'for (const layer of chainFromRootToSelf) {\n' +
-          '  const matched = layer.rules.filter(hitsMe);\n' +
-          '  if (matched.length === 0) continue;\n' +
-          '  if (matched.some(deny)) return "none";   // 短路\n' +
-          '  best = mostSpecific(matched).role;\n' +
-          '}\n' +
-          'return best ?? spaceRole;',
-      ),
-    ),
-  );
+  // ---- 5. 建内容 ----
+  const created = new Map();
 
-  await setContent(
-    shareLink,
-    doc(
-      h(1, '分享链接'),
-      p('阶段二功能:生成一条带密码与有效期的对外链接。阶段一不做,此处仅保留占位。'),
-    ),
-  );
-
-  await setContent(
-    release,
-    doc(
-      h(1, '版本迭代记录'),
-      p('倒序记录。每条写清:改了什么、为什么改、谁拍的板。'),
-      bullets(
-        'v0.4 —— 页面树与拖拽排序;移动时递归重建子树路径',
-        'v0.3 —— 空间与成员管理;权限矩阵落成数据而不是散落的 if',
-        'v0.2 —— 身份与会话;改用不透明会话 token 而不是 JWT',
-        'v0.1 —— 基础设施:四个容器 + 健康检查 + 统一异常过滤器',
-      ),
-    ),
-  );
-
-  // 上传一张图片,插进「技术方案」—— 验证「上传 → Nginx 直出」整条链路
-  let uploaded = null;
-  try {
-    const form = new FormData();
-    form.append(
-      'file',
-      new Blob([Buffer.from(TINY_PNG_BASE64, 'base64')], { type: 'image/png' }),
-      'architecture.png',
+  async function createDoc(title, parentTitle) {
+    const parent = parentTitle === null ? null : byTitle(parentTitle);
+    if (parentTitle !== null && parent === undefined) {
+      console.error(`✗ 找不到父节点「${parentTitle}」`);
+      process.exit(1);
+    }
+    const node = expectOk(
+      `新建「${title}」${parentTitle === null ? '(顶层)' : ` 于「${parentTitle}」下`}`,
+      await api('POST', '/nodes', {
+        parentId: parent?.id ?? null,
+        kind: 'document',
+        title,
+      }),
     );
-    const res = await fetch(`${BASE}/uploads`, {
-      method: 'POST',
-      headers: cookie === '' ? {} : { Cookie: cookie },
-      body: form,
+    created.set(title, node.id);
+    const saved = await api('PUT', `/nodes/${node.id}/content`, {
+      content: DOCS[title],
+      baseUpdatedAt: new Date(0).toISOString(),
     });
-    if (res.ok) uploaded = await res.json();
-  } catch {
-    uploaded = null;
+    if (saved.status !== 200) {
+      console.error(`✗ 保存「${title}」的正文失败:HTTP ${String(saved.status)}`);
+      console.error(JSON.stringify(saved.body, null, 2));
+      process.exit(1);
+    }
+    return node;
   }
 
-  await setContent(
-    tech,
-    doc(
-      h(1, '技术方案'),
-      p('本页记录阶段一的架构决策。判断标准只有一条:出问题时能不能在半小时内定位。'),
-      h(2, '部署形态'),
-      p('四个容器:postgres、redis、api、web。web 同时承担静态资源与反向代理。'),
-      h(2, '分层职责'),
-      table([
-        ['层', '做什么', '绝对不做'],
-        ['Nginx', '静态资源、反向代理', '任何权限判断'],
-        ['NestJS', '全部业务与鉴权', '拼 HTML'],
-        ['PostgreSQL', '数据与检索', '业务规则'],
-        ['Redis', '权限缓存、在线态', '作为唯一数据源'],
-      ]),
-      h(2, '为什么正文不能存 Markdown 字符串'),
-      p('阶段二要挂协同编辑。Markdown 字符串无法与 CRDT 的文档模型一一对应,存了就得推倒重来。'),
-      codeBlock(
-        'sql',
-        '-- 正文三列并存,阶段一只用前两列\n' +
-          'content_json    jsonb  -- ProseMirror 文档树(唯一真相)\n' +
-          'ydoc_snapshot   bytea  -- 阶段二的 CRDT 快照,现在保持 null\n' +
-          'text_for_search text   -- 每次落库时同步拍的纯文本',
-      ),
-      ...(uploaded === null ? [] : [h(2, '架构图'), image(uploaded.url, '四层部署结构')]),
-    ),
+  await createDoc('研发规范', '技术部');
+  await createDoc('技术方案', '技术部');
+  await createDoc('接口规范', '后端组');
+  await createDoc('CRM 项目概览', 'CRM 项目');
+
+  // 市场部的页面由孙浩自己建(他不是超管,但他是市场部所有者)
+  console.log('\n—— 以孙浩(市场部部长)的身份创建内容 ——');
+  expectOk('KC005 登录', await api('POST', '/auth/login', { employeeNo: 'KC005', password: '123456' }));
+  expectOk(
+    'KC005 改密为种子密码',
+    await api('POST', '/auth/change-password', {
+      currentPassword: '123456',
+      newPassword: PASSWORD,
+    }),
+  );
+  await createDoc('市场部工作方式', '市场部');
+
+  // ---- 6. 评论(全体都能发;陈默发一条并回复一条) ----
+  console.log('\n—— 评论 ——');
+  const marketComment = await api('POST', `/nodes/${created.get('市场部工作方式')}/comments`, {
+    body: '这份口径我按季度维护,有异议直接在这里说。',
+  });
+  expectOk('孙浩在市场部页面留言', marketComment);
+
+  expectOk('KC002 登录', await api('POST', '/auth/login', { employeeNo: 'KC002', password: PASSWORD }));
+  const techComment = expectOk(
+    '陈默在「技术方案」留言',
+    await api('POST', `/nodes/${created.get('技术方案')}/comments`, {
+      body: '数据库版本定在 16,不要用 15 的语法。',
+    }),
+  );
+  expectOk(
+    '陈默回复自己的留言',
+    await api('POST', `/nodes/${created.get('技术方案')}/comments`, {
+      body: '补充:升级前先跑一遍备份恢复演练。',
+      parentId: techComment.id,
+    }),
   );
 
-  await setContent(
-    apiConvention,
-    doc(
-      h(1, '接口设计约定'),
-      p('所有接口挂在 /api/v1 下,统一返回 JSON。'),
-      h(2, '错误码'),
-      table([
-        ['错误码', 'HTTP', '含义'],
-        ['UNAUTHORIZED', '401', '未登录或会话过期'],
-        ['FORBIDDEN', '403', '已登录但权限不足'],
-        ['NOT_FOUND', '404', '不存在,或存在但无权访问'],
-        ['VERSION_CONFLICT', '409', '乐观锁冲突,需重新拉取'],
-      ]),
-      p('注意 NOT_FOUND 刻意不区分「不存在」与「无权访问」,否则可以用错误码枚举出别人的文档 id。'),
-    ),
+  // ---- 7. 给赵敏一条额外授权,用来验收"被授权者能改但不能转授" ----
+  const grants = expectOk(
+    '读取「接口规范」的授权视图',
+    await api('GET', `/nodes/${created.get('接口规范')}/grants`),
   );
-
-  await setContent(
-    handbook,
-    doc(
-      h(1, '新人手册'),
-      p('入职第一周需要知道的全部事情。'),
-      h(2, '第一天'),
-      bullets('领账号:找空间管理员邀请你加入对应空间', '读一遍本手册与产品文档', '在你的空间里建一篇「我的笔记」'),
-      h(2, '常用操作'),
-      table([
-        ['想做的事', '怎么做'],
-        ['找文档', 'Ctrl / Cmd + K,直接搜标题或正文'],
-        ['建子页面', '鼠标移到页面树某一行,点 +'],
-        ['调整顺序', '按住行拖到目标位置(上/中/下三个落点)'],
-        ['讨论', '打开页面右侧的「评论」页签'],
-      ]),
-    ),
-  );
-
-  await setContent(
-    meeting,
-    doc(
-      h(1, '会议纪要'),
-      p('按时间倒序。每条纪要要写清决议与跟进人,没有跟进人的决议等于没开过会。'),
-      h(2, '关于检索方案'),
-      p('结论:阶段一用 pg_trgm + ILIKE,不用 PostgreSQL 自带的 tsvector。'),
-      p('原因:tsvector 的分词器按空格与标点切词,中文没有空格,整句话会被当成一个词 —— 搜「权限」什么都搜不到。'),
-    ),
-  );
-
-  console.log('✓ 写入 7 篇文档正文(含表格、代码块、图片)');
-
-  // ---------------- 评论 ----------------
-  await loginAs('commenter@example.com');
-  const c1 = await api('POST', `/pages/${spec}/comments`, {
-    body: '第二节的表格里,「评论者」是否包含外部顾问?建议单独列一条,否则口径会打架。',
-  });
-  await api('POST', `/pages/${spec}/comments`, {
-    body: '同意。另外「分享链接」那一节的标题建议改成「对外分享(阶段二)」,免得新人以为现在就能用。',
-  });
-  await loginAs('editor@example.com');
-  await api('POST', `/pages/${spec}/comments`, {
-    body: '外部顾问按评论者处理,我在表格下面补一句说明。第二点接受,稍后改标题。',
-    parentId: c1.id,
-  });
-  await api('POST', `/pages/${tech}/comments`, {
-    body: '「Redis 不作为唯一数据源」这条写得好。建议在权限缓存那一节也点一下,免得后面有人图省事把会话挪进去。',
-  });
-  console.log('✓ 写入 4 条评论(含 1 条回复)');
-
-  // ---------------- 页面级权限:一条 deny + 一条子级 allow ----------------
-  // 目的:让人**亲眼看到** null 覆盖不了 deny —— 子页面的 allow 翻不了父页面的拒绝。
-  const allMembers = await api('GET', `/spaces/${dev.id}/members`);
-  const viewer = allMembers.members.find((m) => m.email === 'viewer@example.com');
-
-  await loginAs('admin@example.com');
-  if (viewer !== undefined) {
-    await api('PUT', `/pages/${tech}/permissions`, {
-      rules: [{ subjectType: 'user', subjectId: viewer.userId, role: 'none', deny: true }],
-    });
-    await api('PUT', `/pages/${apiConvention}/permissions`, {
-      rules: [{ subjectType: 'user', subjectId: viewer.userId, role: 'viewer', deny: false }],
-    });
-    console.log('✓ 给「技术方案」加了 deny 规则,并给它的子页面写了一条 allow(用来看短路)');
+  const users = expectOk('读取人员列表', await api('GET', '/admin/users'));
+  const zhao = users.find((user) => user.employeeNo === 'KC004');
+  if (zhao === undefined) {
+    console.error('✗ 找不到 KC004 赵敏');
+    process.exit(1);
   }
-
-  // ---------------- 一个已删除的子树 ----------------
-  await loginAs('admin@example.com');
-  const draft = await createPage(dev.id, null, '临时草稿(已删除)');
-  await createPage(dev.id, draft, '草稿下的子页面');
-  await api('DELETE', `/pages/${draft}`);
-  console.log('✓ 建好三层页面树,并删除一棵子树放进回收站');
-
-  // ---------------- 空间 2:市场部空间(验证跨空间隔离) ----------------
-  const marketing = await api('POST', '/spaces', { name: '市场部空间' });
-  await api('POST', `/spaces/${marketing.id}/members`, {
-    email: 'outsider@example.com',
-    name: '市场部·孙浩',
-    role: 'viewer',
-    password: PASSWORD,
-    department: '市场部',
+  const grantResult = await api('PUT', `/nodes/${created.get('接口规范')}/grants`, {
+    version: grants.version,
+    userIds: [zhao.id],
   });
-  console.log(`✓ 空间「市场部空间」 ${marketing.id}(只有 孙浩 一人)`);
+  if (grantResult.status !== 200) {
+    console.error(`✗ 给赵敏授权失败:HTTP ${String(grantResult.status)}`);
+    console.error(JSON.stringify(grantResult.body, null, 2));
+    process.exit(1);
+  }
+  console.log('✓ 把「接口规范」的编辑权额外授予赵敏');
 
-  // ---------------- 汇总 ----------------
-  const accounts = [
-    ['admin@example.com', '管理员·林晓', '研发中心 = 空间管理员(所有者) / 市场部空间 = 空间管理员'],
-    ['editor@example.com', '编辑者·陈默', '研发中心 = 编辑者'],
-    ['commenter@example.com', '评论者·王思远', '研发中心 = 评论者'],
-    ['viewer@example.com', '只读·赵敏', '研发中心 = 只读成员;看不到「技术方案」(被 deny)'],
-    ['outsider@example.com', '市场部·孙浩', '只在市场部空间 —— 登录后**看不到**研发中心'],
+  // ---- 8. 记一份账号清单 ----
+  const here = dirname(fileURLToPath(import.meta.url));
+  const outPath = join(here, '..', '..', '..', 'DEMO-ACCOUNTS.txt');
+  const lines = [
+    '知源 KnowledgeCool · 演示账号',
+    `生成时间: ${new Date().toISOString()}`,
+    '',
+    '组织架构:',
+    '  技术部(部长 陈默) ─ 后端组(组长 王思远)、CRM 项目(组长 王思远)',
+    '  市场部(部长 孙浩)',
+    '',
+    `KC001  林晓    超级管理员(只管组织架构与人员,不自动拥有内容编辑权)  密码 ${ADMIN_PASSWORD}`,
+    `KC002  陈默    技术部部长(能改技术部下的全部内容)                密码 ${PASSWORD}  ← 已被种子改过`,
+    `KC003  王思远  后端组组长 + CRM 项目组长                        密码 123456   ← 首登会强制改密`,
+    `KC004  赵敏    技术部 / 后端组 组员(只能改自己建的;另有「接口规范」的授权)  密码 123456`,
+    `KC005  孙浩    市场部部长                                       密码 ${PASSWORD}  ← 已被种子改过`,
+    '',
+    `访问入口: ${ROOT}`,
+    '',
+    '建议的验收顺序:',
+    '  1. KC005 登录 → 左侧只看到市场部,技术部下的内容他能读但改不动',
+    '  2. KC004 登录(123456 → 会被要求改密)→ 在后端组下新建一个页面,自己可改',
+    '  3. KC003 登录(123456)→ 能看到并修改赵敏建的页面(他是组长,在祖先链上)',
+    '  4. KC002 登录 → 改技术部下的任意内容;进「接口规范」的权限弹窗看三段划分',
+    '  5. KC001 登录 → 组织架构 / 人员管理 / Excel 导入 / 审计日志',
+    '',
+    '⚠️ 这是**演示数据**,口令明文在这里。验完请清库换自己的管理员:',
+    '     docker compose down -v && docker compose up -d',
+    '',
   ];
-
-  const emailWidth = Math.max(...accounts.map((a) => a[0].length));
-
-  console.log(`\n${'='.repeat(78)}`);
-  console.log('验收账号(密码全部相同)');
-  console.log('='.repeat(78));
-  for (const [email, name, note] of accounts) {
-    console.log(`  ${email.padEnd(emailWidth)}  ${name}`);
-    console.log(`  ${' '.repeat(emailWidth)}  ${note}`);
+  if (existsSync(outPath)) {
+    console.log(`(覆盖已存在的 ${outPath})`);
   }
-  console.log('='.repeat(78));
-  console.log(`  统一密码:  ${PASSWORD}`);
-  console.log(`  入口:      http://localhost:8080/login`);
-  console.log(`  研发中心:  http://localhost:8080/s/${dev.id}`);
-  console.log('='.repeat(78));
-  console.log('\n建议的验收顺序:');
-  console.log('  1. 编辑者·陈默 登录 → 逐个页面点开:正文、表格、代码块、图片都在');
-  console.log('     (图片能显示 = 上传 + Nginx 直出这条链路通了)');
-  console.log('  2. 按 Ctrl / Cmd + K 搜「权限」→ 应命中「权限模型」与「需求规格说明书」');
-  console.log('     再搜「CRDT」→ 命中「技术方案」的正文');
-  console.log('  3. 编辑者·陈默 在「技术方案」里打字 → 右上角出现「正在保存…」→「已自动保存」');
-  console.log('     刷新页面,内容还在');
-  console.log('  4. 评论者·王思远 打开「需求规格说明书」→ 右侧「评论」页签:发表、回复、标记已解决');
-  console.log('     页面树上该页会出现未解决评论的角标');
-  console.log('  5. 只读·赵敏 登录 → 页面上没有编辑按钮、工具栏不出现、右侧也没有输入框;');
-  console.log('     **重点**:左边的树上**看不到「技术方案」**——它被 deny 掉了,');
-  console.log('     而它子页面的 allow 也翻不了这个案(拒绝优先会短路)');
-  console.log('  6. 管理员·林晓 打开「技术方案」→ 点右上「权限」→ 能看到推导链与生效的规则');
-  console.log('  7. 管理员·林晓 打开「技术方案」→ 点「导出 MD」→ 下载的 .md 用编辑器打开,层级正常');
-  console.log('  8. 管理员·林晓 → 左侧 ⊞ 进空间 → 成员与角色 / 回收站 / 审计日志 三个入口都点一遍');
-  console.log('  9. 市场部·孙浩 登录 → 左边只有「市场部空间」,研发中心完全不出现');
-  console.log(' 10. 陈默 拖拽「需求规格说明书」(三层子树)到「技术方案」下 → 展开后子页面跟着走');
-  console.log(' 11. 两人同时改同一页面标题 → 后提交的那个应收到冲突提示');
+  writeFileSync(outPath, lines.join('\n'), 'utf8');
+
+  console.log(`\n✅ 种子完成。账号清单已写入 DEMO-ACCOUNTS.txt`);
+  console.log(`   演示密码:${PASSWORD}  管理员密码:${ADMIN_PASSWORD}`);
 }
 
-main().catch((error) => {
-  console.error(`\n✗ 种子脚本失败: ${error instanceof Error ? error.message : String(error)}`);
-  process.exitCode = 1;
-});
+await main();

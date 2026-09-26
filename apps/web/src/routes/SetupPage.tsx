@@ -5,78 +5,101 @@ import { AuthShell, Button, ErrorNote, FullScreenNote, TextField } from '../comp
 import { useMe, useSetup, useSetupState } from '../features/auth/queries';
 
 /**
- * 首次初始化引导页(DESIGN.md §7.2 的 `/setup`)。
+ * 首次部署的管理员初始化(DESIGN.md §7.2 的 `/setup`)。
  *
- * 只有在**库里一个用户都没有**时才应该出现。判断依据是公开接口
- * `GET /auth/setup-state`,而不是「试着提交再接住 403」——
- * 后者会让用户在看到一个正常表单后莫名其妙地被拒绝。
+ * 只在**库中一个用户都没有**时可用 —— 服务端用"无用户才允许"这条规则保证,
+ * 前端这个判断只是为了不让用户在明知不可用时白填一遍表单。
+ *
+ * 这里建的账号 `mustChangePassword` 是 `false`:初始密码是他自己当场设的,
+ * 再强制他改一遍没有意义。
  */
 export function SetupPage() {
-  const setupState = useSetupState();
   const me = useMe();
+  const setupState = useSetupState();
   const setup = useSetup();
   const navigate = useNavigate();
 
-  const [email, setEmail] = useState('');
+  const [employeeNo, setEmployeeNo] = useState('');
   const [name, setName] = useState('');
   const [password, setPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
 
-  if (setupState.isPending) return <FullScreenNote>正在检查系统状态…</FullScreenNote>;
-
-  // 系统已初始化 → 这不是该来的地方
-  if (setupState.data?.required === false) {
-    return <Navigate to={me.data !== undefined ? '/' : '/login'} replace />;
+  if (me.isPending || setupState.isPending) {
+    return <FullScreenNote>正在检查系统状态…</FullScreenNote>;
   }
+
+  if (me.data !== undefined) return <Navigate to="/" replace />;
+  if (setupState.data?.required === false) return <Navigate to="/login" replace />;
+
+  const mismatch = confirm !== '' && confirm !== password;
 
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
+    if (mismatch) return;
     setup.mutate(
-      { email, name, password },
+      { employeeNo: employeeNo.trim(), name: name.trim(), password },
       { onSuccess: () => void navigate('/', { replace: true }) },
     );
   }
 
   return (
-    <AuthShell title="初始化知源知识库" subtitle="首次部署 · 创建第一位管理员">
+    <AuthShell title="初始化知源知识库" subtitle="库里还没有任何账号,先创建第一个管理员">
       <form onSubmit={handleSubmit} className="space-y-4">
         <TextField
-          label="企业邮箱"
-          type="email"
-          autoComplete="username"
+          label="工号"
           required
-          value={email}
-          onChange={(e) => void setEmail(e.target.value)}
-          placeholder="admin@example.com"
+          value={employeeNo}
+          onChange={(event) => {
+            setEmployeeNo(event.target.value);
+          }}
+          hint="登录用的就是工号,定下来之后不要改 —— 改了系统会当成另一个人。"
+          placeholder="例如 admin"
         />
         <TextField
-          label="显示名"
+          label="姓名"
           required
-          maxLength={64}
           value={name}
-          onChange={(e) => void setName(e.target.value)}
-          placeholder="你的名字"
+          onChange={(event) => {
+            setName(event.target.value);
+          }}
         />
         <TextField
           label="密码"
           type="password"
           autoComplete="new-password"
           required
-          minLength={8}
           value={password}
-          onChange={(e) => void setPassword(e.target.value)}
-          hint="至少 8 位;上限 72 字节(约 24 个汉字)"
+          onChange={(event) => {
+            setPassword(event.target.value);
+          }}
+          hint="至少 8 位,且同时包含字母与数字。"
+        />
+        <TextField
+          label="确认密码"
+          type="password"
+          autoComplete="new-password"
+          required
+          value={confirm}
+          onChange={(event) => {
+            setConfirm(event.target.value);
+          }}
         />
 
+        {mismatch && (
+          <p role="alert" className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            两次输入的密码不一致。
+          </p>
+        )}
         <ErrorNote error={setup.error} />
 
-        <Button type="submit" disabled={setup.isPending} className="w-full py-2">
-          {setup.isPending ? '正在创建…' : '创建管理员并进入'}
+        <Button type="submit" disabled={setup.isPending || mismatch} className="w-full py-2">
+          {setup.isPending ? '创建中…' : '创建管理员并进入'}
         </Button>
-
-        <p className="text-xs leading-relaxed text-slate-400">
-          该入口只在系统没有任何用户时可用。创建成功后,库里就存在账号,此页会自动关闭。
-        </p>
       </form>
+
+      <p className="mt-6 text-xs leading-relaxed text-slate-400">
+        这个账号会成为超级管理员,负责建部门、导人员名单、任命各级所有者。
+      </p>
     </AuthShell>
   );
 }

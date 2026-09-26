@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 
 import { AuthModule } from '../auth/auth.module.js';
 import { PermissionModule } from '../permission/permission.module.js';
+import { OrgImportService } from './import.service.js';
 import { OrgController } from './org.controller.js';
 import { OrgService } from './org.service.js';
 
@@ -20,7 +21,7 @@ import { OrgService } from './org.service.js';
 @Module({
   imports: [AuthModule, PermissionModule],
   controllers: [OrgController],
-  providers: [OrgService],
+  providers: [OrgService, OrgImportService],
   exports: [OrgService],
 })
 export class OrgModule {}

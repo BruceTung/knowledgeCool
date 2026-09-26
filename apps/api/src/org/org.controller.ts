@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Header,
   HttpCode,
   HttpStatus,
   Param,
@@ -9,10 +10,23 @@ import {
   Patch,
   Post,
   Query,
+  Res,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
-import type { AuthUser, GrantCandidate, OrgScopeOption, OrgUserView } from '@knowledgecool/shared';
+import { FileInterceptor } from '@nestjs/platform-express';
+import type {
+  AuthUser,
+  GrantCandidate,
+  OrgImportResponse,
+  OrgScopeOption,
+  OrgUserView,
+} from '@knowledgecool/shared';
+import type { Response } from 'express';
+import { memoryStorage } from 'multer';
 
 import { CurrentUser } from '../auth/current-user.decorator.js';
+import { AppError } from '../common/errors/app-error.js';
 import {
   CreateOrgNodeDto,
   CreateUserDto,
@@ -20,7 +34,11 @@ import {
   SetOwnerDto,
   UpdateUserDto,
 } from './dto/org.dto.js';
+import { OrgImportService } from './import.service.js';
 import { OrgService } from './org.service.js';
+
+/** Excel 上传上限。全公司几百人的名单撑死几百 KB,给 8MB 已经很宽。 */
+const MAX_IMPORT_BYTES = 8 * 1024 * 1024;
 
 /**
  * 组织架构与人员(DESIGN.md §6.2 的「组织架构」一组)。
@@ -34,7 +52,10 @@ import { OrgService } from './org.service.js';
  */
 @Controller()
 export class OrgController {
-  constructor(private readonly org: OrgService) {}
+  constructor(
+    private readonly org: OrgService,
+    private readonly imports: OrgImportService,
+  ) {}
 
   /**
    * 组织范围下拉数据(一级 + 二级节点的路径与人数)。
@@ -109,5 +130,64 @@ export class OrgController {
     @Body() body: SetAssignmentsDto,
   ): Promise<OrgUserView> {
     return this.org.setAssignments(user, userId, body);
+  }
+
+  // ---------------- 组织架构导入(Excel,§8.5) ----------------
+
+  /**
+   * 下载模板。**模板里带当前全部数据** —— 管理员的动作是"往上加行",
+   * 而不是"从空白开始填"(见 §8.5 对"覆盖 vs 增量"的讨论)。
+   */
+  @Get('admin/org/import-template')
+  @Header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+  async importTemplate(
+    @CurrentUser() user: AuthUser,
+    @Res() res: Response,
+  ): Promise<void> {
+    const buffer = await this.imports.buildTemplate(user);
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="org-import.xlsx"; filename*=UTF-8''${encodeURIComponent('组织架构导入模板.xlsx')}`,
+    );
+    res.end(buffer);
+  }
+
+  /**
+   * 上传并**预览差异**,或确认写入。同一个接口的两个模式。
+   *
+   * 刻意做成一个接口而不是两个:`dryRun` 与写入**共用同一份解析与差异计算**。
+   * 拆成两条路径的话,两边迟早算出不同结果,而管理员是照着预览做决定的。
+   *
+   * 确认写入时**必须带上预览返回的 `contentHash`** —— 不一致说明文件换过了。
+   */
+  @Post('admin/org/import')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      // 内存存储:Excel 只用来解析,不该在磁盘上留任何副本
+      storage: memoryStorage(),
+      limits: { fileSize: MAX_IMPORT_BYTES, files: 1 },
+    }),
+  )
+  import(
+    @CurrentUser() user: AuthUser,
+    @UploadedFile() file: Express.Multer.File | undefined,
+    @Query('dryRun') dryRun?: string,
+    @Query('contentHash') contentHash?: string,
+  ): Promise<OrgImportResponse> {
+    // ⚠️ 权限检查必须在**文件校验之前**。
+    //
+    // 反过来的话,一个普通成员不带文件请求这个接口会先撞上"请选择文件"的 400 ——
+    // 等于告诉了他"这个接口存在、只是你参数没给对"。权限不足就该一律 403,
+    // 而且要在做任何其他判断之前。(这条是实跑验收时发现顺序错了才补的。)
+    if (!user.isSuperAdmin) {
+      throw AppError.forbidden('只有管理员能维护组织架构与人员');
+    }
+    if (file === undefined) {
+      throw AppError.validation('请选择要上传的 .xlsx 文件(字段名 file)');
+    }
+    return this.imports.run(user, file.buffer, {
+      dryRun: dryRun !== 'false',
+      expectedHash: contentHash,
+    });
   }
 }

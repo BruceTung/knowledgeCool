@@ -52,6 +52,11 @@ const TREE_SELECT = {
   title: true,
   position: true,
   depth: true,
+  status: true,
+  // ⚠️ version 必须进树 —— 前端拖拽要拿它做乐观锁。
+  // 少了这一列,前端就得为每次拖拽先单独拉一次详情,多一轮往返而且
+  // 两次读之间数据可能已经变了(拖拽落到错误位置)。
+  version: true,
   ownerId: true,
   createdBy: true,
 } satisfies Prisma.NodeSelect;
@@ -172,6 +177,8 @@ export class NodeService {
         title: row.title,
         position: row.position,
         depth: row.depth,
+        status: toNodeStatus(row.status),
+        version: row.version,
         ownerId: row.ownerId,
         ownerName: briefs.get(row.ownerId)?.name ?? '未知',
         openCommentCount: commentCounts.get(row.id) ?? 0,
@@ -241,7 +248,8 @@ export class NodeService {
 
     const items: TrashItem[] = [];
     for (const root of roots) {
-      const access = await this.permissions.access(operator, root.id);
+      // 已删节点在判定上"算不存在",必须显式放行,否则整条回收站会 404
+      const access = await this.permissions.access(operator, root.id, { allowDeleted: true });
       if (!access.canEdit) continue;
 
       const subtreeSize = await this.prisma.node.count({
@@ -486,10 +494,9 @@ export class NodeService {
    * 否则恢复出来的节点会挂在一个看不见的父节点下。
    */
   async restore(operator: Actor, nodeId: string): Promise<NodeDetail> {
-    // 回收站里的节点在判定上也算"不存在",所以这里显式放行已删除的行,
-    // 否则恢复接口永远拿不到节点(表现为"恢复一个已删除的节点报 404")。
-    const { row } = await this.permissions.chainOf(nodeId, { allowDeleted: true });
-    await this.permissions.requireEdit(operator, nodeId);
+    // ⚠️ `allowDeleted` 必须一路传到 requireEdit —— 只给 chainOf 传是不够的:
+    // 判定本身也会把已删节点当成不存在,于是恢复接口永远报 404。
+    const { row } = await this.permissions.requireEdit(operator, nodeId, { allowDeleted: true });
 
     if (row.deletedAt === null) throw AppError.validation('该节点不在回收站里');
 
@@ -552,8 +559,8 @@ export class NodeService {
    * 被授权者能改能软删(可恢复),但不能彻底销毁(§5.4)。
    */
   async purge(operator: Actor, nodeId: string): Promise<void> {
-    const { row } = await this.permissions.chainOf(nodeId, { allowDeleted: true });
-    await this.permissions.requireManage(operator, nodeId);
+    // 同 restore:`allowDeleted` 要一路传到判定里,否则界面上的「彻底删除」永远用不了
+    const { row } = await this.permissions.requireManage(operator, nodeId, { allowDeleted: true });
 
     if (row.deletedAt === null) {
       throw AppError.validation('只能彻底删除回收站里的节点,请先移入回收站');

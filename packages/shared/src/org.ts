@@ -55,6 +55,15 @@ export interface OrgUserView {
   isSuperAdmin: boolean;
   /** 组织归属的节点路径,如 `["技术部 / 后端组"]`。一人可有多条 */
   scopePaths: string[];
+  /**
+   * 归属节点的 id,与 `scopePaths` **同序**。
+   *
+   * 为什么两个都要给:路径是给人看的,id 是给「设置归属」那个多选框用的。
+   * 只给路径的话,前端要靠文本匹配才能把已选项勾上 —— 而一旦某条归属
+   * 不在候选列表里(例如它挂在三级节点上),那一条会在保存时被**静默丢掉**,
+   * 因为保存是整表替换。
+   */
+  scopeNodeIds: string[];
   lastLoginAt: string | null;
 }
 
@@ -95,14 +104,44 @@ export interface OrgImportPreview {
   newAssignments: { employeeNo: string; nodePath: string }[];
   /** 表格里出现但系统里没有的节点 */
   newNodes: { path: string }[];
+  /**
+   * 节点改名的差异。
+   *
+   * 之所以需要它:用户明确"部门只会更名不会消失",所以模板里有只读的
+   * `部门ID(勿改)` 列 —— 名称对不上但 ID 对得上时,识别成**改名**而不是新建。
+   * 这一项就是把它显示给管理员确认。
+   */
+  renamedNodes: { nodePath: string; from: string; to: string }[];
   ownerChanges: { nodePath: string; fromName: string | null; toName: string }[];
-  /** 被跳过的行(如整行空白) */
+  /** 被跳过的行(如重复行) */
   ignoredRows: { row: number; reason: string }[];
   /**
    * 校验错误。**非空时不允许写入** —— 前端必须把它显式显示出来,
    * 而不是"忽略有问题的行然后照样导"。
+   *
+   * `row` 为 `0` 表示问题不在某一行上,而是跨行的整体校验(如"某部门没有负责人")。
    */
   errors: { row: number; reason: string }[];
+}
+
+/**
+ * 上传解析后的返回体。
+ *
+ * `contentHash` 用来保证「预览的那份文件」与「确认写入的那份文件」是同一份:
+ * 确认时带上它,不一致则 409。没有这个校验的话,管理员在预览之后
+ * 又改了一版表格再上传,写入的就是他没看过的那一份 —— 而他会以为看过。
+ */
+export interface OrgImportResponse {
+  contentHash: string;
+  preview: OrgImportPreview;
+  /** 预览模式下为 `null`;确认写入后是实际写入的条数 */
+  applied: OrgImportResult | null;
+}
+
+/** 模板下载的查询参数 —— 默认全量。 */
+export interface ImportTemplateQuery {
+  /** 只导出某个部门下的人与结构(留的口子,界面暂未用) */
+  rootNodeId?: string;
 }
 
 export interface OrgImportResult {
@@ -111,12 +150,4 @@ export interface OrgImportResult {
   createdAssignments: number;
   updatedNames: number;
   updatedOwners: number;
-}
-
-/**
- * 导入模板的查询参数。
- * `rootNodeId` 是给"只导某个部门"留的口子 —— 一期只导全量,所以现在不用。
- */
-export interface ImportTemplateQuery {
-  rootNodeId?: string;
 }

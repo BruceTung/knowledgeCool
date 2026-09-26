@@ -1,4 +1,3 @@
-import { can, type PageDetail } from '@knowledgecool/shared';
 import type { Editor } from '@tiptap/core';
 import { useCallback, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
@@ -12,9 +11,8 @@ import {
   type OutlineItem,
   type SaveState,
 } from '../features/content/PageEditor';
-import { useExportMarkdown, usePageContent } from '../features/content/queries';
-import { usePageDetail, usePageTree, useUpdatePage } from '../features/pages/queries';
-import { PermissionsDialog } from '../features/permissions/PermissionsDialog';
+import { useGrantDialog } from '../features/grants/dialog-store';
+import { useExportMarkdown, useNodeContent, useNodeDetail, useUpdateNode } from '../features/org/queries';
 
 type RightTab = 'outline' | 'comments';
 
@@ -23,29 +21,41 @@ type RightTab = 'outline' | 'comments';
  *
  * 布局:面包屑 + 标题 + 正文(左) / 目录·评论(右)。
  * 高频动作是「找到一篇 → 读 → 改」,所以任何额外的导航层级都是成本。
+ *
+ * ⚠️ v2.0 的三处变化:
+ *   1. 路由从 `/s/:spaceId/p/:pageId` 变成 **`/n/:nodeId`** ——
+ *      空间与页面已合并成一棵树,路径里不再需要空间这一层。
+ *   2. `canEdit` / `canManage` **由服务端给**(`NodeDetail` 上带着),
+ *      前端不再自己按角色算。角色这个概念已经不存在了。
+ *   3. 所有者与创建者可能**已离职** —— 用户明确要求在这种页面上标出来。
  */
-export function PageDetailPage() {
-  const { spaceId, pageId } = useParams<{ spaceId: string; pageId: string }>();
+export function NodeDetailPage() {
+  const { nodeId } = useParams<{ nodeId: string }>();
 
-  if (spaceId === undefined || pageId === undefined) {
-    return <p className="p-8 text-sm text-slate-500">缺少页面标识。</p>;
+  if (nodeId === undefined) {
+    return <p className="p-8 text-sm text-slate-500">缺少节点标识。</p>;
   }
-  return <PageDetailView spaceId={spaceId} pageId={pageId} />;
+  return <NodeDetailView nodeId={nodeId} />;
 }
 
-function PageDetailView({ spaceId, pageId }: { spaceId: string; pageId: string }) {
-  const detail = usePageDetail(pageId);
-  const content = usePageContent(pageId);
-  const tree = usePageTree(spaceId);
-  const updatePage = useUpdatePage(spaceId);
-  const comments = useComments(pageId);
+/** 离职标记。历史记录不抹掉,只在名字旁注明(v2.2)。 */
+function DepartedBadge() {
+  return (
+    <span className="rounded bg-amber-50 px-1 text-[10px] text-amber-700 ring-1 ring-amber-200">
+      已离职
+    </span>
+  );
+}
+
+function NodeDetailView({ nodeId }: { nodeId: string }) {
+  const detail = useNodeDetail(nodeId);
+  const content = useNodeContent(nodeId);
+  const updateNode = useUpdateNode();
+  const comments = useComments(nodeId);
   const exportMd = useExportMarkdown();
+  const openGrants = useGrantDialog((state) => state.open);
 
-  // 权限弹窗是管理员才有的入口。查询只在打开时才跑 —— 免得普通成员每开一篇都发一次请求。
-  const [permissionsOpen, setPermissionsOpen] = useState(false);
-  const isSpaceAdmin = can(tree.data?.role ?? 'viewer', 'page.permission.update');
-
-  // 切换页面要重建编辑器(见 PageEditor 顶部关于「content 只在挂载时读一次」的说明)。
+  // 切换节点要重建编辑器(见 PageEditor 顶部关于「content 只在挂载时读一次」的说明)。
   // 用 `key` 控制重建,而不是靠 props 更新 —— 后者会把正在输入的内容重置掉。
   const [outline, setOutline] = useState<OutlineItem[]>([]);
   const [saveState, setSaveState] = useState<SaveState>('idle');
@@ -53,9 +63,7 @@ function PageDetailView({ spaceId, pageId }: { spaceId: string; pageId: string }
   const [titleDraft, setTitleDraft] = useState<string | null>(null);
   const [editorRef, setEditorRef] = useState<Editor | null>(null);
 
-  const canEdit = can(tree.data?.role ?? 'viewer', 'page.edit');
-
-  // 这两个回调要稳定,否则 PageEditor 里的 effect 每次渲染都会重跑
+  // 这三个回调要稳定,否则 PageEditor 里的 effect 每次渲染都会重跑
   const handleOutline = useCallback((items: OutlineItem[]) => {
     setOutline(items);
   }, []);
@@ -70,7 +78,10 @@ function PageDetailView({ spaceId, pageId }: { spaceId: string; pageId: string }
   const tabs = useMemo(
     () =>
       [
-        { key: 'outline' as const, label: `目录${outline.length > 0 ? ` (${String(outline.length)})` : ''}` },
+        {
+          key: 'outline' as const,
+          label: `目录${outline.length > 0 ? ` (${String(outline.length)})` : ''}`,
+        },
         { key: 'comments' as const, label: `评论${openCount > 0 ? ` (${String(openCount)})` : ''}` },
       ] satisfies { key: RightTab; label: string }[],
     [outline.length, openCount],
@@ -94,13 +105,14 @@ function PageDetailView({ spaceId, pageId }: { spaceId: string; pageId: string }
     );
   }
 
-  const page: PageDetail = detail.data;
+  const node = detail.data;
+  const canEdit = node.canEdit;
 
   function commitTitle(value: string) {
     setTitleDraft(null);
     const next = value.trim();
-    if (next === '' || next === page.title) return;
-    updatePage.mutate({ pageId: page.id, title: next, version: page.version });
+    if (next === '' || next === node.title) return;
+    updateNode.mutate({ nodeId: node.id, title: next, version: node.version });
   }
 
   function scrollToHeading(index: number) {
@@ -114,13 +126,13 @@ function PageDetailView({ spaceId, pageId }: { spaceId: string; pageId: string }
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex-none border-b border-slate-200 px-6 pt-4 pb-3">
           <nav className="flex flex-wrap items-center gap-1 text-xs text-slate-400">
-            <Link to={`/s/${spaceId}`} className="hover:text-slate-600">
-              空间首页
+            <Link to="/" className="hover:text-slate-600">
+              全部
             </Link>
-            {page.breadcrumb.map((crumb) => (
+            {node.breadcrumb.slice(0, -1).map((crumb) => (
               <span key={crumb.id} className="flex items-center gap-1">
                 <span>/</span>
-                <Link to={`/s/${spaceId}/p/${crumb.id}`} className="hover:text-slate-600">
+                <Link to={`/n/${crumb.id}`} className="hover:text-slate-600">
                   {crumb.title}
                 </Link>
               </span>
@@ -132,7 +144,7 @@ function PageDetailView({ spaceId, pageId }: { spaceId: string; pageId: string }
               {titleDraft !== null ? (
                 <input
                   autoFocus
-                  defaultValue={page.title}
+                  defaultValue={node.title}
                   className="w-full rounded-md border border-blue-400 px-2 py-1 text-2xl font-semibold outline-none"
                   onKeyDown={(event) => {
                     if (event.key === 'Enter') commitTitle(event.currentTarget.value);
@@ -147,25 +159,33 @@ function PageDetailView({ spaceId, pageId }: { spaceId: string; pageId: string }
                   }`}
                   title={canEdit ? '点击可改名' : undefined}
                   onClick={() => {
-                    if (canEdit) setTitleDraft(page.title);
+                    if (canEdit) setTitleDraft(node.title);
                   }}
                 >
-                  {page.title}
+                  {node.title}
                 </h1>
               )}
 
               <div className="flex flex-wrap items-center gap-3 px-2 text-xs text-slate-400">
                 <SaveStateLabel state={saveState} />
-                <span>更新于 {new Date(page.updatedAt).toLocaleString('zh-CN')}</span>
-                {page.status !== 'published' && (
-                  <span>{page.status === 'draft' ? '草稿' : '已归档'}</span>
-                )}
+                <span>所有者 {node.ownerName}</span>
+                {node.ownerDeparted && <DepartedBadge />}
+                <span>
+                  创建者 {node.createdByName}
+                  {node.createdByDeparted && <DepartedBadge />}
+                </span>
+                <span>更新于 {new Date(node.updatedAt).toLocaleString('zh-CN')}</span>
               </div>
             </div>
 
             <div className="flex flex-none items-center gap-2 pt-1">
-              {isSpaceAdmin && (
-                <Button variant="secondary" onClick={() => setPermissionsOpen(true)}>
+              {node.canManage && (
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    openGrants(node.id, node.title);
+                  }}
+                >
                   权限
                 </Button>
               )}
@@ -174,7 +194,7 @@ function PageDetailView({ spaceId, pageId }: { spaceId: string; pageId: string }
                 disabled={exportMd.isPending}
                 title="导出为 Markdown 文件"
                 onClick={() => {
-                  exportMd.mutate({ pageId: page.id, title: page.title });
+                  exportMd.mutate({ nodeId: node.id, title: node.title });
                 }}
               >
                 {exportMd.isPending ? '导出中…' : '导出 MD'}
@@ -182,9 +202,9 @@ function PageDetailView({ spaceId, pageId }: { spaceId: string; pageId: string }
             </div>
           </div>
 
-          {updatePage.isError && (
+          {updateNode.isError && (
             <div className="mt-2 px-2">
-              <ErrorNote error={updatePage.error} />
+              <ErrorNote error={updateNode.error} />
             </div>
           )}
           {exportMd.isError && (
@@ -195,8 +215,8 @@ function PageDetailView({ spaceId, pageId }: { spaceId: string; pageId: string }
         </header>
 
         <PageEditor
-          key={pageId}
-          pageId={pageId}
+          key={nodeId}
+          nodeId={nodeId}
           initial={content.data}
           canEdit={canEdit}
           onOutline={handleOutline}
@@ -252,19 +272,9 @@ function PageDetailView({ spaceId, pageId }: { spaceId: string; pageId: string }
             )}
           </div>
         ) : (
-          <CommentsPanel pageId={pageId} spaceId={spaceId} role={tree.data?.role ?? 'viewer'} />
+          <CommentsPanel nodeId={nodeId} />
         )}
       </aside>
-
-      {permissionsOpen && (
-        <PermissionsDialog
-          pageId={page.id}
-          spaceId={spaceId}
-          onClose={() => {
-            setPermissionsOpen(false);
-          }}
-        />
-      )}
     </div>
   );
 }

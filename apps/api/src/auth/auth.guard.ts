@@ -21,8 +21,12 @@ import { IS_PUBLIC_KEY } from './public.decorator.js';
  * 而且必须落在**守卫**上,而不是某个 controller 里:
  * 守卫覆盖所有路由,将来新增接口不会漏。
  *
- * 白名单只有两条(改密、登出),由 `@AllowDuringPasswordChange()` 显式标注。
- * 没有标注的接口,一律 403 `PASSWORD_CHANGE_REQUIRED`。
+ * 白名单目前三条(改密、登出、读自己的画像),由 `@AllowDuringPasswordChange()`
+ * 显式标注。没有标注的接口,一律 403 `PASSWORD_CHANGE_REQUIRED`。
+ *
+ * ⚠️ `GET /auth/me` **必须**在白名单里:前端要靠它读出 `mustChangePassword`
+ * 才知道该把人送去改密页。漏了它的表现是前端显示「无法连接到服务」,
+ * 用户连改密页都进不去 —— 这条在实跑验收时才发现,已补上。
  */
 @Injectable()
 export class AuthGuard implements CanActivate {
