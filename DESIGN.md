@@ -2,10 +2,10 @@
 
 | 项 | 值 |
 |---|---|
-| 文档版本 | v1.8 |
+| 文档版本 | v2.0 |
 | 最后更新 | 2026-09-26 |
-| 状态 | **阶段一全部完成并已上线** —— M1~M6 均已实现并实测验收(端到端 76 项断言 + 299 项单测全绿);已部署至内网服务器,并在部署实例上复跑验收通过 |
-| 定位 | 内网自托管 · 企业内部员工知识库 |
+| 状态 | **权限与空间模型已定稿为 v2.0(组织架构驱动)**。阶段一功能曾全部实现并实测上线(M1~M6),但按 §1.5 的定位校正,**空间 / 权限 / 前端导航三块需按 §9.2 重做**;认证、页面树、正文、检索、评论、审计六块成果保留 |
+| 定位 | 内网自托管 · **按公司组织架构组织**的企业知识库 |
 
 ---
 
@@ -22,13 +22,15 @@
 - 不是阶段二 / 阶段三的设计。协同编辑、行内锚定评论、通知推送、SSO 都只在第 10 节留了约束,没有详细设计。
 - 不是部署手册。部署文档在 M6 产出。
 
-### 0.3 已锁定的三个决策
+### 0.3 已锁定的四个决策
 
-以下三项已确认,后续不再讨论:
+以下四项已确认,后续不再讨论:
 
 1. **全 TypeScript 技术栈** —— 后端 Node + NestJS,前端 React + TS。Java 方案已排除(理由见 §2.2)。
 2. **实时多人协同排在阶段二** —— 阶段一只打地基,不接协同。
 3. **阶段一包含"页面级评论"** —— 不锚定到具体文字,不含通知推送。
+4. **内容按公司组织架构组织(v2.0 锁定)** —— 空间是**组织层级**而非自由容器;人员与归属**预置**;
+   权限靠"所有者 + 祖先链 + 显式授权"三个概念;**读全员开放**。决策过程与影响面见 §1.5。
 
 ### 0.4 关键区分(务必理解)
 
@@ -42,7 +44,17 @@
 
 ### 1.1 定位
 
-一个部署在公司内网的多人知识库。解决的核心问题:**知识散落在个人电脑、聊天记录和邮件里,找不到、留不住、新人上手慢。**
+一个部署在公司内网的多人知识库,**按公司真实的组织架构组织内容**。解决的核心问题:**知识散落在个人电脑、聊天记录和邮件里,找不到、留不住、新人上手慢。**
+
+与"通用知识库"的区别是本项目最重要的一条定位,写在这里以免再走偏:
+
+| | 通用知识库 | 本项目 |
+|---|---|---|
+| 空间从哪来 | 用户自由创建,可无限多 | **公司既有的部门与组/项目**,预置 |
+| 人从哪来 | 注册 / 被邀请进空间 | **全员预置**,且自带组织归属 |
+| 权限靠什么 | 空间内的角色等级 | **节点所有者 + 祖先链 + 显式授权** |
+| 读的开放度 | 常需逐空间授权 | **全员开放**,系统不提供保密能力 |
+| 登录后落点 | 空间列表页 | **直接进工作台**,左侧即完整组织树 |
 
 不做的事:不做对外帮助中心(不需要 SEO、不需要公开站点样式)、不做多租户 SaaS(不需要租户隔离)。
 
@@ -53,28 +65,53 @@
 | # | 交付项 | 验收口径 |
 |---|---|---|
 | 1 | Docker Compose 一键起 | PG · Redis · API · Web 四个容器,一条命令起来 |
-| 2 | 账号登录与管理员初始化 | 库为空时引导创建首个管理员 |
-| 3 | 空间创建与成员邀请 | 成员可增删,角色可改 |
-| 4 | 页面树 CRUD 与拖拽排序 | 含软删除与子页面级联标记 |
+| 2 | 账号登录与管理员初始化 | 库为空时引导创建首个管理员;管理员可导入组织架构与人员 |
+| 3 | **组织架构(部门 / 组 / 项目)与人员归属** | 部门与二级节点可建、可指定所有者;人员归属可维护,**支持多归属** |
+| 4 | 节点树 CRUD 与拖拽排序 | 空间与页面是**同一种节点**;含软删除与子节点级联标记 |
 | 5 | Tiptap 编辑器 | 标题 / 列表 / 代码块 / 图片 / 表格 / 引用 |
-| 6 | 页面级权限 + 服务端强制拦截 | 四层继承、就近覆盖、deny 优先 |
-| 7 | 全文检索(中文可用) | 结果按权限过滤后才返回 |
-| 8 | 软删除与回收站 | 恢复时子页面一并恢复 |
-| 9 | 页面级评论 | 页面底部讨论串 + 已解决状态;**不含**行内锚定与通知推送 |
+| 6 | **权限判定 + 服务端强制拦截** | 所有者 + 祖先链 + 显式授权;读全员开放;**授权受组织范围约束** |
+| 7 | 全文检索(中文可用) | 全员可搜全库内容(**不做权限过滤** —— 读本来就是全员开放的) |
+| 8 | 软删除与回收站 | 恢复时子节点一并恢复 |
+| 9 | 页面级评论 | 页面底部讨论串 + 已解决状态;**不含**行内锚定与通知推送。**全员可发** |
 
 ### 1.3 阶段一明确不做
 
-实时多人协同 · 行内锚定评论 · 通知推送 · SSO / 企业微信登录 · 版本历史与差异对比 · 语义问答 RAG · 模板中心 · 移动端适配 · 开放 API · 自定义用户组。
+实时多人协同 · 行内锚定评论 · 通知推送 · SSO / 企业微信登录 · 版本历史与差异对比 · 语义问答 RAG · 模板中心 · 移动端适配 · 开放 API。
 
 **把这些写进文档,是为了防止开发中途被不断加需求。** 任何人想加需求,先改这一节。
+
+> 注:v1.x 的清单里还有「自定义用户组」。v2.0 起**不再列为不做项** —— 组织架构本身就是分组的载体,
+> 「用户组」这个概念已经被 `org_assignments`(组织归属)取代,不需要单独做一套。
 
 ### 1.4 三阶段路线图
 
 | 阶段 | 目标 | 关键内容 |
 |---|---|---|
-| 一 | 一个同事能完整用起来 | 身份 · 空间 · 页面树 · 编辑器 · 权限 · 检索 · 回收站 · 页面级评论 |
+| 一 | 一个同事能完整用起来 | 身份 · **组织架构** · 节点树 · 编辑器 · 权限 · 检索 · 回收站 · 页面级评论 |
 | 二 | 团队真正协作起来 | Yjs 协同 · 行内锚定评论 · 通知中心 · 版本历史 · Meilisearch 全文检索 |
-| 三 | 企业化与规模化 | SSO · 部门树与用户组 · 审计看板 · 导入导出 · 开放 API · 移动端 |
+| 三 | 企业化与规模化 | SSO · 审计看板 · 导入导出 · 开放 API · 移动端 |
+
+### 1.5 为什么改成"组织架构驱动"(v2.0 · 2026-09-26)
+
+初版把空间设计成**用户自由创建的容器**(带成员与五档角色)。这个方向被否掉了 —— 它不是本项目要的东西:
+
+1. **空间不是"容器",是"层级"。** "技术部 → 后端组 → CRM 项目"这种结构**先于知识库存在**,不该由用户在知识库里重新建一遍。用户原话:"我说的空间指的是层级,没有专属空间的说法,只不过空间所属人员权限更高而已。"
+2. **人不是"被邀请进空间",而是"本来就在组织里"。** 邀请制意味着大量重复操作,而且会产生"同一个人被邀请进八个空间"这种在真实公司里不成立的状态。
+3. **角色等级制与实际管理链条不符。** 真实规则是"**谁建的东西,他的上级链都能改**",不是"某人在这个空间里是什么级别"。
+4. **读需要全员开放。** 旧设计的「最小可见」与公司内部知识共享的目标冲突。
+
+**结论:空间与页面合并为一棵节点树,权限退回到三个概念 —— 所有者、祖先链、显式授权。**
+
+**这次变更的影响范围(诚实记录):**
+
+| 影响 | 内容 |
+|---|---|
+| **作废** | `spaces` / `space_members` / `page_permissions` 三张表;五档角色枚举;能力矩阵查表;`deny` 语义;「最小可见」铁律 |
+| **改名** | `pages` → `nodes`,`page_contents` → `node_contents`(结构未变) |
+| **新增** | `org_assignments`(组织归属,多对多)、`node_grants`(授权名单)、组织架构维护功能 |
+| **不受影响** | 正文(ProseMirror / Tiptap)、中文检索、评论、审计日志、物化路径机制、软删除与恢复、乐观锁 |
+
+原 M2 的「空间与成员」与 M5 的「权限与评论」中权限部分**需要重做**,其余里程碑成果保留。新增任务清单见 §9。
 
 ---
 
@@ -220,14 +257,19 @@ generator client {
 
 ## 4. 数据模型
 
+> **v2.0 重大变更(2026-09-26)。** 本章整体重写。原设计把「空间」当成用户自由创建的容器(带成员与角色),现改为:**空间是公司既有组织在库里的投影**,且与页面合并为同一棵树。原 `spaces` / `space_members` / `page_permissions` 三张表作废。原因与决策过程见 §1.5。
+
 ### 4.1 设计要点
 
-1. **正文与检索分离。** 正文是 ProseMirror 文档树(JSONB),给检索用的纯文本单独一列。JSONB 没法直接做模糊匹配。
-2. **权限只存显式规则,不存最终结果。** 运行时沿物化路径向上回溯计算,配 Redis 缓存。否则一次权限变更要递归重写整棵子树。
-3. **物化路径(`materialized_path`)。** 把祖先链存成一个字符串(如 `/p1/p2/p3`),查"某页面的所有祖先"从递归 CTE 变成一次前缀索引扫描。
-4. **软删除 + 级联标记。** 删除父页面时,整棵子树跟着标记 `deleted_at`;恢复时一并恢复。这是最容易做错的地方。
-5. **评论表不含 anchor 字段。** 阶段一是页面级评论,加锚点是阶段二的事 —— 现在不加,免得有人顺手用上。
-6. **乐观锁 `version`。** 结构操作(改名、移动、删除)走 REST 并校验 version,冲突返回 409。
+1. **组织架构就是数据结构本身。** 部门是一级节点,组/项目挂在部门下。**人先于内容存在** —— 全员及其组织归属都是预置的,不是注册来的,也不需要"邀请进空间"这个动作。
+2. **空间与页面合并成一棵节点树。** 二者没有本质区别:都是"树上一个带标题、可挂子节点、可带正文的东西"。区别只在展示(`kind`)。合并的直接收益:**二级节点下面再套子空间、子页面天然成立**,不必写两套父子逻辑,也不必为"空间套空间"单独设计。
+3. **权限不存"角色",只存三种关系。** 没有 owner/admin/editor/viewer 这套等级。判定只问三件事:你是不是这个节点的所有者、你在不在它的祖先链上拥有所有权、你在不在它的显式授权名单里。
+4. **读是全员开放的。** 因此**不再有「最小可见」这条铁律**,也不再有 `deny` —— 权限模型里根本没有"拒绝读"这个表达。代价是**系统不具备任何保密能力**,这是有意的产品选择(见 §5.3)。
+5. **正文与检索分离。** 正文是 ProseMirror 文档树(JSONB),给检索用的纯文本单独一列。JSONB 没法直接做模糊匹配。
+6. **物化路径(`materialized_path`)。** 把祖先链存成一个字符串(如 `/p1/p2/p3`),查"某节点的所有祖先"从递归 CTE 变成一次前缀索引扫描。**权限判定完全依赖它** —— 判定要拿整条祖先链上的所有者,这是整棵树里唯一的性能敏感路径。
+7. **软删除 + 级联标记。** 删除父节点时,整棵子树跟着标记 `deleted_at`;恢复时一并恢复。
+8. **评论表不含 anchor 字段。** 阶段一是页面级评论,加锚点是阶段二的事 —— 现在不加,免得有人顺手用上。
+9. **乐观锁 `version`。** 结构操作(改名、移动、删除、改所有者)走 REST 并校验 version,冲突返回 409。
 
 ### 4.2 建表 DDL
 
@@ -241,47 +283,35 @@ create table users (
   email          citext not null unique,
   name           text not null,
   password_hash  text not null,
-  department     text,                          -- 阶段一的"用户组"就取这个字段
   avatar_color   text not null default 'gray',
   status         text not null default 'active'
                  check (status in ('active','disabled')),
+  -- 只用于初始化与组织架构维护(建部门 / 导人员 / 任命所有者)。
+  -- 它**不参与**日常内容权限判定 —— 新模型里没有"超管能改一切"的旁路,
+  -- 超管要看某篇文档,也走和其他人一样的 canRead/canEdit(见 §5.2)。
   is_super_admin boolean not null default false,
   last_login_at  timestamptz,
   created_at     timestamptz not null default now(),
   updated_at     timestamptz not null default now()
 );
+-- ⚠️ 原 users.department 列已删除:单值部门无法表达"一个人同属多个组/项目"。
+--    组织归属改由 org_assignments 表承载。
 
--- ---------------- 空间 ----------------
-create table spaces (
-  id         uuid primary key default gen_random_uuid(),
-  name       text not null,
-  slug       text not null unique,
-  letter     text not null,                     -- 侧边栏展示用的单字
-  color      text not null default 'blue',
-  owner_id   uuid not null references users(id),
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
-);
-
--- ---------------- 空间成员(权限判定的兜底层) ----------------
-create table space_members (
-  space_id   uuid not null references spaces(id) on delete cascade,
-  user_id    uuid not null references users(id) on delete cascade,
-  role       text not null
-             check (role in ('admin','editor','commenter','viewer')),
-  created_at timestamptz not null default now(),
-  primary key (space_id, user_id)
-);
-
--- ---------------- 页面树(核心表) ----------------
-create table pages (
+-- ---------------- 节点树(空间与页面合并,核心表) ----------------
+create table nodes (
   id                uuid primary key default gen_random_uuid(),
-  space_id          uuid not null references spaces(id) on delete cascade,
-  parent_id         uuid references pages(id) on delete restrict,
-  title             text not null default '未命名页面',
+  parent_id         uuid references nodes(id) on delete restrict,
+  -- 纯展示用途。**权限判定不区分 kind** —— 一个 space 节点也可以有正文,
+  -- 一个 document 节点也可以有子节点。这是刻意的,见 §4.1 第 2 条。
+  kind              text not null default 'document'
+                    check (kind in ('space','document')),
+  title             text not null default '未命名',
   position          integer not null default 0,      -- 同级排序
   materialized_path text not null default '',        -- '/<祖先id>/.../<自身id>'
   depth             integer not null default 0,
+  -- 所有者。部门节点 = 部长(预置);二级节点 = 由部长任命;更深节点 = 创建者。
+  -- 每一位"上级"对这个节点都拥有编辑权与授权权,判定方式见 §5.2。
+  owner_id          uuid not null references users(id),
   status            text not null default 'published'
                     check (status in ('draft','published','archived')),
   version           integer not null default 1,      -- 乐观锁
@@ -293,39 +323,48 @@ create table pages (
   updated_at        timestamptz not null default now()
 );
 
-create index pages_tree_idx  on pages (space_id, parent_id, position);
-create index pages_path_idx  on pages (materialized_path text_pattern_ops);
-create index pages_alive_idx on pages (space_id) where deleted_at is null;
+create index nodes_tree_idx  on nodes (parent_id, position);
+create index nodes_path_idx  on nodes (materialized_path text_pattern_ops);
+create index nodes_alive_idx on nodes (parent_id) where deleted_at is null;
+create index nodes_owner_idx on nodes (owner_id);
+
+-- ---------------- 组织归属(多归属) ----------------
+-- 一个人可以同属多个部门 / 组 / 项目。这既是"他的位置",也是**授权范围**的依据(§5.3 规则三)。
+create table org_assignments (
+  user_id    uuid not null references users(id) on delete cascade,
+  node_id    uuid not null references nodes(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (user_id, node_id)
+);
+
+create index org_assignments_node_idx on org_assignments (node_id);
+
+-- ---------------- 显式授权名单 ----------------
+-- 对应「组长想再加一个人改」。**只有加法,没有 deny** —— 收回权限 = 删掉这里的行。
+create table node_grants (
+  node_id    uuid not null references nodes(id) on delete cascade,
+  user_id    uuid not null references users(id) on delete cascade,
+  granted_by uuid not null references users(id),
+  created_at timestamptz not null default now(),
+  primary key (node_id, user_id)
+);
 
 -- ---------------- 正文 ----------------
-create table page_contents (
-  page_id         uuid primary key references pages(id) on delete cascade,
+create table node_contents (
+  node_id         uuid primary key references nodes(id) on delete cascade,
   content_json    jsonb not null default '{"type":"doc","content":[]}'::jsonb,
   ydoc_snapshot   bytea,                    -- 阶段二启用,阶段一保持 null
   text_for_search text not null default '', -- 由 content_json 抽出的纯文本
   updated_at      timestamptz not null default now()
 );
 
-create index page_contents_trgm_idx
-  on page_contents using gin (text_for_search gin_trgm_ops);
+create index node_contents_trgm_idx
+  on node_contents using gin (text_for_search gin_trgm_ops);
 
--- ---------------- 页面权限(只存显式规则) ----------------
-create table page_permissions (
-  id           uuid primary key default gen_random_uuid(),
-  page_id      uuid not null references pages(id) on delete cascade,
-  subject_type text not null check (subject_type in ('user','group')),
-  subject_id   text not null,     -- user.id,或部门名(users.department)
-  role         text not null
-               check (role in ('editor','commenter','viewer','none')),
-  deny         boolean not null default false,
-  created_at   timestamptz not null default now(),
-  unique (page_id, subject_type, subject_id)
-);
-
--- ---------------- 页面级评论(阶段一) ----------------
+-- ---------------- 评论(全员可发,见 §5.4) ----------------
 create table comments (
   id         uuid primary key default gen_random_uuid(),
-  page_id    uuid not null references pages(id) on delete cascade,
+  node_id    uuid not null references nodes(id) on delete cascade,
   parent_id  uuid references comments(id) on delete cascade,  -- 一层回复
   user_id    uuid not null references users(id),
   body       text not null,
@@ -336,18 +375,16 @@ create table comments (
   -- 阶段二会新增 anchor_type / anchor_text / anchor_pos 三列
 );
 
-create index comments_page_idx on comments (page_id, created_at);
+create index comments_node_idx on comments (node_id, created_at);
 
 -- ---------------- 审计日志 ----------------
 create table audit_logs (
   id          bigserial primary key,
   actor_id    uuid references users(id),
-  action      text not null,          -- page.create / page.move / perm.update ...
+  action      text not null,          -- node.create / node.move / grant.add ...
   target_type text not null,
   target_id   text not null,
   detail      jsonb not null default '{}'::jsonb,
-  -- v1.2 修正:原写 inet,但 Prisma 没有 inet 标量,无法在 schema 里表达。
-  -- 阶段一不按 IP 查询/聚合,text 完全够用;将来真要网段查询再引单独的类型化列。
   ip          text,
   created_at  timestamptz not null default now()
 );
@@ -355,153 +392,182 @@ create table audit_logs (
 create index audit_created_idx on audit_logs (created_at desc);
 ```
 
+**作废的三张表**(老库里删掉):`spaces`、`space_members`、`page_permissions`。
+`pages` / `page_contents` 分别改名为 `nodes` / `node_contents`,**结构本身沿用**(物化路径、version 乐观锁、软删除三套机制一行没改)。
+
 ### 4.3 字段级说明(几处反直觉的地方)
 
 | 位置 | 说明 |
 |---|---|
-| `pages.materialized_path` | 移动页面时必须**递归重建整棵子树**的路径。这是最容易漏的一步 —— 只改自己的路径,所有子孙都会失效。 |
-| `pages.parent_id` 用 `on delete restrict` | 不允许物理删除有子节点的页面,强制走软删除流程。 |
-| `page_contents.ydoc_snapshot` | 阶段一保持 `null`,但**字段先建好**。这就是"按协同的地基写代码"。 |
-| `page_permissions.subject_id` 用 text | 阶段一的 subject 可能是 `users.id`(uuid)也可能是部门名(text),统一存 text。阶段二引入 `groups` 表时再规整。 |
-| `comments` 无 anchor 列 | 刻意如此,见 §4.1 第 5 条。 |
-| `page_contents.content_json` 是 `jsonb` | ⚠️ **jsonb 不保留键的书写顺序**(按内部规范序存储)。实测:同一个文档写进去再读回来,`JSON.stringify` 的结果与原文不同,但语义完全一致。所以**任何判断正文是否变了的逻辑都必须按语义比,不能比字符串** —— 我们的冲突检测用 `updated_at` 而不是内容哈希,恰好绕开了这个坑;将来若加「内容没变就不写库」的优化,必须用规范化后的比较。 |
-| 三个"手写"索引 | 原计划三个索引都只能在 migration 里手写。v1.4 实测发现其中**两个可以表达进 schema**:`pages_path_idx` 用 `ops: raw("text_pattern_ops")`,`page_contents_trgm_idx` 用 `type: Gin` + `ops: raw("gin_trgm_ops")`。**这一点很要紧**:凡 schema 里没声明的索引,`prisma migrate dev` 会生成 `DROP INDEX` 把它删掉 —— 若删掉三元组索引,中文检索会静默退化成全表扫描(正是 §12 说的"错了不会立刻报错"那类)。只有 `pages_alive_idx`(部分索引)Prisma 不管理、也不会删,仍需手写。另:`pages_path_idx` 的 ops 与 Prisma 内省结果无法完全对齐,漂移检测会输出一对无害的 drop+create(定义相同),不要误判为故障。 |
+| `nodes.materialized_path` | 移动节点时必须**递归重建整棵子树**的路径。只改自己的路径,所有子孙都会失效 —— 而权限判定(§5.2)完全依赖这条路径,所以失败是**静默越权或静默失权**,不会立刻报错。 |
+| `nodes.parent_id` 用 `on delete restrict` | 不允许物理删除有子节点的节点,强制走软删除流程。 |
+| `nodes.owner_id` 是 `not null` | 每个节点**必须**有所有者。一级节点(部门)由组织架构预置;用户新建节点时默认为创建者本人。没有"无主节点"这种状态。 |
+| `nodes.kind` 不参与权限判定 | 它只决定图标与默认展开行为。任何一个 space 节点都可以有正文,任何一个 document 节点都可以有子节点。**不要**在权限代码里对 kind 做分支。 |
+| `node_contents.ydoc_snapshot` | 阶段一保持 `null`,但**字段先建好**。这就是"按协同的地基写代码"。 |
+| `node_grants` 没有 deny 列 | 刻意如此。新模型里"拒绝"这个动作不存在:能改的人天然能改(祖先链所有者),被授权的人靠删行收回。**不要**为了"对称"补一个 deny 列 —— 它会让判定逻辑重新长出分支。 |
+| `org_assignments` 是多对多 | 一个人同属多个组是常态。它同时承担两个职责:①展示"这个人在组织里的位置";②界定**授权范围**(§5.3 规则三)。 |
+| `comments` 无 anchor 列 | 刻意如此,见 §4.1 第 8 条。 |
+| `node_contents.content_json` 是 `jsonb` | ⚠️ **jsonb 不保留键的书写顺序**(按内部规范序存储)。实测:同一个文档写进去再读回来,`JSON.stringify` 的结果与原文不同,但语义完全一致。所以**任何判断正文是否变了的逻辑都必须按语义比,不能比字符串** —— 我们的冲突检测用 `updated_at` 而不是内容哈希,恰好绕开了这个坑;将来若加「内容没变就不写库」的优化,必须用规范化后的比较。 |
+| `users.is_super_admin` 不参与内容权限 | 它只是"能维护组织架构"的开关。**新模型里没有超管旁路** —— 一个超管要编辑某篇文档,同样得是它的所有者/祖先所有者/被授权者。这条与旧设计不同(旧设计里超管直通),务必注意。 |
+| 三个"手写"索引 | 其中**两个可以表达进 schema**:`nodes_path_idx` 用 `ops: raw("text_pattern_ops")`,`node_contents_trgm_idx` 用 `type: Gin` + `ops: raw("gin_trgm_ops")`。**这一点很要紧**:凡 schema 里没声明的索引,`prisma migrate dev` 会生成 `DROP INDEX` 把它删掉 —— 若删掉三元组索引,中文检索会静默退化成全表扫描。只有 `nodes_alive_idx`(部分索引)Prisma 不管理、也不会删,仍需手写。另:`nodes_path_idx` 的 ops 与 Prisma 内省结果无法完全对齐,漂移检测会输出一对无害的 drop+create(定义相同),不要误判为故障。 |
 
 ---
 
 ## 5. 权限模型
 
-### 5.1 四层继承结构
+> **v2.0 整体重写。** 旧模型是"五档角色 + 逐层继承 + deny 优先"。新模型里**没有角色等级**,只有三种关系与三个判定问题。原「四条铁律」保留其中两条的精神,删掉两条。
+
+### 5.1 三个概念
+
+这是全部。理解这三个,就理解了权限模型。
+
+| 概念 | 是什么 | 从哪来 |
+|---|---|---|
+| **所有者**(owner) | 一个节点的负责人。**每个节点必有且仅有一个。** | 部门节点 = 部长(组织架构预置);二级节点 = 由部长任命;更深节点 = 创建者本人 |
+| **组织归属** | 某人"在组织里的位置"。**多归属**,一个人可同时属于多个部门 / 组 / 项目 | 全员预置,随组织架构导入 |
+| **显式授权** | 某人被单独允许改某个节点 | 由有授权权的人手动授予 |
+
+**层级形态:**
 
 ```
-组织级   Owner · Admin · Member · Guest
-   │  继承
-空间级   空间管理员 · 编辑者 · 评论者 · 只读
-   │  继承
-页面级   默认继承父页面,可显式覆盖
-   │  继承
-分享链接  阶段一不做(阶段三)
+部门(一级节点 · 所有者 = 部长)
+ ├─ 组 / 项目(二级节点 · 所有者 = 部长任命)
+ │   └─ 子空间 / 子页面(所有者 = 创建者)
+ │       └─ …(深度不限)
+ └─ 文档(部门直属页面 —— 与二级节点并存)
 ```
+
+**组织形态到二级为止**(公司 → 部门 → 组/项目),这是公司的实际结构。但**技术上不限制深度**:二级节点下面再建子空间还是子页面,由使用者自己决定,系统一视同仁。
 
 ### 5.2 判定逻辑
 
+整个权限模型只有三个函数,按顺序回答三个问题:
+
 ```ts
 // packages/shared/src/permission.ts
-// 输入:当前用户、目标页面。输出:有效角色。
-// 不缓存结果到数据库,只缓存到 Redis。
 
-export async function effectiveRole(
-  ctx: { userId: string; isSuperAdmin: boolean },
-  pageId: string,
-): Promise<Role> {
-  // 超管直通,但依然写审计日志
-  if (ctx.isSuperAdmin) return 'admin';
+/** 能读吗? —— 已登录即可。全员开放,没有任何例外与分支。 */
+function canRead(user: Actor, node: NodeView): boolean {
+  return true;
+}
 
-  const page = await getPage(pageId);
-  if (!page) return 'none';
+/** 能改吗? —— 满足任一即可。 */
+function canEdit(user: Actor, chain: Chain, grantUserIds: Set<string>): boolean {
+  // 1) 我是这个节点的所有者(部门直属页面 → 部长;A 建的 → A 自己)
+  if (user.id === chain.self.ownerId) return true;
 
-  // 1) 用物化路径一次查出「根 → 当前」的整条链
-  const chain = await getAncestorChain(page.materialized_path); // 从粗到细
+  // 2) 我在祖先链的**任一**节点上是所有者
+  //    —— 这就是「A 建的东西,A 的领导、上层领导都能改」
+  if (chain.ancestors.some((n) => n.ownerId === user.id)) return true;
 
-  let best: Role | null = null;
+  // 3) 我被显式授权
+  return grantUserIds.has(user.id);
+}
 
-  // 2) 从粗到细遍历,后写覆盖先写 —— 这就是「就近覆盖」
-  for (const node of chain) {
-    const rules = await matchRules(node.id, ctx.userId); // 命中:直接用户 / 用户组 / 部门
-    for (const r of rules) {
-      if (r.deny) return 'none';   // 「拒绝优先」,直接短路
-      best = r.role;
-    }
-  }
-
-  if (best) return best;
-
-  // 3) 页面链上没有显式规则,兜底到空间角色
-  return (await getSpaceRole(ctx.userId, page.spaceId)) ?? 'none';
+/** 能管吗(决定这个节点还有谁能改)? —— 1 或 2,但授权动作另受组织范围约束(§5.3 规则三)。 */
+function canManage(user: Actor, chain: Chain): boolean {
+  return user.id === chain.self.ownerId || chain.ancestors.some((n) => n.ownerId === user.id);
 }
 ```
 
-### 5.3 四条铁律
+`chain` 由物化路径一次查出(根 → 自身),不需要递归查询:
+
+```sql
+-- 一条查询拿到整条祖先链及其所有者
+select id, parent_id, owner_id, depth, title
+  from nodes
+ where materialized_path like (
+   select materialized_path || '%' from nodes where id = $1
+ )
+   and deleted_at is null
+ order by depth;
+```
+
+### 5.3 三条定稿规则
 
 | 规则 | 含义 | 为什么 |
 |---|---|---|
-| **就近覆盖** | 子节点显式规则优先于祖先 | 允许"整空间只读,但这一篇放开编辑" |
-| **默认继承** | 没写规则就向上取 | 不写规则 = 继承,而不是"没权限" |
-| **拒绝优先** | `deny` 一票否决,不受层级影响 | 允许"整空间可编辑,但这一篇禁止某人访问" |
-| **最小可见** | 无权限的页面在列表和检索里**根本不出现** | 不能让人知道"这里有一篇你看不到的文档" |
+| **读无条件开放** | 所有节点对所有登录用户可读,不设门槛 | 取代旧「最小可见」铁律。知识库的价值在于共享,公司内部文档本就不该藏 |
+| **编辑权沿祖先链继承,且不可被拒绝** | 上层所有者天然能改下层的一切;没有 deny,没有"某人不许改" | 管理链条上的每一级都要能介入下属的内容。收回权限的唯一手段是**从授权名单里删行** |
+| **授权受组织范围约束** | 操作者只能授权给**落在自己组织范围内**的人 | 防止横向越权:组长不该能把权限给到别的部门的人 |
 
-#### 同层多规则命中时的次序(v1.2 补充)
+**规则三的"组织范围"定义:**
 
-§5.2 的伪代码只规定了**层与层之间**的次序(由粗到细、后写覆盖),没有规定**同一层内**多条规则同时命中时谁赢。这一点必须在实现前定死 —— 否则同一份数据在不同遍历顺序下会得出不同权限,而这类 bug 不会立刻报错。
+```
+orgScope(user) = 该用户所有 org_assignments 指向的节点及其全部后代
+```
 
-约定两条:
+判定一个候选被授权者 `target` 是否可被授予:
 
-1. **deny 先于一切。** 本层命中的规则里只要有一条 `deny=true`,立刻返回 `none`:不再看本层其余规则,不再看更细的层,也不回退空间角色。
-2. **user 强于 group。** 都是 allow 时,`subject_type='user'`(直接授给这个人)比 `subject_type='group'`(部门)更具体,取 user 的。
+```
+target ∈ orgScope(操作者)
+  ⟺ 存在一条 org_assignments(target, N),使得 N == 操作者的某个归属节点 N0
+     或 N 在 N0 的子树里
+```
 
-这两条实现在 `packages/shared/src/permission.ts` 的 `resolveRoleAlongChain()`,并在 `packages/shared/test/permission.spec.ts` 中有对应用例 —— 其中包含「把规则顺序颠倒结果不变」的测试,确保结论不依赖规则在数据库里的物理顺序。
+**这条规则为什么必要 —— 用一个具体例子说明:**
 
-#### `deny` 与 `role='none'` 的分工(v1.5 定稿)
+组员 A 属于「后端组」。A 在组下建了子空间 S,A 是 S 的所有者,因此 A **能**给 S 授权。
+但 A 的 `orgScope` 只有「后端组」这一支,所以他**只能把 S 的编辑权给后端组里的人** ——
+他无法把权限给市场部的人,也无法给同部门的「前端组」的人。
 
-`page_permissions` 同时有 `role='none'` 与 `deny` 两个字段,读起来像冗余,其实**语义不同** —— 这一点必须在实现前说清,否则会把两者写反,而写反了不会报错:
+部长的 `orgScope` 是整个技术部,所以部长能往技术部任何位置授权。
+**范围自下而上自然放大,不需要单独维护"谁的权限更大"。**
 
-| 表达 | 含义 | 能否被更具体的层推翻 |
-|---|---|---|
-| `deny = true` | **绝对否决**。沿链遍历时立即短路 | ❌ 不能。这就是「铁律:拒绝优先」 |
-| `role = 'none'`(且 `deny=false`) | 本层**不给**权限,但更深的层可以再给 | ✅ 能。这就是「铁律:就近覆盖」 |
+#### 与旧模型的两条"删除"
 
-**两者都必要,不是冗余:**
+原 §5.3 的四条铁律里,以下两条**在新模型中不成立**,实现时不要照搬:
 
-- 只有 `deny` 的话,「整棵子树关掉、但其中一篇对某人放开」做不到 —— deny 会一路短路。
-- 只有 `role='none'` 的话,「这个人绝对不能看」做不到 —— 子页面一条 allow 就能推翻。
+| 旧铁律 | 现状 |
+|---|---|
+| 「拒绝优先」(deny 短路) | **删除。** 新模型没有 deny,编辑权不可被拒绝 |
+| 「最小可见」(无权限的页面根本不出现) | **删除。** 读是全员开放的,列表与检索**不做权限过滤** |
 
-**UI 约定(v1.5 定稿):权限弹窗里的「拒绝访问」一律写 `deny = true`,不写 `role='none'`。**
+保留的两条:继承(编辑权沿祖先链向上取)、就近覆盖的**反向**表达 ——
+新模型里"越靠上权限越大",与旧模型"越靠下越具体"正好相反。这是一个容易写反的地方。
 
-理由是管理员的直觉:点了「拒绝访问」就应该真的拒绝,不该被下层某条规则悄悄推翻。`role='none'`(可被覆盖的那个)仍保留在接口层,留给「整块关掉、个别放开」这类需求,但**阶段一的界面不暴露它**。
+### 5.4 能力对照
 
-对应实现:`resolveRoleAlongChain()`(见本节开头的同层次序约定);测试在 `permission.spec.ts`,含「自身节点的 deny 压过自身节点的 allow」与「页面规则里的 none(非 deny)也能显式降权」两个用例。
+| 动作 | 谁能做 |
+|---|---|
+| 浏览任意节点 | **所有登录用户** |
+| 发表 / 回复评论 | **所有登录用户**(全员可评论) |
+| 标记评论已解决 | 评论作者本人,或该节点的任一祖先所有者 |
+| 删除评论 | 评论作者本人,或该节点的任一祖先所有者 |
+| 在二级节点下新建页面 | 在该节点上 `canEdit` 的人;**组员只能在自己所属的节点下新建** |
+| 新建子空间 | 同上(技术上不区分 kind) |
+| 编辑正文 / 改标题 | `canEdit` |
+| 移动 / 同级排序 | `canEdit` |
+| 移入回收站(软删除) | `canEdit` |
+| 从回收站恢复 | `canEdit` |
+| **彻底删除**(不可逆) | **祖先链所有者**(不含"仅被授权者" —— 门槛刻意高于软删除) |
+| 授权 / 收回(增删名单) | `canManage`,且被授权者须在操作者组织范围内 |
+| 任命 / 变更二级节点的所有者 | 该节点的**祖先所有者**(即部长) |
+| 维护组织架构(建部门 / 导人员 / 设归属) | `is_super_admin` |
+| 查看审计日志 | 祖先链所有者,或 `is_super_admin` |
 
-### 5.4 权限矩阵
+**两处值得单独说明:**
 
-| 动作 | 只读 | 评论者 | 编辑者 | 空间管理员 |
-|---|---|---|---|---|
-| 查看页面 | ✓ | ✓ | ✓ | ✓ |
-| 发表 / 回复评论 | ✗ | ✓ | ✓ | ✓ |
-| 标记评论已解决 | ✗ | 自己的 | ✓ | ✓ |
-| 创建 / 编辑页面 | ✗ | ✗ | ✓ | ✓ |
-| 删除页面(软) | ✗ | ✗ | ✓ | ✓ |
-| 从回收站恢复 | ✗ | ✗ | ✓ | ✓ |
-| **彻底删除**(不可逆) | ✗ | ✗ | ✗ | ✓ |
-| 修改页面权限 | ✗ | ✗ | ✗ | ✓ |
-| 邀请 / 移除成员 | ✗ | ✗ | ✗ | ✓ |
-| 查看审计日志 | ✗ | ✗ | ✗ | ✓ |
+1. **"组员只能在自己所属的节点下新建"** 这条与 `canEdit` 是两件事:一个组员对「后端组」节点本身没有 `canEdit`(他不是所有者、也不在祖先链上),但他**有权在它下面新建** —— 新建出来的节点归他所有。判定新建时用的不是 `canEdit(父节点)`,而是一条单独的规则:
+   `canCreateUnder(user, parent)` = `canEdit(user, parent)` **或** `parent ∈ orgScope(user)`。
+2. **彻底删除比软删除严。** 被授权者能改能删(可恢复),但不能彻底销毁。这延续了旧设计里"不可逆操作门槛更高"的判断。
 
 ### 5.5 缓存与失效
 
-- 判定结果写入 Redis,key 形如 `kc:perm:r:{spaceId}:{generation}:{userId}:{pageId}`,**TTL 30 秒**。
-- 权限变更时让**整片失效** —— 实现方式见下面的「实现级改进」。
-- 因此「权限变更最迟 30 秒生效」是**上限**,不是常态。这个数字要写进产品说明,避免用户困惑。
-- **Redis 是可降级依赖**:连接失败或命令报错时一律回源数据库(缓存键取不到世代号就跳过缓存),
-  权限判定的**正确性不依赖缓存可用性**(与 §3.2「Redis 不作为唯一数据源」一致)。
+- 判定结果写入 Redis,key 形如 `kc:perm:{generation}:{userId}:{nodeId}`,**TTL 30 秒**。
+- **`generation` 按一级节点(部门)分片**:`kc:perm:gen:{rootNodeId}`。
+  组织变更天然以部门为边界,变更范围与失效范围一致。
+- 触发 `INCR` 的事件:**所有者变更、授权名单增删、组织归属变更**。
+- 「变更最迟 30 秒生效」是**上限**,不是常态。
+- **Redis 是可降级依赖**:连接失败或取不到世代号时一律回源数据库,
+  判定的**正确性不依赖缓存可用性**(与 §3.2「Redis 不作为唯一数据源」一致)。
 
-**实现级改进(v1.7,与原方案不同,理由如下)**
+**为什么不做细粒度失效**(与旧设计同一判断,理由更充分了):
 
-原方案是「用 `materialized_path` 前缀 `SCAN` + 批量 `DEL`」。实现时改成了**空间级世代号**:
-`kc:perm:gen:{spaceId}` 是一个自增计数器,缓存 key 里带上它的当前值;
-任何规则变更只要让它 `INCR` 一次,旧 key 就自然「不可达」,靠 TTL 自行过期。
-
-为什么不按原方案做:
-
-1. `SCAN` 是 O(全库 key 数)的逐桶遍历,大实例上会明显拖慢其他命令;
-2. **更危险的是它可能漏** —— 遍历期间新写入的 key 不在已扫过的桶里,会一直活到 TTL。
-   表现就是「权限已经改了,但某个人还有权限」,这类 bug 不报错,只静默越权。
-3. 世代号只有一处状态、一次 `INCR`,不存在漏删。
-
-代价是「改一条规则会让整个空间的权限缓存失效一次」。规则变更是低频操作(管理员手动改),
-而重算只是一次数据库查询 —— 这个交换划算。
-
-> 补充:`PermissionService.visibility()` 对「空间内一条页面级规则都没有」的情形走了**快路径**,
-> 直接返回 `unrestricted`。知识库的常态就是这一支(权限都配在空间层),省掉逐页计算的成本很值。
+新模型里一次判定要读**整条祖先链的所有者**,链上任一节点的所有者变更都会影响结果。
+用 `materialized_path` 前缀 `SCAN` 批量删 key 的老办法,在这里需要"向上"失效(祖先变了,所有后代都受影响),
+范围比旧模型更大、更容易漏。**漏的表现是"权限已经改了,但某个人还能改" —— 静默越权。**
+按部门分片的世代号只有一处状态、一次 `INCR`,不存在漏删。
 
 ---
 
@@ -514,21 +580,24 @@ export async function effectiveRole(
 - 错误体统一:
 
 ```json
-{ "error": { "code": "FORBIDDEN", "message": "你没有编辑该页面的权限" } }
+{ "error": { "code": "FORBIDDEN", "message": "你没有编辑该节点的权限" } }
 ```
 
 | 错误码 | HTTP | 含义 |
 |---|---|---|
 | `UNAUTHORIZED` | 401 | 未登录或会话过期 |
-| `FORBIDDEN` | 403 | 已登录但无权限 |
-| `NOT_FOUND` | 404 | 不存在,**或存在但无权访问**(最小可见原则:不区分这两者) |
+| `FORBIDDEN` | 403 | 已登录,但对这个节点没有该操作的权限 |
+| `NOT_FOUND` | 404 | 资源**确实不存在** |
 | `VALIDATION_FAILED` | 400 | 参数校验失败 |
 | `VERSION_CONFLICT` | 409 | 乐观锁冲突,客户端需重新拉取 |
 | `RATE_LIMITED` | 429 | 触发限流 |
 
-> `NOT_FOUND` 不区分"不存在"与"无权限",是刻意的:否则可以通过错误码枚举出别人的文档 ID。
+> **v2.0 起不再用 `NOT_FOUND` 掩盖"无权访问"。** 读是全员开放的,不存在"存在但读不到"的资源,
+> 所以没有什么需要掩盖的。写操作被拒时回 `FORBIDDEN` 是更有用的回应 ——
+> 用户需要知道"东西在那儿,只是你不能改",而不是被误导成"它不存在"。
+> (v1.x 那条"用 404 掩盖存在性、以防枚举别人文档 ID"的理由,在新模型下不再成立。)
 
-- 分页:评论与审计日志用游标分页(`?cursor=&limit=`);页面树一次性返回整棵(已按权限过滤)。
+- 分页:评论与审计日志用游标分页(`?cursor=&limit=`);组织树一次性返回整棵(**不做过滤**,理由见 §8.3)。
 - **请求体上限 8MB**(`app-setup.ts` 的 `BODY_LIMIT`)。
   ⚠️ Express 的 JSON 解析器默认只有 **100kb**,而正文上限是 2MB ——
   不显式抬高的话,长文档保存会被 body-parser 直接拒掉,表现成「短文档正常、长文档存不进去」。
@@ -563,48 +632,81 @@ v1.1~v1.3 只写了「HttpOnly Cookie 承载会话」这个**载体**,没定义�
 
 ### 6.2 接口清单
 
-| 方法 | 路径 | 最低权限 | 说明 |
+权限列的取值现在都是**关系**,不再是角色:v2.0 起写 `canEdit` / `canManage` / `祖先所有者` / `超管` / `登录(全员)`。
+
+#### 认证
+
+| 方法 | 路径 | 权限 | 说明 |
 |---|---|---|---|
 | POST | `/auth/login` | — | 登录,下发会话 Cookie |
 | POST | `/auth/logout` | 登录 | 登出 |
-| GET | `/auth/me` | 登录 | 当前用户 + 可见空间列表 |
+| GET | `/auth/me` | 登录 | 当前用户 + **组织归属列表** |
 | POST | `/auth/setup` | — | **仅当库中无用户时可用**,创建首个管理员 |
-| GET | `/auth/setup-state` | — | v1.4 新增:返回 `{ required: boolean }`,供前端 `/setup` 判断该显示引导页还是登录页 |
-| GET | `/spaces` | 登录 | 我可见的空间 |
-| POST | `/spaces` | 登录 | 新建空间(创建者成为管理员) |
-| GET | `/spaces/:id/members` | viewer | 成员列表 |
-| POST | `/spaces/:id/members` | admin | 邀请成员 / 创建账号 |
-| PATCH | `/spaces/:id/members/:uid` | admin | 修改成员角色 |
-| DELETE | `/spaces/:id/members/:uid` | admin | 移除成员 |
-| GET | `/spaces/:id/pages` | viewer | 整棵页面树(已过滤) |
-| POST | `/pages` | editor | 新建,服务端计算 `materialized_path` |
-| GET | `/pages/:id` | viewer | 单页元信息 |
-| PATCH | `/pages/:id` | editor | 改标题 / 状态,带 `version` |
-| POST | `/pages/:id/move` | editor | 拖拽排序与改父级,**递归重建子树路径** |
-| DELETE | `/pages/:id` | editor | 软删除,级联标记子页面 |
-| GET | `/pages/:id/content` | viewer | 取正文 |
-| PUT | `/pages/:id/content` | editor | 存正文,同步重算 `text_for_search` |
-| GET | `/pages/:id/permissions` | viewer | 读显式规则 + 推导链 |
-| PUT | `/pages/:id/permissions` | admin | 整表替换,变更后主动失效缓存 |
-| GET | `/pages/:id/comments` | viewer | 页面评论列表 |
-| POST | `/pages/:id/comments` | commenter | 发表评论或回复(带 `parent_id`) |
-| PATCH | `/comments/:id` | 作者 / admin | 标记已解决、重新打开、编辑正文 |
-| DELETE | `/comments/:id` | 作者 / admin | 删除评论 |
-| GET | `/search?q=` | 登录 | 模糊检索,**结果按权限过滤后返回** |
-| GET | `/spaces/:id/trash` | viewer | 空间回收站,只列被删子树的根(v1.6 由 `/trash` 调整而来) |
-| POST | `/pages/:id/restore` | editor | 恢复(含整棵子树;原父不在树上时挂回空间根下) |
-| DELETE | `/pages/:id/purge` | admin | 彻底删除(不可逆,且只允许作用于回收站里的页面) |
-| GET | `/pages/:id/export?format=md` | viewer | 导出为 Markdown(以 `text/markdown` 直接下载) |
-| GET | `/spaces/:id/permission-candidates` | viewer | 权限弹窗的候选主体(成员 + 部门) |
-| GET | `/spaces/:id/comment-counts` | viewer | 各页面的未解决评论数(页面树角标) |
+| GET | `/auth/setup-state` | — | 返回 `{ required: boolean }`,供前端 `/setup` 判断该显示引导页还是登录页 |
+
+> v2.0 起 `/auth/me` **不再返回"可见空间列表"** —— 所有节点对所有登录用户可见,没有"可见子集"这回事。
+> 前端拿到的是"我是不是某些节点的所有者 / 我的组织归属在哪",用于决定界面上的操作开关(服务端仍是唯一裁判)。
+
+#### 组织架构
+
+| 方法 | 路径 | 权限 | 说明 |
+|---|---|---|---|
+| GET | `/org/tree` | 登录 | 整棵节点树(组织与内容合一)。**全员可得全部,不做过滤** |
+| POST | `/org/departments` | 超管 | 新建部门(一级节点),同时指定部长为该节点所有者 |
+| PATCH | `/nodes/:id/owner` | 祖先所有者 | 任命 / 变更所有者(部长任命组长走这里) |
+| GET | `/admin/users?q=&cursor=` | 超管 | 人员列表 |
+| POST | `/admin/users` | 超管 | 建人(**预置,不是注册**) |
+| PATCH | `/admin/users/:id/assignments` | 超管 | 设置组织归属(多归属,整表替换) |
+
+#### 节点
+
+| 方法 | 路径 | 权限 | 说明 |
+|---|---|---|---|
+| POST | `/nodes` | `canCreateUnder` | 新建(带 `parentId` / `kind`),服务端计算 `materialized_path` |
+| GET | `/nodes/:id` | 登录 | 单节点元信息 + 祖先链 |
+| PATCH | `/nodes/:id` | `canEdit` | 改标题 / 状态,带 `version` |
+| POST | `/nodes/:id/move` | `canEdit` | 拖拽排序与改父级,**递归重建子树路径** |
+| DELETE | `/nodes/:id` | `canEdit` | 软删除,级联标记子树 |
+| GET | `/nodes/:id/content` | 登录 | 取正文 |
+| PUT | `/nodes/:id/content` | `canEdit` | 存正文,同步重算 `text_for_search` |
+
+#### 授权(替代原「页面权限」)
+
+| 方法 | 路径 | 权限 | 说明 |
+|---|---|---|---|
+| GET | `/nodes/:id/grants` | 登录 | 当前授权名单 + **我可授权的候选人**(已按操作者组织范围过滤) |
+| PUT | `/nodes/:id/grants` | `canManage` | 整表替换。**逐个校验候选人在操作者组织范围内**,越界拒绝 |
+
+> 注意这里**只有名单,没有 deny**。收回权限 = 把人从名单里删掉。
+> 候选人接口返回的列表已经过滤过,但**服务端在写入时仍要再校验一次** —— 前端的过滤只是便利,不是安全边界。
+
+#### 评论
+
+| 方法 | 路径 | 权限 | 说明 |
+|---|---|---|---|
+| GET | `/nodes/:id/comments` | 登录 | 评论列表 |
+| POST | `/nodes/:id/comments` | 登录 | 发表评论或回复(带 `parent_id`)。**全员可发** |
+| PATCH | `/comments/:id` | 作者 / 祖先所有者 | 标记已解决、重新打开、编辑正文 |
+| DELETE | `/comments/:id` | 作者 / 祖先所有者 | 删除评论 |
+
+#### 检索与治理
+
+| 方法 | 路径 | 权限 | 说明 |
+|---|---|---|---|
+| GET | `/search?q=` | 登录 | 模糊检索。**不做权限过滤** —— 读是全员开放的 |
+| GET | `/trash?cursor=&limit=` | 登录 | 回收站,只列**我 `canEdit` 的**已删子树根 |
+| POST | `/nodes/:id/restore` | `canEdit` | 恢复(含整棵子树;原父不在树上时挂回顶层) |
+| DELETE | `/nodes/:id/purge` | 祖先所有者 | 彻底删除(不可逆,只作用于回收站里的节点) |
+| GET | `/nodes/:id/export?format=md` | 登录 | 导出为 Markdown(以 `text/markdown` 直接下载) |
+| GET | `/comment-counts?ids=` | 登录 | 批量取未解决评论数(节点树角标) |
 | POST | `/uploads` | 登录 | 上传图片,返回 `{ url }`;白名单 `.png/.jpg/.jpeg/.gif/.webp/.avif`(不含 SVG) |
-| GET | `/audit-logs?spaceId=&cursor=&limit=` | admin | 审计日志(**按空间授权**:有该空间的 `audit.view` 即可;跨空间只给超管) |
+| GET | `/audit-logs?cursor=&limit=` | 祖先所有者 / 超管 | 审计日志 |
 
 **阶段二占位(不实现)**
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| WS | `/collab?pageId=&token=` | 握手时校验页面写权限,无权限直接拒绝连接;只读用户标记 `readOnly`,服务端丢弃其 outgoing update |
+| WS | `/collab?nodeId=&token=` | 握手时校验该节点的写权限(`canEdit`),无权限直接拒绝连接;只读用户标记 `readOnly`,服务端丢弃其 outgoing update |
 
 ---
 
@@ -641,18 +743,27 @@ knowledgeCool/
 
 ### 7.2 路由与页面
 
-| 路由 | 页面 |
-|---|---|
-| `/login` | 登录 |
-| `/setup` | 首次部署的管理员初始化 |
-| `/s/:spaceId` | 空间首页 |
-| `/s/:spaceId/p/:pageId` | 文档页(主工作面) |
-| `/s/:spaceId/members` | 成员与角色 |
-| `/s/:spaceId/trash` | 回收站 |
-| `/search` | 检索结果 |
-| `/audit` | 审计日志(admin) |
+| 路由 | 页面 | 谁能进 |
+|---|---|---|
+| `/login` | 登录 | — |
+| `/setup` | 首次部署的管理员初始化(含组织架构导入) | — |
+| `/` | **工作台 —— 登录后直达** | 全员 |
+| `/n/:nodeId` | 节点页(主工作面) | 全员 |
+| `/trash` | 回收站(只列我 `canEdit` 的) | 全员 |
+| `/search` | 检索结果 | 全员 |
+| `/admin/org` | 组织架构维护:建部门 / 任命所有者 | 超管 |
+| `/admin/users` | 人员与组织归属 | 超管 |
+| `/audit` | 审计日志 | 祖先所有者 / 超管 |
 
-主工作面是**唯一的编辑界面**:左侧页面树 / 中间编辑器 / 右侧上下文面板(目录·评论)。全局检索是 `Cmd/Ctrl + K` 命令面板,不占版面。
+**登录后直接进 `/`(工作台),不再有"空间列表"这一中间页。**
+v1.x 的 `/spaces` 与 `/s/:spaceId/members` 两条路由作废,`/s/:spaceId/p/:pageId` 简化为 `/n/:nodeId`。
+
+左侧是**完整的组织与内容树**(全员可见全部),主区是编辑器,右侧是上下文面板(目录 · 评论 · 权限)。
+
+> **权限设置从"独立页面"改成节点上的弹窗。** 授权是节点级的动作(§6.2 的 `/nodes/:id/grants`),
+> 而节点会有几百个,不可能每个都配一个页面。这与 v1.x 把成员管理做成 `/s/:spaceId/members` 页面是两种做法。
+>
+> **树顶不设"公司"节点。** 一级节点就是部门,直接并排展示 —— 多一层"公司"会让每个用户每次都要多点一次才能展开。
 
 ### 7.3 状态管理
 
@@ -725,29 +836,36 @@ POST /pages/:id/move  { newParentId, newPosition }
 ### 8.2 软删除与恢复
 
 ```
-DELETE /pages/:id
+DELETE /nodes/:id
   1. 递归收集整棵子树 id(用 materialized_path 前缀查)
-  2. 整批设置 deleted_at / deleted_by(同一时间戳)
+  2. 整批设置 deleted_at / deleted_by(同一时间戳),**只标记尚未删除的行**
   3. 审计日志记录子树规模
-POST /pages/:id/restore
-  1. 若原父节点已被删除,则挂到空间根节点下
+POST /nodes/:id/restore
+  1. 若原父节点仍在回收站里,则挂到顶层
   2. 整批清空 deleted_at / deleted_by
 ```
 
-### 8.3 检索(含权限过滤)
+### 8.3 检索(v2.0:不再做权限过滤)
 
 ```
 GET /search?q=知识
-  1. 先算出该用户可见的 page_id 集合(空间成员 + 权限规则)
-  2. SELECT ... FROM page_contents
-     WHERE text_for_search ILIKE '%' || q || '%'
-       AND page_id = ANY(可见集合)
-     ORDER BY similarity(text_for_search, q) DESC
-     LIMIT 20;
-  3. 返回结果里剔除 title 命中但正文无权限的项
+  1. SELECT n.id, n.title, c.text_for_search
+       FROM node_contents c JOIN nodes n ON n.id = c.node_id
+      WHERE n.deleted_at IS NULL
+        AND (n.title ILIKE '%'||q||'%' OR c.text_for_search ILIKE '%'||q||'%')
+      ORDER BY <命中位置权重> DESC, similarity(...) DESC, n.updated_at DESC
+      LIMIT 20;
 ```
 
-**必须先在 SQL 里做权限过滤,不能查完再在应用层筛。** 否则记录数、耗时、分页游标都会泄露不可见文档的存在。
+**v2.0 起不再需要权限过滤** —— 读是全员开放的(§5.3 规则一)。两个直接好处:
+
+1. 查询里没有 `ANY(可见集合)` 子查询,中文检索的单次开销明显下降;
+2. 不存在"树上看不到、但搜得到"这类泄露 —— 树上本来就没有隐藏项。
+
+> ⚠️ **代价必须写进产品说明:全公司任何人搜任何关键词,都能搜到任何部门的文档。**
+> 这是有意的产品选择,但它意味着**系统不提供保密能力**(见 §5.3 规则一)。
+> 将来若冒出保密需求,**那不是"加一个开关"能解决的** —— 要重新设计权限模型。
+> 到那时应当把这条决策翻出来重新审视,而不是在检索里临时打补丁。
 
 **排序为什么不只用 `similarity()`(v1.7 补)**
 
@@ -758,29 +876,31 @@ trgm 的 `similarity()` 需要至少 3 个字符才有意义 —— 中文搜两
 
 另外:`LIKE` 的通配符必须转义。不转的话搜 `100%` 会命中全部内容(实测已覆盖)。
 
-**可见范围与页面树共用同一份计算**(`PermissionService.visibility()`),否则会出现
-「树上看不到、但搜得到」——那是最容易被忽略的一类泄露。
+> v1.x 这里写的是「可见范围必须与页面树共用同一份计算」。**v2.0 起该要求作废** ——
+> 已经没有"可见范围"这个概念了,树上与检索里都是全集。`PermissionService.visibility()` 一并删除。
 
 ### 8.4 页面级评论
 
 ```
-POST /pages/:id/comments  { body, parentId? }
-  1. 校验对该页面至少有 commenter 权限
-  2. parentId 若非空,校验其属于同一页面,且不产生二层以上嵌套
+POST /nodes/:id/comments  { body, parentId? }
+  1. **不校验权限** —— 全员都能评论(§5.4)
+  2. parentId 若非空,校验其属于同一节点,且不产生二层以上嵌套
   3. 写入,status = 'open'
-  4. 更新页面树上的评论角标计数(前端从列表长度算,不额外存字段)
+  4. 角标计数由前端从列表长度算,不额外存字段
 ```
 
-阶段一**不发任何通知**。用户怎么知道有新评论?靠页面树上的角标(`GET /spaces/:id/comment-counts`)。
+阶段一**不发任何通知**。用户怎么知道有新评论?靠节点树上的角标(`GET /comment-counts?ids=`)。
 这是刻意的范围控制 —— 通知是阶段二的事。
 
-**实现要点(v1.7 补)**
+**实现要点(v1.7 补;v2.0 修订)**
 
 - **只允许一层回复**:`parentId` 指向的那条必须自己也是顶层评论,否则 400。
   无限嵌套在 UI 上极难表达,而知识库的讨论几乎不需要它。
-- 跨页面的 `parentId` 一律拒绝 —— 否则可以把评论挂到你无权访问的页面上。
-- 权限是**两种**,不能合成一道闸:改正文只有作者本人可以(编辑别人的话是篡改他人言论);
-  标为已解决则是作者本人**或** editor 以上(§5.4 的两格)。删除是作者本人**或**空间管理员。
+- 跨节点的 `parentId` 一律拒绝。
+  (v1.x 给的理由是"否则可以挂到你无权访问的页面上";新模型里读是全员开放的,这个理由不再成立,
+  但仍要拒绝 —— 一串讨论必须落在同一个节点上,否则 UI 无处呈现。)
+- 权限是**两种**,不能合成一道闸:改评论正文只有作者本人可以(编辑别人的话是篡改他人言论);
+  标为已解决、删除则是作者本人**或**该节点的任一**祖先所有者**(§5.4)。
 
 ---
 
@@ -805,6 +925,9 @@ POST /pages/:id/comments  { body, parentId? }
   GIN 三元组索引)均已就位。
 
 ### M2 · 身份与空间(4 天)
+
+> ⚠️ **v2.0 起本阶段的「空间与成员」部分整体作废** —— 空间不再由用户创建、成员角色制被取消。
+> 认证部分(不透明会话 / 守卫 / `/auth/setup`)保留。重做清单见 §9.2。
 
 - [x] users / spaces / space_members 表与迁移
 - [x] 密码哈希 + 会话 Cookie + 鉴权守卫(实现为**不透明会话 token**,不是 JWT —— 见 §6.1.1)
@@ -851,6 +974,9 @@ POST /pages/:id/comments  { body, parentId? }
   —— **已达成(2026-09-26)**。覆盖率见下方的「M4+M5 端到端验收」。
 
 ### M5 · 权限与评论(5 天)
+
+> ⚠️ **v2.0 起本阶段的「权限判定」部分整体作废** —— 五档角色、能力矩阵、deny、最小可见全部取消。
+> **评论部分保留**,并放开为全员可发。重做清单见 §9.2。
 
 - [x] page_permissions 表 + `effectiveRole` 判定实现
 - [x] Redis 缓存 + 变更时整片失效(实现为**空间级世代号**,理由见 §5.5)
@@ -914,6 +1040,69 @@ POST /pages/:id/comments  { body, parentId? }
 
 ---
 
+### 9.2 v2.0 改造任务清单(2026-09-26 追加)
+
+模型从"自由空间 + 角色等级"改为"组织架构 + 所有者/祖先链"后,以下工作**必须重做**。
+分四个批次,**约 14 个工作日**(不含重新验收)。
+
+#### 影响面速查
+
+| 原成果 | 处置 |
+|---|---|
+| M1 基础设施 | **完全保留**(compose / Prisma / 健康检查 / 异常过滤器) |
+| M2 身份与空间 | 认证部分**保留**(会话 / 守卫 / setup);**空间与成员整块重做** |
+| M3 页面树 | **核心保留**,改名 `pages` → `nodes`,加 `kind` 与 `owner_id` |
+| M4 正文与检索 | **完全保留**,只需把 `/pages/:id/content` 改成 `/nodes/:id/content` |
+| M5 权限与评论 | 评论**保留**(放开为全员可发);**权限判定整体重写** |
+| M6 收尾 | 备份 / 恢复脚本**保留**;部署文档需同步组织架构初始化步骤 |
+
+#### 批次一 · 数据模型迁移(3 天)
+
+- [ ] 新 schema:去掉 `spaces` / `space_members` / `page_permissions`;`pages` → `nodes`(加 `kind` / `owner_id`);`page_contents` → `node_contents`
+- [ ] 新增 `org_assignments`(组织归属)与 `node_grants`(授权名单)
+- [ ] 删除 `users.department` 列(单值部门无法表达多归属)
+- [ ] 三个索引(含部分索引与 GIN 三元组)重新声明,确保 `migrate dev` 不生成 `DROP INDEX`
+- **不写数据迁移脚本** —— 现有数据是演示数据,清库重建比迁移便宜(见 §11.3)
+
+#### 批次二 · 权限服务重写(4 天)
+
+- [ ] `packages/shared/src/permission.ts` 重写为 `canRead` / `canEdit` / `canManage` / `canCreateUnder` 四个**纯函数**
+- [ ] 删除 `CAPABILITY_MIN_ROLE` 能力矩阵与五档角色枚举(`SPACE_ROLES` / `PAGE_RULE_ROLES` / `EFFECTIVE_ROLES`)
+- [ ] 删除 `resolveRoleAlongChain` 与全部 deny 相关分支
+- [ ] `PermissionService` 改为:取祖先链(一条 SQL)→ 判定 → 缓存(按部门分片的世代号)
+- [ ] 实现 `orgScope(user)` —— 授权范围判定的核心
+- [ ] 单测重写:覆盖 §5.4 能力对照表每一行,重点是**组织范围越界必须被拒**
+
+#### 批次三 · 组织架构管理(4 天)
+
+- [ ] 超管接口:建部门 / 建人 / 设归属 / 任命所有者
+- [ ] 组织架构导入(CSV 或 JSON)—— "全员预置"意味着第一次要一次灌几百人
+- [ ] 前端 `/admin/org` 与 `/admin/users`
+- [ ] 审计:所有者变更、授权增删、归属变更**都要留痕**
+
+#### 批次四 · 前端导航重构(3 天)
+
+- [ ] 登录后直达工作台(`/`);删除 `/spaces` 空间列表页与 `/s/:spaceId/members` 成员页
+- [ ] 左侧树改为**完整组织树**(全员可见全部);路由 `/s/:spaceId/p/:pageId` → `/n/:nodeId`
+- [ ] 权限弹窗改为节点级:展示"创建者 / 祖先所有者 / 授权名单"三段,可增删名单
+- [ ] 候选人选择器**调后端已过滤的接口**,前端不自己算组织范围
+- [ ] 权限开关按新的 `canEdit` / `canManage` 重算(前端只用来隐藏按钮,服务端仍是唯一裁判)
+
+#### 验收口径(v2.0)
+
+1. 超管导入组织架构 → 部长登录 → 能在自己部门下建组、任命组长
+2. 组员在自己组下建页面 → **他自己的上级链(组长 / 部长)都能改**,同组其他人不能改
+3. 组长给该页面**加一个人** → 那个人能改;组长**删掉** → 那个人不能改
+4. 组长**不能**把权限授予别的部门的人(组织范围约束生效)
+5. 任意员工能**读到**任何部门的页面(全员开放)
+6. 端到端脚本按上述 5 条扩写;失败路径的形状要对:越界授权 403、非所有者任命所有者 403
+
+> ⚠️ **这次改造完成后,`pnpm verify:m4m5` 必须整体重写。** 它的断言里有相当一部分建立在旧模型上
+> (如"只读成员越权 403""检索结果按权限过滤")—— 这些断言在新模型下**本身就是错的**:
+> 读是全员开放的,不存在"越权读"。**不要为了让老脚本变绿而把新模型改回旧语义**,那是本末倒置。
+
+---
+
 ## 10. 为阶段二预留的六条硬约束
 
 **阶段一可以不做协同,但必须按这些约束写。违反任何一条,阶段二都要返工。**
@@ -963,15 +1152,27 @@ POST /pages/:id/comments  { body, parentId? }
 - **附件的孤儿文件**:上传了但没插进文档的图片不会被回收。阶段一不处理(数据量小,
   而清理需要引用计数)。若磁盘开始吃紧,再考虑按 `updated_at` 扫描 `content_json` 反查。
 - **导出的 PDF 格式**:接口留了 `?format=`,目前只实现 `md`。PDF 需要额外依赖
-(无头浏览器或 wkhtmltopdf),要不要为它把一个几百 MB 的依赖塞进镜像,值得单独决策。
-- **审计日志不含"空间成员变更"**:`space.member.add/update/remove` 目前不写审计。
-  原因是模块环:审计的读取侧要 `SpaceService` 校验 `audit.view`,而写入侧若也要 `SpaceService`
-  就会成环。写入侧已经拆成纯函数(`audit/record.ts`)解掉了环,但 `SpaceService` 是新加的调用点,
-  需要单独安排一轮验证。**「谁把谁移出空间」是很该留痕的一类操作,建议优先补上。**
+  (无头浏览器或 wkhtmltopdf),要不要为它把一个几百 MB 的依赖塞进镜像,值得单独决策。
 - **`Cmd+K` 与模态弹窗并存**:权限弹窗打开时按 `Cmd+K` 会叠出命令面板(两者 z-index 不同)。
   影响很小(用户一般不会这么操作),但需要一个全局的"当前是否有模态"状态才能优雅处理。
-- **回收站保留天数**(§9 提到的 30 天)**未实现自动清理**:目前回收站里的页面会一直留着。
-  需要一个定时的 purge 任务,以及"保留 N 天"的产品决策。
+- **回收站未做自动清理**:目前回收站里的节点会一直留着。需要一个定时的 purge 任务,
+  以及"保留 N 天"的产品决策。
+
+**v2.0 新增的四项:**
+
+- **审计覆盖面(v2.0 重写)**:v1.x 的缺口是"空间成员变更不留痕"(当时受模块环所限,写入侧已拆成
+  纯函数 `audit/record.ts` 解环)。v2.0 起要留痕的变成三类,**都在 §9.2 批次三里**:
+  ①**所有者变更**(谁把某个组交给了谁);②**授权增删**(谁给了谁编辑权、谁收回了);
+  ③**组织归属变更**(谁把谁调进了哪个部门)。这三类比原来的"成员增删"更该留痕 ——
+  它们直接决定"谁能改什么",一旦出事是要追责的。
+- **保密能力(读全员开放的代价)**:v2.0 明确读对所有登录用户开放,系统**不提供任何保密手段**。
+  这是有意的选择,但**首次部署时必须明确告知使用者** —— 避免有人把敏感内容(薪酬、合同、
+  个人材料)当普通文档写进去。若将来真出现保密需求,那是**权限模型级的设计变更**,不是加个开关。
+- **组织架构怎么进系统**:"全员预置"意味着第一次要灌几百人 + 部门归属。建议做成
+  **CSV / JSON 导入**(手工建几百人不现实),但**文件格式需要在开工前定下来**。已列入 §9.2 批次三。
+- **节点树的规模上限**:全员开放读 + 一棵大树,若公司有几千人、几万个节点,
+  `/org/tree` 一次性返回全量会很大。第一版先直出全量(简单),但**接口形状要能加 `?root=` 参数**,
+  不要做成"只能返回全部" —— 否则将来改成按需加载要动接口。
 
 ---
 
@@ -998,3 +1199,4 @@ POST /pages/:id/comments  { body, parentId? }
 | 2026-09-26 | v1.6 | ①**§9 的 M3 全部勾选完成**,并补齐两段实测口径(接口层 55 项 + 直接查库 11 项)。②**§8.1 补「实现要点」**:一条 UPDATE 递归重建路径的写法、用路径前缀做防环(以及末尾斜杠不能省的原因)、`substring(x from $n)` 的**静默 NULL 陷阱**(必须改写成 `substr(x, $n::int)`)、软删除只标记未删行(否则 `removedCount` 虚高)、彻底删除必须按 depth 从叶子往根删(`onDelete: Restrict` + `DELETE` 不支持 `ORDER BY`)。③**§5.4 矩阵新增**「彻底删除(不可逆)」一行(admin 起,门槛刻意比软删除高一级),`page.purge` 同步进 `CAPABILITIES`。④**§6.2 接口调整**:`GET /trash` → `GET /spaces/:id/trash`(回收站天然以空间为界,做成全局列表反而要额外处理跨空间权限)。 |
 | 2026-09-26 | v1.7 | ①**M4/M5/M6 全部完成并实测验收**：端到端 76 项断言全通过、单测 299 项全绿、前端 8 个页面用无头浏览器实渲染确认（验收细节与踩到的坑见 §9.1）。②**§5.5 缓存失效改为空间级世代号**（与原方案不同，已写明理由：`SCAN` 既慢又可能漏，漏了就是静默越权），并补充「Redis 是可降级依赖，判定正确性不依赖缓存可用性」。③**§6.1 新增请求体上限 8MB 的说明** —— Express 的 JSON 解析器默认只有 100kb 而正文上限 2MB，不抬高会让长文档存不进去；同时说明 body-parser 的错误形状（它不是 `HttpException` 子类），过滤器必须显式识别，否则「请求体过大」会变成 500。并记录「不从传递依赖 `express` 里 import」这条教训。④**§4.3 新增 jsonb 行为说明**：jsonb 不保留键顺序，任何「内容有没有变」的判断必须按语义比。⑤**§8.3 补排序策略**（主键是命中位置而非 `similarity()`，因为中文两字查询的相似度普遍为 0）、**§8.4 补评论实现要点**（只允许一层回复、跨页面 `parentId` 拒绝、改正文与标解决是两套权限）。⑥**§7.4 补编辑器实现要点**：Tiptap 扩展必须声明为直接依赖、`content` 只在挂载时读一次、工具栏按钮要拦 `mousedown`、正文冲突用 `baseUpdatedAt` 而非 `pages.version`、不引入 typography 插件。⑦**§6.2 补 5 条接口**（导出、候选主体、评论计数、附件上传）。⑧**§11.3 新增 6 项待确认**：孤儿附件、PDF 导出、审计缺「空间成员变更」、`Cmd+K` 与模态叠加、回收站未做自动清理。⑨文档头状态改为「阶段一全部完成」。 |
 | 2026-09-26 | v1.8 | ①**部署上线**:服务已部署至内网服务器,4 容器 healthy;在**部署实例上**复跑验收 76/76 通过,`scripts/backup.sh` 与 `restore-drill.sh` 亦实跑通过(10 张表逐表精确一致,全程不动生产库)。②**§11.1 关闭剩余的「备份介质」阻塞项** —— 用户明确表示此事自己无法决定,**暂不处理、不再追问**;风险现状已如实写入该行留档。阻塞项清零。③**§9.1 补记第 5 个真问题**:恢复演练原用 `pg_stat_user_tables.n_live_tup` 比行数,那是 autovacuum 维护的**估算值**,在刚恢复出来的库上与生产库不可比,会报出「备份坏了」的**假失败**;已改为逐表 `count(*)`。**假失败比没有演练更糟** —— 要么让人对好备份失去信任,要么让人对真问题麻木。④文档头状态改为「已上线」。 |
+| 2026-09-26 | v2.0 | **权限与空间模型整体重做(组织架构驱动)**。用户指出初版把"空间"当成"用户自由创建的容器"是理解偏差 —— 实际它是**公司既有的组织层级**,且**读全员开放**。①**§1.1 定位重写**:新增"通用知识库 vs 本项目"对照表。②**§1.5 新增**:记录四条变更理由与影响面(作废三张表 / 改名两张 / 新增两张 / 不受影响六块)。③**§4 整体重写**:`spaces` / `space_members` / `page_permissions` 作废;`pages` → `nodes`(空间与页面**合并为一棵树**,加 `kind` / `owner_id`);新增 `org_assignments`(组织归属,多对多)与 `node_grants`(授权名单);删除 `users.department`(单值无法表达多归属)。④**§5 整体重写**:删除五档角色与 `CAPABILITY_MIN_ROLE` 查表,改为四个纯函数 `canRead` / `canEdit` / `canManage` / `canCreateUnder`;**删除 `deny` 与「最小可见」两条铁律**;新增「**授权受组织范围约束**」这一条规则(组长不能把权限给到别的部门的人)。⑤**§6.2 接口清单重排**:分认证 / 组织架构 / 节点 / 授权 / 评论 / 检索治理六组,权限列由"角色"改为"关系";新增组织架构维护 6 条接口。⑥**§7.2 路由**:登录**直达工作台**,删除 `/spaces` 与成员管理页,`/s/:spaceId/p/:pageId` → `/n/:nodeId`;权限设置由独立页面改为**节点级弹窗**。⑦**§8.3 检索取消权限过滤**(读全员开放的必然结果),并写明"**系统不提供保密能力**"这一代价。⑧**§9.2 新增**:v2.0 改造任务清单(四批次,约 14 个工作日)+ 六条新验收口径,并**明确标注 `pnpm verify:m4m5` 必须整体重写**(它的部分断言在新模型下本身就是错的)。⑨**§11.3** 新增四项待确认(审计覆盖面 / 保密能力 / 组织架构导入格式 / 节点树规模上限)。 |
