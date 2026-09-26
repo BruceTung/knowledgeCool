@@ -2,9 +2,9 @@
 
 | 项 | 值 |
 |---|---|
-| 文档版本 | v1.3 |
+| 文档版本 | v1.4 |
 | 最后更新 | 2026-09-26 |
-| 状态 | 阶段一 M1 已完成:**四容器 compose 已实测通过**(`down -v` 清空后一条命令 6.5 秒起来,`/api/v1/health` 返回 200) |
+| 状态 | M1 已完成并实测验收通过;M2 进行中 —— 认证后端已端到端实测(初始化 / 登录 / 登出 / 全局守卫 / 会话吊销),空间 CRUD 与前端页面待做 |
 | 定位 | 内网自托管 · 企业内部员工知识库 |
 
 ---
@@ -364,6 +364,7 @@ create index audit_created_idx on audit_logs (created_at desc);
 | `page_contents.ydoc_snapshot` | 阶段一保持 `null`,但**字段先建好**。这就是"按协同的地基写代码"。 |
 | `page_permissions.subject_id` 用 text | 阶段一的 subject 可能是 `users.id`(uuid)也可能是部门名(text),统一存 text。阶段二引入 `groups` 表时再规整。 |
 | `comments` 无 anchor 列 | 刻意如此,见 §4.1 第 5 条。 |
+| 三个"手写"索引 | 原计划三个索引都只能在 migration 里手写。v1.4 实测发现其中**两个可以表达进 schema**:`pages_path_idx` 用 `ops: raw("text_pattern_ops")`,`page_contents_trgm_idx` 用 `type: Gin` + `ops: raw("gin_trgm_ops")`。**这一点很要紧**:凡 schema 里没声明的索引,`prisma migrate dev` 会生成 `DROP INDEX` 把它删掉 —— 若删掉三元组索引,中文检索会静默退化成全表扫描(正是 §12 说的"错了不会立刻报错"那类)。只有 `pages_alive_idx`(部分索引)Prisma 不管理、也不会删,仍需手写。另:`pages_path_idx` 的 ops 与 Prisma 内省结果无法完全对齐,漂移检测会输出一对无害的 drop+create(定义相同),不要误判为故障。 |
 
 ---
 
@@ -466,7 +467,7 @@ export async function effectiveRole(
 ### 6.1 通用约定
 
 - 前缀 `/api/v1`,全部返回 JSON。
-- 认证:HttpOnly Cookie 承载会话,不用 localStorage 存 token。
+- 认证:HttpOnly Cookie 承载**不透明会话 id**,不用 localStorage 存 token。会话的存储位置与理由见 §6.1.1。
 - 错误体统一:
 
 ```json
@@ -486,6 +487,28 @@ export async function effectiveRole(
 
 - 分页:评论与审计日志用游标分页(`?cursor=&limit=`);页面树一次性返回整棵(已按权限过滤)。
 
+### 6.1.1 会话机制(v1.4 定稿)
+
+v1.1~v1.3 只写了「HttpOnly Cookie 承载会话」这个**载体**,没定义会话本身是什么;而 §3.1 又提到阶段二协同网关要与 api「共用同一套 JWT」。两处合起来读会产生歧义,这里定死。
+
+**决定:阶段一用「不透明会话 id + 服务端会话表」,不用 JWT。**
+
+- 登录成功后生成 256 位随机 token,写入 HttpOnly / SameSite=Lax / Path=/ 的 Cookie(名 `kc_session`)。
+- **库里只存 token 的 SHA-256,不存 token 本身** —— 即使数据库被读走,也无法据此伪造登录态。
+- 会话记录落 **PostgreSQL 的 `sessions` 表**,带 `expires_at`。
+
+三条理由:
+
+1. **可吊销。** 登出、停用账号、把某人移出空间,都必须立刻失效。JWT 要做到同样效果就得再维护一份 denylist —— 那等于把「无状态」省下的成本又原样花回去。
+2. **符合 §3.2 的分层原则。** §3.2 明确 Redis「不作为唯一数据源」。若会话只放 Redis,Redis 就成了登录态的唯一来源:一次 flush 全员掉线,而且它从「可降级缓存」变成了「认证硬依赖」。放 PG 则 Redis 保持纯缓存角色。
+3. **不引入签名密钥轮换问题。** 不透明 token 的强度来自随机性、不依赖密钥,所以 `SESSION_SECRET` 可以留给阶段二签短期 JWT 用。
+
+**代价:** 每个已认证请求多一次 PG 主键查询。本项目规模下可忽略,且 §5.5 的权限判定本来就要查库或查缓存。
+
+**与 §3.1「同一套 JWT」的关系(阶段二路径,此处只记约束):** 协同网关真正需要的是「握手时验证一次身份、之后不查库」。届时由 api 用 `SESSION_SECRET` **签发一枚短期 JWT** 交给网关即可,而不是把阶段一也改成 JWT —— 这样阶段一的吊销能力不受影响。
+
+**运维注意:`SESSION_COOKIE_SECURE` 默认跟随 `NODE_ENV=production` 打开。** §2.4 已要求内网也上 HTTPS,但 TLS 要到 M6 才落地;在那之前若走 http 访问(例如本机 compose 验收),必须显式设 `SESSION_COOKIE_SECURE=false`,否则浏览器不会回传 Cookie。
+
 ### 6.2 接口清单
 
 | 方法 | 路径 | 最低权限 | 说明 |
@@ -494,6 +517,7 @@ export async function effectiveRole(
 | POST | `/auth/logout` | 登录 | 登出 |
 | GET | `/auth/me` | 登录 | 当前用户 + 可见空间列表 |
 | POST | `/auth/setup` | — | **仅当库中无用户时可用**,创建首个管理员 |
+| GET | `/auth/setup-state` | — | v1.4 新增:返回 `{ required: boolean }`,供前端 `/setup` 判断该显示引导页还是登录页 |
 | GET | `/spaces` | 登录 | 我可见的空间 |
 | POST | `/spaces` | 登录 | 新建空间(创建者成为管理员) |
 | GET | `/spaces/:id/members` | viewer | 成员列表 |
@@ -780,3 +804,4 @@ POST /pages/:id/comments  { body, parentId? }
 | 2026-09-26 | v1.1 | §11.1 关闭「与既有知识库项目的关系」这一阻塞项 —— 用户已放弃该项目,不再并存。阻塞项由两项减为一项 |
 | 2026-09-26 | v1.2 | 开工实测后回写,共三处:①**§2.5 新增** —— NestJS 12 是 ESM-only 且官方新项目默认 ESM,故本项目采用 ESM;实测 esbuild 即使开 `emitDecoratorMetadata` 也不产出 `design:paramtypes`,故 Vitest 必须配 `unplugin-swc`;Prisma 7 的生成器 / 配置文件 / driver adapter 三处破坏性变化,以及 `importFileExtension` 这个 ESM 专属坑。连带把 Node 20 → **22 LTS**、TypeScript → **6.0.x**(均给出依赖下限依据)。②**§4.2** `audit_logs.ip` 由 `inet` 改为 `text`(Prisma 无 inet 标量)。③**§5.3** 补充同层多规则命中次序(user 强于 group;deny 先于一切)—— 原伪代码未定义该情形。 |
 | 2026-09-26 | v1.3 | M1 完成并**实测验收通过**(装上 Docker Desktop 后补跑):`docker compose down -v` 清空数据卷 → `up -d` → 6.5 秒四容器就绪;经 Nginx 反代 `/api/v1/health` 返回 200、`/api/v1/health/ready` 报 database 与 redis 均 up;全新建库迁移自动执行,扩展与三个手写索引均就位。同步修正两处实现缺陷:①`pnpm-lock.yaml` 与 package.json 的 typescript 版本不一致(`--frozen-lockfile` 会失败,影响任何全新克隆与 CI);②api 镜像原用 `pnpm exec` 调 prisma,导致每次容器启动都去外网下载 pnpm 并 relink 依赖(启动 39s+ 且耦合外网),改为直调 `./node_modules/.bin/prisma` 后降到 6.5s。§9 的 M1 任务项已勾选完成。 |
+| 2026-09-26 | v1.4 | ①**§6.1.1 新增**:定死会话机制 —— 不透明会话 id + PG `sessions` 表(库里只存 token 的 SHA-256),并说明为何不用 JWT(可吊销 / 符合 §3.2「Redis 不作为唯一数据源」/ `SESSION_SECRET` 留给阶段二签短期 JWT);同时给出与 §3.1「同一套 JWT」的衔接路径与 `SESSION_COOKIE_SECURE` 的运维注意。②**§4.3 补充**:实测发现三个"手写索引"中有两个可以表达进 schema(`pages_path_idx` 用 `ops: raw("text_pattern_ops")`、`page_contents_trgm_idx` 用 `type: Gin` + `ops: raw("gin_trgm_ops")`)—— 这一点很要紧,因为 schema 里没声明的索引会被 `migrate dev` 生成 `DROP INDEX` 删掉,而删掉三元组索引会让中文检索**静默**退化成全表扫描。③**§6.2 新增接口** `GET /auth/setup-state`(公开):§7.2 的 `/setup` 路由需要它才能判断该显示引导页还是登录页。④**M2 进度**:认证后端已完成并端到端实测(初始化 / 登录 / 登出 / 守卫 / 会话吊销),另新增 72 字节密码上限校验以规避 bcrypt 静默截断。 |
