@@ -1,0 +1,37 @@
+{
+  "name": "knowledgecool",
+  "version": "0.1.0",
+  "private": true,
+  "description": "知源 KnowledgeCool · 内网自托管的企业内部知识库",
+  "packageManager": "pnpm@12.6.0",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "build": "pnpm -r --if-present run build",
+    "dev": "pnpm -r --parallel --if-present run dev",
+    "typecheck": "pnpm -r --if-present run typecheck",
+    "test": "pnpm -r --if-present run test",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check": "pnpm typecheck && pnpm lint && pnpm test",
+    "clean": "pnpm -r --if-present run clean",
+    "db:generate": "pnpm --filter @knowledgecool/api run db:generate",
+    "db:migrate": "pnpm --filter @knowledgecool/api run db:migrate",
+    "db:deploy": "pnpm --filter @knowledgecool/api run db:deploy",
+    "db:validate": "pnpm --filter @knowledgecool/api run db:validate"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24.10.0",
+    "eslint": "^10.11.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.12.0",
+    "prettier": "^3.9.9",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.70.1"
+  }
+}

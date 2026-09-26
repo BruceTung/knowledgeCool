@@ -1,0 +1,36 @@
+packages:
+  - 'apps/*'
+  - 'packages/*'
+
+# ---------------------------------------------------------------
+# 依赖构建脚本白名单(pnpm 10+ 默认不执行依赖的 postinstall)
+# 不放开这些,安装会以 ERR_PNPM_IGNORED_BUILDS 失败;
+# 即使绕过,也会静默跳过构建步骤,直到运行期才报错。
+#   - prisma / @prisma/engines: 下载查询引擎二进制
+#   - esbuild / @swc/core: 平台原生二进制(vite / vitest / 测试转译)
+#   - unrs-resolver: eslint 的模块解析器原生依赖
+#   - @parcel/watcher: 文件监听原生依赖(nest --watch / vite)
+# ---------------------------------------------------------------
+allowBuilds:
+  '@parcel/watcher': true
+  '@prisma/client': true
+  '@prisma/engines': true
+  '@swc/core': true
+  '@tailwindcss/oxide': true
+  esbuild: true
+  prisma: true
+  unrs-resolver: true
+
+# ---------------------------------------------------------------
+# pnpm 12 的供应链延迟:默认拒绝安装「发布未满 N 天」的版本。
+# 下面这些是该策略自动放行的条目(项目锁的是当期最新版)。
+# 若日后再触发,优先等几天或改用更旧的稳定版,而不是无脑往这里加。
+# ---------------------------------------------------------------
+minimumReleaseAgeExclude:
+  - '@nestjs/cli@12.0.7'
+  - '@tanstack/query-core@5.103.3'
+  - '@tanstack/react-query@5.103.3'
+  - '@vitest/mocker@5.0.2'
+  - '@vitest/spy@5.0.2'
+  - ts-jest@29.4.14
+  - vitest@5.0.2

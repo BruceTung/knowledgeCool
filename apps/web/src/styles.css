@@ -1,0 +1,9 @@
+@import 'tailwindcss';
+
+/* 主工作面是全屏布局:顶栏 + 图标栏 + 页面树 + 编辑器 + 右上下文栏(DESIGN.md §7.2)。
+   M1 只立骨架,M2 起再填业务界面。 */
+html,
+body,
+#root {
+  height: 100%;
+}

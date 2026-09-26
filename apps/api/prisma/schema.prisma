@@ -1,0 +1,209 @@
+// 知源 KnowledgeCool · 数据模型
+// 逐字对应 DESIGN.md §4.2 的建表 DDL。
+//
+// ⚠️ Prisma 7 的三处重要变化(首次开工时实测确认,已回写 DESIGN.md):
+//   1. 生成器是 `prisma-client`(不是 prisma-client-js),`output` 为必填,
+//      且产出的是 **TypeScript 源码**(带 @ts-nocheck),由本项目的 tsc 一起编译。
+//   2. datasource 不再写 `url` —— 连接串移到 prisma7.config.ts。
+//   3. 连接数据库**必须**经由 driver adapter(@prisma/adapter-pg),见 prisma.service.ts。
+//
+// Prisma schema 表达不了的三类东西,在首次 migration 的 SQL 里手写补齐(见该文件注释):
+//   - CHECK 约束(状态枚举用 text + check,刻意不用 PG enum:enum 增删值很痛)
+//   - 部分索引 pages_alive_idx(... where deleted_at is null)
+//   - pg_trgm 的 GIN 索引
+//   - audit_logs.ip 的类型(DESIGN v1.1 原写 inet,Prisma 不支持该标量,已改 text)
+
+generator client {
+  provider        = "prisma-client"
+  output          = "../src/generated/prisma"
+  moduleFormat        = "esm"
+  // ESM 下相对导入必须有显式扩展名。Prisma 默认产出 './enums'(无扩展名),
+  // 经 tsc 编译后 Node ESM 会直接 ERR_MODULE_NOT_FOUND —— 必须打开这个选项。
+  importFileExtension = "js"
+  previewFeatures     = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  extensions = [citext, pg_trgm]
+}
+
+// ---------------- 用户 ----------------
+model User {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email        String    @unique @db.Citext
+  name         String
+  passwordHash String    @map("password_hash")
+  /// 阶段一的「用户组」就取这个字段(DESIGN.md §4.2)
+  department   String?
+  avatarColor  String    @default("gray") @map("avatar_color")
+  status       String    @default("active")
+  isSuperAdmin Boolean   @default(false) @map("is_super_admin")
+  lastLoginAt  DateTime? @map("last_login_at") @db.Timestamptz(6)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  ownedSpaces  Space[]       @relation("SpaceOwner")
+  memberships  SpaceMember[]
+  createdPages Page[]        @relation("PageCreatedBy")
+  updatedPages Page[]        @relation("PageUpdatedBy")
+  deletedPages Page[]        @relation("PageDeletedBy")
+  comments     Comment[]
+  auditLogs    AuditLog[]
+
+  @@map("users")
+}
+
+// ---------------- 空间 ----------------
+model Space {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name      String
+  slug      String   @unique
+  /// 侧边栏展示用的单字
+  letter    String
+  color     String   @default("blue")
+  ownerId   String   @map("owner_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  owner   User          @relation("SpaceOwner", fields: [ownerId], references: [id])
+  members SpaceMember[]
+  pages   Page[]
+
+  @@map("spaces")
+}
+
+// ---------------- 空间成员(权限判定的兜底层) ----------------
+model SpaceMember {
+  spaceId   String   @map("space_id") @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  /// admin | editor | commenter | viewer —— check 约束在 migration 里
+  role      String
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  space Space @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([spaceId, userId])
+  @@map("space_members")
+}
+
+// ---------------- 页面树(核心表) ----------------
+model Page {
+  id     String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  spaceId String @map("space_id") @db.Uuid
+  /// 刻意用 onDelete: Restrict —— 不允许物理删除有子节点的页面,强制走软删除流程
+  parentId String? @map("parent_id") @db.Uuid
+
+  title    String  @default("未命名页面")
+  /// 同级排序
+  position Int     @default(0)
+  /// '/<祖先id>/.../<自身id>' —— 移动页面时必须递归重建整棵子树
+  materializedPath String @default("") @map("materialized_path")
+  depth            Int    @default(0)
+  /// draft | published | archived —— check 约束在 migration 里
+  status           String @default("published")
+  /// 乐观锁:结构操作(改名/移动/删除)走 REST 并校验,冲突返回 409
+  version          Int    @default(1)
+
+  createdBy String  @map("created_by") @db.Uuid
+  updatedBy String? @map("updated_by") @db.Uuid
+
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(6)
+  deletedBy String?   @map("deleted_by") @db.Uuid
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  space     Space            @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  parent    Page?            @relation("PageChildren", fields: [parentId], references: [id], onDelete: Restrict)
+  children  Page[]           @relation("PageChildren")
+  creator   User             @relation("PageCreatedBy", fields: [createdBy], references: [id])
+  updater   User?            @relation("PageUpdatedBy", fields: [updatedBy], references: [id])
+  deleter   User?            @relation("PageDeletedBy", fields: [deletedBy], references: [id])
+  content   PageContent?
+  permissions PagePermission[]
+  comments  Comment[]
+
+  @@index([spaceId, parentId, position], map: "pages_tree_idx")
+  // pages_path_idx(text_pattern_ops)与 pages_alive_idx(部分索引)在 migration 里手写
+  @@map("pages")
+}
+
+// ---------------- 正文 ----------------
+model PageContent {
+  pageId String @id @map("page_id") @db.Uuid
+  /// ProseMirror 文档树。**绝不允许存 Markdown 字符串**(DESIGN.md §10 硬约束 2)
+  contentJson Json @default("{\"type\": \"doc\", \"content\": []}") @map("content_json")
+  /// 阶段二启用,阶段一保持 null —— 字段先建好,这就是「按协同的地基写代码」
+  ydocSnapshot Bytes? @map("ydoc_snapshot")
+  /// 由 content_json 抽出的纯文本,供 pg_trgm 检索(JSONB 没法直接模糊匹配)
+  textForSearch String @default("") @map("text_for_search")
+  updatedAt     DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  page Page @relation(fields: [pageId], references: [id], onDelete: Cascade)
+
+  // page_contents_trgm_idx(GIN + gin_trgm_ops)在 migration 里手写
+  @@map("page_contents")
+}
+
+// ---------------- 页面权限(只存显式规则,不存最终结果) ----------------
+model PagePermission {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  pageId String @map("page_id") @db.Uuid
+  /// user | group —— check 约束在 migration 里
+  subjectType String @map("subject_type")
+  /// user.id,或部门名(users.department)。用 text 统一承载两种口径
+  subjectId   String @map("subject_id")
+  /// editor | commenter | viewer | none —— 页面级**不含 admin**
+  role        String
+  deny        Boolean @default(false)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  page Page @relation(fields: [pageId], references: [id], onDelete: Cascade)
+
+  @@unique([pageId, subjectType, subjectId])
+  @@map("page_permissions")
+}
+
+// ---------------- 页面级评论(阶段一) ----------------
+model Comment {
+  id        String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  pageId    String  @map("page_id") @db.Uuid
+  /// 一层回复
+  parentId  String? @map("parent_id") @db.Uuid
+  userId    String  @map("user_id") @db.Uuid
+  body      String
+  /// open | resolved —— check 约束在 migration 里
+  status    String  @default("open")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  // 阶段二会新增 anchor_type / anchor_text / anchor_pos 三列 —— 现在刻意不加
+
+  page    Page      @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  parent  Comment?  @relation("CommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies Comment[] @relation("CommentReplies")
+  user    User      @relation(fields: [userId], references: [id])
+
+  @@index([pageId, createdAt], map: "comments_page_idx")
+  @@map("comments")
+}
+
+// ---------------- 审计日志 ----------------
+model AuditLog {
+  id         BigInt   @id @default(autoincrement())
+  actorId    String?  @map("actor_id") @db.Uuid
+  /// page.create / page.move / perm.update ...
+  action     String
+  targetType String   @map("target_type")
+  targetId   String   @map("target_id")
+  detail     Json     @default("{}")
+  /// DESIGN v1.1 原写 inet;Prisma 不支持该标量,改用 text(DESIGN v1.2 已同步)
+  ip         String?
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  actor User? @relation(fields: [actorId], references: [id])
+
+  @@index([createdAt(sort: Desc)], map: "audit_created_idx")
+  @@map("audit_logs")
+}

@@ -23,13 +23,19 @@ out/
 # 本项目可能部署在共享机器上,任何密钥、凭证一律不入库
 .env
 .env.*
-!.env.example
+# 只放行样例文件;用 ** 才能同时覆盖 apps/*/.env.example 这类嵌套位置
+!**/.env.example
 *.pem
 *.key
 *.p12
 *.jks
 credentials.json
 secrets.json
+
+# ---------------- 生成物(由命令产出,不入库) ----------------
+# Prisma Client 由 `prisma generate` 生成。Prisma 7 产出的是 TS 源码,
+# 所以必须显式排除,否则会把上千行生成代码提交进去。
+apps/api/src/generated/
 
 # ---------------- 日志与临时文件 ----------------
 *.log
