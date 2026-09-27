@@ -160,7 +160,7 @@ notes.push(`环境变量:代码读 ${String(codeVars.size)} 个 / .env.example �
 const HISTORICAL = new Map([
   ['apps/api/scripts/verify-m4m5.mjs', '§9.1 是历史记录,文中已明确写了"v2.0 改造时已删除"'],
   ['packages/shared/src/roles.ts', '只出现在 v1.5 的变更记录里,那是对当时状态的存档'],
-  ['features/pages', 'DEPLOY.md 说明"某个版本删掉的前端模块会原样留着"'],
+  ['features/pages', 'v2.0 删掉的前端模块目录,历史上真实存在过'],
   ['docker-compose.override.yml', '部署侧文件,不进仓库'],
   ['backups/', '运行期目录,不进仓库'],
   [
@@ -199,7 +199,7 @@ const PLACEHOLDER = /[<>…]|xxx|\*/;
 const INSTALLED = /(^|\/)node_modules\//;
 
 const pathRefs = new Set();
-for (const doc of ['DESIGN.md', 'DEPLOY.md', 'README.md']) {
+for (const doc of ['DESIGN.md']) {
   if (!fs.existsSync(path.join(ROOT, doc))) continue;
   for (const m of read(doc).matchAll(/`([^`\n]+)`/g)) {
     const ref = m[1].trim();

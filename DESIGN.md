@@ -988,6 +988,61 @@ docker compose exec -T redis redis-cli del kc:login:lock:u:kc004
 | **有人误删了文档** | 删除是物理删除,没有回收站 | **无法恢复**,只能从备份找。查是谁删的:`/audit` 搜 `node.delete` |
 | 某人不在某个组的成员列表里 | 他的归属被移出,或本来就没加过 | 节点成员弹窗能查「这个节点下都有谁」;调岗是**两步**:先加入新节点,再从原节点移出 |
 
+### 9.7 首次部署
+
+| 项 | 要求 |
+|---|---|
+| 操作系统 | Linux x86_64(Ubuntu 22.04+ 实测);Windows 只作为开发机 |
+| Docker | 24+,需要 `docker compose` v2 语法 |
+| 内存 | **2 GB 起,建议 4 GB** —— 构建 api 镜像时要跑 `pnpm install`,那是内存峰值 |
+| 磁盘 | 20 GB 起(镜像 + 数据 + 附件 + 备份) |
+| 端口 | 一个对外端口(默认 8080);80/443 被占用时用 `WEB_PORT` 改 |
+
+```bash
+docker --version && docker compose version
+free -m | head -2; df -h /
+cp .env.example .env      # 然后填 POSTGRES_PASSWORD 与 SESSION_SECRET(必须随机)
+docker compose up -d --build
+curl -s localhost:8080/api/v1/health/ready   # 应报告 database 与 redis 均 up
+```
+
+**升级:** `git pull && docker compose up -d --build`(迁移随新容器启动自动应用)。
+⚠️ **升级前先备份** —— 回滚代码容易,回滚数据库不容易。
+
+> 没有仓库部署密钥时走「本地打包 → scp → 服务器解包」。解包**前必须先清空源码目录** ——
+> `tar -xzf` 覆盖不会删除已被移除的文件,旧模块会原样留着,而它们引用的共享类型可能已经不存在,
+> 于是 `tsc` 直接失败、镜像建不出来。
+
+### 9.8 上 HTTPS(有域名时)
+
+**内网也要上 HTTPS**:浏览器在非安全上下文里会限制剪贴板 API、部分 WebSocket 升级与
+Service Worker —— 而这些恰好是协同编辑与粘贴图片要用的。
+
+最省事是在宿主机用一个 Caddy 反代到 8080(Caddy 会自动申请证书):
+
+```caddyfile
+kb.example.com {
+  reverse_proxy 127.0.0.1:8080
+}
+```
+
+上完 HTTPS 后把 `.env` 改回 `WEB_ORIGIN=https://kb.example.com`、
+`SESSION_COOKIE_SECURE=true`,再 `docker compose up -d` 让 api 重新读环境变量。
+
+### 9.9 上线前检查清单
+
+- [ ] `.env` 里的 `POSTGRES_PASSWORD` / `SESSION_SECRET` 都是随机生成的,不是样例值
+- [ ] `SESSION_COOKIE_SECURE` 与访问协议匹配(§2.4)
+- [ ] `/api/v1/health/ready` 报告 database 与 redis 均 up
+- [ ] 已创建管理员,且库里**没有**遗留测试账号
+- [ ] `./scripts/backup.sh` 跑通,且备份已同步到异地
+- [ ] `./scripts/restore-drill.sh` 跑通
+- [ ] **已把「删除不可恢复」告知使用者**(§8.2)
+- [ ] 四个容器都是 `restart: unless-stopped`(compose 默认已配)
+- [ ] 出问题时有人知道去哪看日志:`docker compose logs`
+
+---
+
 ---
 
 ## 10. 为阶段二预留的硬约束
