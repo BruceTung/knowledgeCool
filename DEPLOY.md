@@ -292,7 +292,6 @@ docker compose up -d --build
 # 本地:打包(排除掉不该传的东西)
 tar -czf /tmp/kc-src.tar.gz \
   --exclude='./node_modules' --exclude='*/node_modules' --exclude='./.git' \
-  --exclude='./.workbuddy' --exclude='*/dist' --exclude='./prototype' \
   --exclude='./.env' --exclude='./apps/api/src/generated' \
   -C <仓库根目录> .
 

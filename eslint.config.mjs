@@ -20,7 +20,6 @@ export default tseslint.config(
       '**/node_modules/**',
       '**/dist/**',
       '**/coverage/**',
-      'prototype/**',
       'apps/api/src/generated/**',
       '**/*.d.ts',
     ],

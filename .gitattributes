@@ -34,4 +34,3 @@ Dockerfile.*    text eol=lf
 *.woff2 binary
 
 # 语言统计时不计入
-prototype/** linguist-vendored
