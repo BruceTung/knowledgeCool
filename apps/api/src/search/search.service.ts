@@ -32,6 +32,7 @@ import { Injectable } from '@nestjs/common';
 import {
   SEARCH_HIT_LIMIT,
   SEARCH_QUERY_MAX_LENGTH,
+  type Actor,
   type SearchHit,
   type SearchResponse,
 } from '@knowledgecool/shared';
@@ -39,6 +40,7 @@ import {
 import { AppError } from '../common/errors/app-error.js';
 import { idsOfPath } from '../common/node-path.js';
 import { Prisma } from '../generated/prisma/client.js';
+import { PermissionService } from '../permission/permission.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 
 /** `$queryRaw` 的返回行。列名与 SQL 里的别名逐字对应。 */
@@ -53,9 +55,12 @@ interface RawHit {
 
 @Injectable()
 export class SearchService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly permissions: PermissionService,
+  ) {}
 
-  async search(query: string): Promise<SearchResponse> {
+  async search(operator: Actor, query: string): Promise<SearchResponse> {
     const startedAt = Date.now();
 
     const q = query.trim();
@@ -77,8 +82,7 @@ export class SearchService {
              (n.title ILIKE ${pattern}::text) AS title_hit
         FROM nodes n
         LEFT JOIN node_contents c ON c.node_id = n.id
-       WHERE n.deleted_at IS NULL
-         AND (n.title ILIKE ${pattern}::text
+       WHERE (n.title ILIKE ${pattern}::text
               OR COALESCE(c.text_for_search, '') ILIKE ${pattern}::text)
        ORDER BY
          (CASE WHEN n.title ILIKE ${pattern}::text THEN 2 ELSE 0 END)
@@ -92,7 +96,21 @@ export class SearchService {
     `);
 
     const hits = await this.attachBreadcrumbs(rows, q);
-    return { query: q, hits, tookMs: Date.now() - startedAt };
+
+    // ⚠️ v2.12:保密过滤。**检索是最容易漏的一条读取路径** ——
+    // 树、详情、导出、评论都挡住了,却忘了检索的话,受限文档的标题与正文片段
+    // 会直接出现在全公司的搜索结果里,而保密功能看起来完全正常。
+    //
+    // 逐条判定而不是在 SQL 里过滤:命中已经 LIMIT 到 20 条,这里最多 20 次判定;
+    // 而在 SQL 里重写一遍祖先链+名单的判定,等于把安全逻辑实现第二遍,
+    // 那份迟早与 permission.ts 分叉。
+    const readable: typeof hits = [];
+    for (const hit of hits) {
+      const access = await this.permissions.access(operator, hit.nodeId);
+      if (access.canRead) readable.push(hit);
+    }
+
+    return { query: q, hits: readable, tookMs: Date.now() - startedAt };
   }
 
   /**

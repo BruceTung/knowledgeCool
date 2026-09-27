@@ -15,7 +15,16 @@
  *     —— 填了不生效的开关比没有开关更坏
  *   · `/health` 与 `/health/ready` 两个接口根本没进接口清单
  *
- * ## 检查四件事
+ * ## 检查六件事
+ *
+ * 1. **接口**:文档 §6.2 的表格 与 控制器里实际注册的路由,双向比对
+ * 2. **环境变量**:代码里读的 与 .env.example 声明的键,双向比对
+ * 3. **文件路径**:文档里提到的仓库路径是否真的存在
+ * 4. **版本号**:文档头写的版本 = 变更记录里最新一行的版本
+ * 5. **前端调用 与 后端路由**(v2.14):前端写的字符串路径是否都能在后端找到。
+ *    这类错是「后端删了路由、前端还在调」,三件套都不报,点下去才是 404。
+ * 6. **弃用结构**(v2.14):数据库里已删的列与索引不许再出现在源码里
+ *    (裸 SQL 不参与类型检查,deleted_at 那次就是这么漏过去的)。
  *
  * 1. **接口**:`DESIGN.md` §6.2 的表格 ↔ 控制器里实际注册的路由,双向比对
  * 2. **环境变量**:`process.env.X` ↔ `.env.example` 的键,双向比对
@@ -230,6 +239,245 @@ else if (latest !== undefined && headerVersion !== latest) {
   fail(`版本漂移:文档头写 ${headerVersion},但变更记录最新一行是 ${latest}`);
 } else {
   notes.push(`版本号:文档头 ${String(headerVersion)} = 变更记录最新一行`);
+}
+
+// ============================================================
+// 4.5) 前端调用的路径 ↔ 后端注册的路由(v2.14 新增)
+// ============================================================
+
+/*
+  ⚠️ 这一段的由来与下面那段(弃用结构扫描)是同一类事:
+  **有一种 bug,静态检查三件套都抓不到,而它会让功能整个不可用。**
+
+  前端调用后端用的是**字符串路径**,后端路由是装饰器里的字符串,
+  两边在类型上没有任何联系 —— 于是「后端删了一条路由,前端还在调」这件事,
+  typecheck / lint / 单测**全都不报**,表现是用户点下去得到 404,
+  而开发者以为这次改动是干净的。
+
+  这类错误在本仓库真实发生过:回收站移除时删掉了 /nodes/:id/restore 与 /trash,
+  前端那几个 hook 是同一次改动里**手工**清掉的 —— 靠的是「记得」。
+  而「记得」不是一种机制。这一段把它变成机制。
+*/
+
+/** 三种引号字符。用字符码构造,避免这一段源码里出现字面引号。 */
+const QUOTES = [String.fromCharCode(96), String.fromCharCode(39), String.fromCharCode(34)];
+
+/** 去掉字符串字面量的引号,只留内容。 */
+function stripQuotes(text) {
+  let out = text;
+  for (const ch of QUOTES) out = out.replaceAll(ch, '');
+  return out;
+}
+
+/**
+ * 从调用参数里抽出「一条路径」。
+ *
+ * 三种写法都要认,因为仓库里三种都有:纯字面量、模板串、字符串拼接。
+ * 拼接那条最容易被漏掉,也最危险 —— 「拼出来的路径」正是删路由时最容易忘的地方。
+ *
+ * 做法:先去掉引号,再把插值与拼接统一换成 :p,最后把连续的 :p 收成一个。
+ * 不用逐字符解析 —— 那种写法要比较引号字符,而生成这段代码时引号本身就是麻烦的来源。
+ */
+function extractPathArgument(raw) {
+  const firstLine = raw.split(String.fromCharCode(10))[0];
+  let text = stripQuotes(firstLine);
+  // ⚠️ 顺序要紧:**先**把模板插值换成占位,**再**截断。
+  // 反过来的话,`/nodes/${String(nodeId)}` 里的那个 ) 会被当成"参数结束",
+  // 路径被截成 `/nodes/${String(nodeId`,于是这一批**每一条都报不匹配**
+  // (第一次跑出来 10 处全挂在这上面)。
+  text = text.replace(/\$\{[^{}]*\}/g, ':p');
+  // 截到第一个 ) 或 , —— 那之后是别的参数(请求体、文件名…),不是路径的一部分。
+  const cut = Math.min(
+    ...[text.indexOf(')'), text.indexOf(',')].filter((i) => i >= 0),
+    text.length,
+  );
+  text = text.slice(0, cut);
+  text = text.replace(/\+\s*[^+]*\s*\+/g, ':p');
+  text = text.replace(/\+/g, ':p');
+  text = text.replace(/:p(\/:p)+/g, ':p');
+  // 把拼接产生的小碎片与多余空白收拾干净,报告里才读得懂
+  // (第一版报出来是 `/nodes/ :p /restore`,像是有空格 —— 其实是拼接碎片)
+  return text
+    .replace(/\s*:p\s*/g, '/:p/')
+    .replace(/\/+/g, '/')
+    .trim();
+}
+
+/** 把前端写出来的路径归一成与后端路由同一种形状。 */
+function normalizeClientPath(raw) {
+  const withoutQuery = raw.split('?')[0];
+  return (
+    withoutQuery.replace(/\/+/g, '/').replace(/\/$/, '') || '/'
+  );
+}
+
+{
+  const QS = String.fromCharCode(39);
+  const getLike = /api(?:Fetch|Download)(?:<[^>]*>)?\(\s*([^\n]*)/g;
+  const sendLike = new RegExp(
+    'api(?:Send|Upload)(?:<[^>]*>)?\\(\\s*(?:' + QS + '([A-Z]+)' + QS + '\\s*,)?\\s*([^\\n]*)',
+    'g',
+  );
+
+  const clientFiles = [];
+  for (const root of ['apps/web/src', 'packages/shared/src']) {
+    const abs = path.join(ROOT, root);
+    if (!fs.existsSync(abs)) continue;
+    for (const file of fs.readdirSync(abs, { recursive: true })) {
+      const rel = path.join(root, String(file));
+      if (/\.(ts|tsx)$/.test(rel) && !/\.test\./.test(rel)) clientFiles.push(rel);
+    }
+  }
+
+  let callCount = 0;
+  const missing = [];
+  for (const rel of clientFiles) {
+    const src = read(rel);
+    for (const m of src.matchAll(getLike)) {
+      const raw = extractPathArgument(m[1]);
+      if (!raw.startsWith('/')) continue;
+      callCount += 1;
+      const key = normalizeRoute('GET', normalizeClientPath(raw));
+      if (!codeRoutes.has(key)) missing.push(rel + ' → GET ' + raw);
+    }
+    for (const m of src.matchAll(sendLike)) {
+      const method = m[1] ?? 'POST';
+      const raw = extractPathArgument(m[2]);
+      if (!raw.startsWith('/')) continue;
+      callCount += 1;
+      const key = normalizeRoute(method, normalizeClientPath(raw));
+      if (!codeRoutes.has(key)) missing.push(rel + ' → ' + method + ' ' + raw);
+    }
+  }
+
+  for (const item of missing) {
+    fail(
+      '前端调了不存在的路由:' + item +
+        '(后端没有这条 —— 点了会是 404,而静态检查不会报)',
+    );
+  }
+  notes.push(
+    '前端调用:检查 ' + String(callCount) + ' 处,未匹配 ' + String(missing.length) + ' 处',
+  );
+}
+
+// ============================================================
+// 4.7) docker-compose 传给 api 的环境变量必须是代码真的读的(v2.14 新增)
+// ============================================================
+
+/*
+  ⚠️ 这一条是**在真机上部署时**发现的:`docker-compose.yml` 里一直留着
+  TRASH_RETENTION_DAYS / TRASH_PURGE_INTERVAL_HOURS,而 v2.12 移除回收站之后
+  代码**再也不读**它们了 —— 也就是两个死开关。
+
+  为什么原来没被发现:第 2 节检查的是 process.env.X 与 .env.example 的键,
+  而 **compose 是第三个地方**,没人管。填了不生效比没有这个开关更坏:
+  有人会去调它,然后奇怪为什么没反应。
+
+  这里只检查 **api 服务**的 environment 块 —— 我们自己的代码读那些键。
+  postgres / redis 服务的变量是给官方镜像用的(POSTGRES_* 等),不归我们管;
+  把它们一起检查会立刻产生一堆假告警,而假告警会让人关掉整个检查。
+*/
+
+{
+  const compose = read('docker-compose.yml');
+  const apiStart = compose.indexOf('  api:');
+  const apiEnd = compose.indexOf('  # ---------------- 前端', apiStart);
+  const apiBlock = apiStart >= 0 && apiEnd > apiStart ? compose.slice(apiStart, apiEnd) : '';
+
+  // 只取「六个空格缩进的 KEY:」—— 那是 environment: 下的键
+  const composeKeys = [...apiBlock.matchAll(/^\s{6}([A-Z][A-Z0-9_]*):/gm)].map((m) => m[1]);
+
+  const unused = composeKeys.filter((key) => !codeVars.has(key));
+  for (const key of unused) {
+    fail(
+      `死开关:docker-compose 给 api 传了「${key}」,但**代码从不读它**;` +
+        ' 填了不生效比没有这个开关更坏',
+    );
+  }
+  notes.push(
+    `docker-compose:给 api 传 ${String(composeKeys.length)} 个环境变量,` +
+      `其中代码不读的 ${String(unused.length)} 个`,
+  );
+}
+
+// ============================================================
+// 5) 源码里不该再出现的弃用结构(v2.14 新增)
+// ============================================================
+
+/*
+  ⚠️ 这一段是**被一个真 bug 逼出来的**。
+
+  v2.12 移除了回收站:迁移里 `DROP COLUMN deleted_at / deleted_by`。
+  但 `search.service.ts` 的**裸 SQL** 里一直留着 `WHERE n.deleted_at IS NULL` ——
+  而裸 SQL 不参与 TypeScript 检查,所以 typecheck / lint / 单测全都没报。
+  真跑起来的表现是:检索接口直接 500(`column n.deleted_at does not exist`)。
+
+  更值得记的是**为什么原来的守卫没拦住**:仓库里其实已经有一条检查 ——
+  `apps/api/scripts/verify-db.mjs` 的 `FORBIDDEN_NODE_COLUMNS`,而且注释里
+  恰好写着「代码里会重新出现 deleted_at 过滤,但没有任何地方会报错」。
+  问题是那个脚本**需要连数据库**才能跑,日常门禁(`typecheck / lint / test`)里不会执行它,
+  所以它在最需要的时候是缺席的。
+
+  这一段的职责就是把它搬到**每次都会跑**的地方:直接扫源码文本。
+  扫文本当然做不到精确(注释里提到也会命中),所以只针对那几个
+  「数据库里已经删掉、代码里再出现就是 bug」的名字,而且允许用
+  `// audit-docs:allow` 在同一行显式豁免 —— 迁移文件与说明性注释就是这么处理的。
+*/
+
+/** 数据库里已经不存在、源码里再出现即为 bug 的名字。 */
+const FORBIDDEN_IN_SOURCE = [
+  { pattern: /\bdeleted_at\b/, why: '回收站已移除(v2.12),nodes 上没有这一列' },
+  { pattern: /\bdeleted_by\b/, why: '回收站已移除(v2.12),nodes 上没有这一列' },
+  { pattern: /\bnodes_alive_idx\b/, why: '软删除的部分索引已移除(v2.12)' },
+];
+
+/** 允许豁免的地方:迁移与验收脚本要按名字描述"这些结构已经没了"。 */
+const FORBIDDEN_SCAN_ROOTS = ['apps/api/src', 'apps/web/src', 'packages/shared/src'];
+const FORBIDDEN_SCAN_EXCLUDE = [/\/generated\//];
+
+function walkSource(dir, out) {
+  if (!fs.existsSync(dir)) return out;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    // ⚠️ 归一化之后再匹配排除规则 —— Windows 上 path.join 给的是反斜杠,
+    // 而排除规则写的是正斜杠,不归一化会**一条都匹配不上**。
+    // (生成目录必须排除:Prisma 会把 schema 里的注释一起复制进生成物,
+    //  于是"说明这个索引已经删掉了"的那句注释反而会命中检查。)
+    const normalized = full.replaceAll(path.sep, '/');
+    if (entry.isDirectory()) {
+      if (FORBIDDEN_SCAN_EXCLUDE.some((re) => re.test(normalized))) continue;
+      walkSource(full, out);
+    } else if (/\.(ts|tsx|mjs|js)$/.test(entry.name)) {
+      out.push(full);
+    }
+  }
+  return out;
+}
+
+{
+  let scanned = 0;
+  let hits = 0;
+  for (const root of FORBIDDEN_SCAN_ROOTS) {
+    for (const file of walkSource(path.join(ROOT, root), [])) {
+      scanned += 1;
+      const text = fs.readFileSync(file, 'utf8');
+      const rel = path.relative(ROOT, file).replaceAll(path.sep, '/');
+      text.split(/\r?\n/).forEach((line, index) => {
+        if (line.includes('audit-docs:allow')) return;
+        for (const rule of FORBIDDEN_IN_SOURCE) {
+          if (rule.pattern.test(line)) {
+            hits += 1;
+            fail(
+              `弃用结构:${rel}:${String(index + 1)} 还在用「${rule.pattern.source}」—— ${rule.why};` +
+                ' 确需在注释里提到它,就在那一行加 audit-docs:allow',
+            );
+          }
+        }
+      });
+    }
+  }
+  notes.push(`弃用结构:扫描 ${String(scanned)} 个源文件,命中 ${String(hits)} 处`);
 }
 
 // ============================================================

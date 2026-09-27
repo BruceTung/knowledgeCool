@@ -23,6 +23,9 @@ function node(id: string, parentId: string | null, position: number, title = id)
     depth: parentId === null ? 0 : 1,
     status: 'published',
     version: 1,
+    // v2.12:可见性进了 NodeSummary。这些用例都是纯树形逻辑,与保密无关,
+    // 一律 public 即可。
+    visibility: 'public',
     ownerId: 'u-1',
     ownerName: '某人',
     commentCount: 0,

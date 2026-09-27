@@ -62,7 +62,7 @@ export function AuthShell({
 }
 
 const INPUT_CLASS =
-  'w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none transition-colors placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-50';
+  'w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none transition-colors placeholder:text-slate-500 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-50';
 
 export function TextField({
   label,
@@ -73,7 +73,7 @@ export function TextField({
     <label className="block">
       <span className="mb-1 block text-sm text-slate-600">{label}</span>
       <input {...rest} className={INPUT_CLASS} />
-      {hint !== undefined && <span className="mt-1 block text-xs text-slate-400">{hint}</span>}
+      {hint !== undefined && <span className="mt-1 block text-xs text-slate-500">{hint}</span>}
     </label>
   );
 }
@@ -131,14 +131,55 @@ export function Button({
  * 而且刻意不区分「不存在」与「无权访问」。前端不做二次包装,
  * 免得把后端精心设计的措辞又改回成能被枚举的信息。
  */
-export function ErrorNote({ error }: { error: unknown }) {
+export function ErrorNote({ error, onRetry }: { error: unknown; onRetry?: () => void }) {
   if (error === null || error === undefined) return null;
   const message =
     error instanceof ApiError || error instanceof Error ? error.message : '发生未知错误';
   return (
-    <p role="alert" className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
-      {message}
-    </p>
+    <div
+      role="alert"
+      className="flex items-center gap-2 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700"
+    >
+      <span className="min-w-0 flex-1">{message}</span>
+      {onRetry !== undefined && (
+        <button
+          type="button"
+          className="flex-none rounded border border-red-300 px-2 py-0.5 text-xs text-red-700 transition-colors hover:bg-red-100 focus-visible:ring-2 focus-visible:ring-red-400 focus-visible:outline-none"
+          onClick={onRetry}
+        >
+          重试
+        </button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * 骨架屏(v2.14)。
+ *
+ * 原本各处都是「加载中…」这五个字。它有两个问题:
+ *   1. **布局会跳** —— 一秒前是一个居中的短句,一秒后是一整页内容,视线要重新找位置;
+ *   2. 它不告诉你**将要出现什么**。骨架屏至少给出"这里会有一张表 / 一段正文"。
+ *
+ * 用 animate-pulse(Tailwind 内置)而不是自己写动画 —— 它在
+ * prefers-reduced-motion 下会被浏览器降级,不需要额外处理。
+ *
+ * aria-hidden + 外层 role="status":屏幕阅读器不该去念一堆空方块,
+ * 它只要知道"正在加载"就够了。
+ */
+export function Skeleton({ lines = 3, className }: { lines?: number; className?: string }) {
+  return (
+    <div role="status" aria-label="加载中" className={className ?? ''}>
+      <div className="animate-pulse space-y-2" aria-hidden>
+        {Array.from({ length: lines }, (_, index) => (
+          <div
+            key={index}
+            className="h-4 rounded bg-slate-200"
+            style={index === lines - 1 && lines > 1 ? { width: '60%' } : undefined}
+          />
+        ))}
+      </div>
+    </div>
   );
 }
 

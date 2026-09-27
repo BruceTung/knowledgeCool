@@ -173,7 +173,7 @@ export function LinkPopover({
             </button>
           </div>
 
-          <p className="text-xs leading-relaxed text-slate-400">
+          <p className="text-xs leading-relaxed text-slate-500">
             只写域名会自动补 https://;站内路径(以 / 开头)与 #锚点 原样保留。
           </p>
         </form>

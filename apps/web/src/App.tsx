@@ -1,6 +1,8 @@
 import type { ReactNode } from 'react';
 import { Navigate, Outlet, Route, Routes } from 'react-router-dom';
 
+import { ErrorBoundary } from './components/ErrorBoundary';
+import { ToastHost } from './components/Toast';
 import { ErrorNote, FullScreenNote } from './components/ui';
 import { isUnauthorized, useMe, useSetupState } from './features/auth/queries';
 import { AppLayout } from './routes/AppLayout';
@@ -12,7 +14,6 @@ import { NodeDetailPage } from './routes/NodeDetailPage';
 import { OrgAdminPage } from './routes/OrgAdminPage';
 import { SearchPage } from './routes/SearchPage';
 import { SetupPage } from './routes/SetupPage';
-import { TrashPage } from './routes/TrashPage';
 import { UsersAdminPage } from './routes/UsersAdminPage';
 
 /**
@@ -37,7 +38,10 @@ import { UsersAdminPage } from './routes/UsersAdminPage';
  */
 export function App() {
   return (
-    <Routes>
+    <>
+      {/* 兜底包在路由**外面**:任何一页渲染抛错都不该变成白屏 */}
+      <ErrorBoundary>
+        <Routes>
       <Route path="/setup" element={<SetupPage />} />
       <Route path="/login" element={<LoginPage />} />
       <Route path="/change-password" element={<ChangePasswordPage />} />
@@ -47,7 +51,6 @@ export function App() {
           <Route path="/" element={<HomePage />} />
           <Route path="/n/:nodeId" element={<NodeDetailPage />} />
           <Route path="/search" element={<SearchPage />} />
-          <Route path="/trash" element={<TrashPage />} />
           <Route path="/audit" element={<AuditPage />} />
           <Route path="/admin" element={<RequireSuperAdmin />}>
             <Route path="/admin/org" element={<OrgAdminPage />} />
@@ -56,7 +59,12 @@ export function App() {
           <Route path="*" element={<NotFound />} />
         </Route>
       </Route>
-    </Routes>
+        </Routes>
+      </ErrorBoundary>
+
+      {/* toast 挂在最外层:未登录的页面(登录 / 引导 / 改密)也要能弹提示 */}
+      <ToastHost />
+    </>
   );
 }
 

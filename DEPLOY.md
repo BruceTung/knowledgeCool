@@ -87,30 +87,45 @@ WEB_ORIGIN=http://<服务器IP或域名>
 阶段一的 TLS 视部署方式而定:有域名就上 Let's Encrypt(见 §6);
 没有域名、直接用 IP + http 访问时,**必须显式设 `SESSION_COOKIE_SECURE=false`**。
 
-### 回收站保留策略(v2.4)
+### 登录限流:会被锁定,先把这件事告诉使用者(v2.12)
+
+**同一个工号连续输错 5 次密码,锁 15 分钟;锁定期内即使密码正确也登不进去。**
+这是刻意的(防爆破),但它是**唯一一个会让正常用户"明明密码对却进不去"的机制**,
+所以必须在培训里说明,否则运维会收到"系统坏了"的报障。
+
+| 开关 | 默认 | 含义 |
+|---|---|---|
+| `LOGIN_MAX_ATTEMPTS` | 5 | 同一工号失败几次触发锁定。**设为 `0` 可关闭这道门** |
+| `LOGIN_LOCK_MINUTES` | 15 | 锁多久 |
+| `LOGIN_IP_MAX_FAILURES` | 100 | 同一出口 IP 的失败上限(整个办公室共用一个出口时要注意) |
+| `LOGIN_IP_WINDOW_MINUTES` | 15 | IP 计数的窗口 |
+
+**用户被锁了怎么办(两种,都不用改代码):**
 
 ```bash
-# 删除的东西在回收站里放多少天之后被**自动彻底删除**。默认 30。
-# ⚠️ 填 0(或负数)= 关闭自动清理,回收站里的东西不会自己消失。
-TRASH_RETENTION_DAYS=30
-# 扫描间隔(小时)。0 同样表示关闭。默认 6。
-TRASH_PURGE_INTERVAL_HOURS=6
+# a) 等 15 分钟(锁会自动过期,不需要任何操作)
+
+# b) 立刻解锁某一个工号:
+docker compose exec -T redis redis-cli del kc:login:lock:u:kc004
+# 连失败计数一起清(不必要,但更干净):
+docker compose exec -T redis redis-cli del kc:login:fail:u:kc004
 ```
 
-**这三个事实必须知道:**
+> ⚠️ **Redis 挂了的时候,锁定会失效(退回无限尝试),这是刻意的取舍。**
+> 限流是加固,不是身份正确性的一部分 —— 让全员在 Redis 故障时都登不进去,
+> 代价远大于"这段时间少一道门"。理由见 `DESIGN.md` §6.1.3。
 
-1. **到点就是不可逆的物理删除** —— 与界面上的「彻底删除」是同一条代码路径。
-   不放心就先设 `TRASH_RETENTION_DAYS=0` 关掉它,只用手动清理。
-2. **超管可以手动触发一次**,并且支持先空跑看清单:
+### 回收站已移除(v2.12)
 
-   ```bash
-   # 只列不删(先在界面上"回收站 → 按保留策略清理"看也行)
-   curl -b cookie.txt -X POST 'localhost:8080/api/v1/admin/maintenance/trash-purge?dryRun=true'
-   ```
+**没有回收站,也没有保留策略。** 删除就是**立即、不可恢复**的物理删除
+(整棵子树一起删)。用户的原话是「不该有回收站这个概念,删除就应该直接删除」。
 
-   界面上的入口在「回收站」页右上角,只有超管看得到。
-3. **每次清理都写审计**(`node.purge.auto`,actor 为空,带标题与子树大小),
-   在 `/audit` 里能查到"哪些东西是系统到期清掉的"。
+因此 `TRASH_RETENTION_DAYS` 与 `TRASH_PURGE_INTERVAL_HOURS` 这两个开关
+**已经不存在**了 —— 改它们不会有任何效果。
+
+**上线前必须让使用者知道这一条**:误删无法挽回。删除的按钮门槛是
+「该节点或它上级的所有者」(`canManage`),被授权者改得了但删不掉 ——
+这是刻意的,删除不可逆之后,"能改"与"能销毁"必须分开。
 
 附件的大小上限与扩展名白名单**不在这里配** —— 它们是代码里的常量
 (`apps/api/src/upload/upload.controller.ts`)。放宽白名单是安全决策,
@@ -309,11 +324,37 @@ docker compose up -d --build
 
 ```bash
 docker compose ps                                  # 四容器 healthy
-docker compose exec api node scripts/verify-org.mjs   # 129 项端到端断言
+docker compose exec -T api node scripts/verify-db.mjs   # 数据库契约自检
+```
+
+```bash
+# 端到端验收(161 项)。⚠️ 必须带 KC_API —— 见下面那条注。
+docker compose exec -T -e KC_API=http://web/api/v1 -e KC_ROOT=http://web \
+  api node scripts/verify-org.mjs
 ```
 
 > 验收脚本已进镜像(`apps/api/Dockerfile` 里 COPY 了 `scripts/`),所以能在容器内直接跑,
 > 不必在宿主机上再装一份 Node 与依赖。
+
+> ⚠️ **`-e KC_API=http://web/api/v1` 不能省。** 脚本默认打 `http://127.0.0.1:8080`,
+> 而在 **api 容器内部** `127.0.0.1` 是它自己的回环,那里没有任何东西在 8080 上监听 ——
+> 表现是 `TypeError: fetch failed / ECONNREFUSED 127.0.0.1:8080`,看起来像服务挂了。
+> 指向 `http://web/api/v1` 走的是 nginx,也就是**浏览器那条路径**,反而更接近真实。
+> (这一条是 v2.12 第一次真机部署时踩出来的:原来这里只写了一行 `exec ... verify-org.mjs`,
+> 照着敲必然失败。)
+
+> ⚠️ **脚本会触发登录限流,连着跑第二次可能失败。** 它在登录时会依次试几个候选密码,
+> 错的那几次会被 `LOGIN_MAX_ATTEMPTS`(默认 5 次)记成失败 → 该账号锁 15 分钟。
+> 脚本现在会在开头就记住每个账号试成功的密码(所以正常只错一次),
+> 并且一旦拿到 429 就**直接报「被限流锁住」并终止**,不再让后面每一条断言都变成假失败。
+> 需要立刻重跑时,清掉计数:
+
+> ```bash
+> docker compose exec -T redis redis-cli --scan --pattern "kc:login:*"
+> # 对每个 key 执行 del;或者直接 FLUSHDB(只影响缓存与计数,不影响业务数据)
+> ```
+
+> 也可以临时把 `LOGIN_MAX_ATTEMPTS` 设为 `0` 关掉账号锁(IP 门仍然生效)。
 
 ---
 
@@ -326,8 +367,11 @@ docker compose exec api node scripts/verify-org.mjs   # 129 项端到端断言
 | 页面能开、接口 502 | api 未 ready | `docker compose ps` 看 api 是否 healthy;`logs api` 找 `migrate deploy` 是否失败 |
 | 图片 404 | web 容器没挂到 uploads 卷 | `docker compose config` 看 web 的 volumes 里有没有 `uploads:/data/uploads:ro` |
 | 中文搜索搜不到 | `pg_trgm` 扩展或三元组索引丢失 | `docker compose exec postgres psql -U knowledgecool -d knowledgecool -c "\dx"` 确认 `pg_trgm` 在;`\di node_contents_trgm_idx` 确认索引在 |
-| **回收站里的东西不见了** | 保留期到了,被 `RetentionService` 自动清掉 | 这是**设计行为**。先去 `/audit` 搜 `node.purge.auto` 确认;不想让它发生就设 `TRASH_RETENTION_DAYS=0` |
+| **有人误删了文档** | v2.12 起删除是**物理删除**,没有回收站 | **无法恢复**,只能从备份里找(`./scripts/restore.sh`,见 §7)。要确认是谁删的:进 `/audit` 搜 `node.delete`。**这一条要提前告知使用者** |
 | **某人不在某个组的成员列表里了** | 他的归属被移出,或本来就没加过 | 节点的成员弹窗(`☰`)能查"这个节点下都有谁";调岗是**两步**:先加入新节点,再从原节点移出 |
+| **某人密码明明是对的却登不进去** | 连续输错 5 次触发了**登录锁定**(锁 15 分钟,期间不校验密码) | 等 15 分钟,或立刻解锁:`docker compose exec -T redis redis-cli del kc:login:lock:u:<工号>`。**这是最常见的"系统坏了"报障,先查这一条**(§2 登录限流) |
+| **有人看不到某篇文档** | 该节点被设成**受限**,而他不在读者名单里 | 让**该节点的创建者或所有者**打开节点的「可见范围」把此人加进名单(上级所有者改不了这个,是刻意的)。要在服务端确认:`psql -c "select title, visibility from nodes where visibility <> 'public'"` |
+| **检索里搜不到某篇文档,但点进节点能看** | 节点受限(检索按可见性过滤),或该节点没有正文且标题不含关键词 | 若他自己能看、别人搜不到,那是**保密生效**;若在受限制下**他自己**也搜不到正文命中,属正常(受限节点不进别人的结果集) |
 | 磁盘被备份撑满 | 没清理旧备份 | 给 `backups/` 加保留策略(例如只留最近 14 天),**不要**用 `rm -rf` 一把清 |
 
 ---
@@ -342,8 +386,8 @@ docker compose exec api node scripts/verify-org.mjs   # 129 项端到端断言
 - [ ] 已创建管理员,并且**没有**在库里留下测试账号
 - [ ] `./scripts/backup.sh` 跑通,且备份已被同步到异地
 - [ ] `./scripts/restore-drill.sh` 跑通
-- [ ] **确认回收站保留策略符合预期**(v2.4,默认 30 天后自动彻底删除;
-      不需要就设 `TRASH_RETENTION_DAYS=0`;界面上的天数取自服务端,不是写死的)
+- [ ] **已把「删除不可恢复」这件事告知使用者**(v2.12 移除了回收站:
+      删除即物理删除整棵子树,没有撤销、没有保留期;删除门槛是所有者,不是被授权者)
 - [ ] 四个容器都是 `restart: unless-stopped`(compose 默认已配)
 - [ ] 记下 `docker compose logs` 的位置,出问题时有人知道去哪看
 
@@ -510,16 +554,19 @@ docker compose exec api node scripts/reset-demo-passwords.mjs KC003 KC005   # �
 - 回「技术部」的成员弹窗看:她现在是"CRM 项目"的人
 - 想还原:同样两步反过来做一遍
 
-**第 7 步 · 回收站与保留策略**
-以 KC001 进左下角「回收站 →」。
-- 页面上写着:"这里的条目会在删除满 30 天后被自动清理(每 6 小时扫一次)"
-- 右上角有「按保留策略清理」(只有超管有)
-- 先删一篇文档(树上悬停 → ×),回回收站:
-  - 能看到它,还带"原父节点是否还在树上"的提示
-  - 点「按保留策略清理」→ 提示"没有删除满 30 天的条目,无需清理"
-    —— 说明**保留期内的东西不会被误删**
-  - 点「恢复」把它救回来
-- ★ 彻底删除的门槛比移入回收站高:能改还不够,得是它或它上级的所有者
+**第 7 步 · 删除是不可恢复的(v2.12 起没有回收站)**
+这一节验的正是这件事 —— 它是**唯一一个"做错了会丢数据"**的功能,所以必须亲手确认。
+- 以 KC003(后端组组长)在自己组的树上悬停一篇文档 → 点 ×
+  - 确认框写的是「确定删除 …?
+
+此操作不可恢复,内容将永久丢失。」
+    —— 确认语必须说清后果,不能轻描淡写
+  - 确认后那篇文档**直接从树上消失**,且**没有**回收站可以找
+- ★ 门槛验证:以 KC004(赵敏,她在「接口规范」的授权名单里但不在祖先链上)
+  - 她能**改**「接口规范」(有编辑按钮、PATCH 200)
+  - 但**删不掉**:接口回 403 → "能改 ≠ 能销毁"
+- 以 KC002(技术部部长,祖先链所有者)删同一个节点 → 成功
+- 想核对"谁删了什么":进「审计日志 →」搜 `node.delete`
 
 **第 8 步 · 审计日志**
 以 KC001 进「审计日志 →」。

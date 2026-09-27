@@ -286,3 +286,63 @@ body {
   height: 0;
   pointer-events: none;
 }
+
+/* ============================================================
+   键盘焦点圈(v2.12)
+   ============================================================
+   此前全站只有**一处**写了 focus-visible,其余全靠浏览器默认的
+   `outline: auto`。默认圈在浅灰底上很淡,而且只要有人顺手加一个
+   `outline-none` 就彻底消失 —— 键盘用户于是"不知道焦点在哪"。
+
+   这里统一给一条深蓝圈。选择器**刻意不用 `:where()`**:那样特指度是 0,
+   会被任何 `outline-none` 工具类盖掉;写成元素 + 伪类(0,1,1)才压得住。
+
+   `contenteditable` 排除在外:正文区获得焦点时不该在整块编辑区外面画一个框。
+*/
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+summary:focus-visible,
+[tabindex]:not([contenteditable='true']):focus-visible {
+  outline: 2px solid #1d4ed8;
+  outline-offset: 2px;
+}
+
+/* 长 URL / 长英文串不能顶破布局(中文有换行机会,英文没有) */
+.kc-prose {
+  overflow-wrap: anywhere;
+}
+
+/* ============================================================
+   打印 / 另存为 PDF(v2.12)
+   ============================================================
+   导出 PDF 的路线是**前端打印**,不是服务端无头 Chrome ——
+   后者会给镜像加 300~400MB,与"构建机 2GB 内存"的现状冲突(见 §2.1)。
+
+   打印时只留正文:顶栏(<header>)、左右栏(<aside>)、
+   编辑器工具栏(标了 data-print)都不该出现在纸上。
+   header/aside 用**语义标签**选中而不是类名 —— 类名会变,
+   而"它是不是页面框架"是个语义。
+*/
+@media print {
+  header,
+  aside,
+  [data-print='hide'] {
+    display: none !important;
+  }
+
+  /* 正文原本在滚动容器里,打印时要让它自然展开,否则只会印出第一屏 */
+  .kc-print-area {
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    padding: 0 !important;
+  }
+
+  .kc-prose {
+    max-width: none;
+    font-size: 11pt;
+  }
+}

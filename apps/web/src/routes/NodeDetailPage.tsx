@@ -1,5 +1,5 @@
 import type { Editor } from '@tiptap/core';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
 import { Button, ErrorNote } from '../components/ui';
@@ -13,8 +13,14 @@ import {
   type SaveState,
 } from '../features/content/PageEditor';
 import { useGrantDialog } from '../features/grants/dialog-store';
+import { BulkMoveDialog } from '../features/bulk/BulkMoveDialog';
+import { useVisibilityDialog } from '../features/visibility/dialog-store';
 import { useMembersDialog } from '../features/members/dialog-store';
 import { useExportMarkdown, useNodeContent, useNodeDetail, useOrgTree, useUpdateNode } from '../features/org/queries';
+import { copyText } from '../lib/clipboard';
+import { usePersonal } from '../lib/personal-store';
+import { toast } from '../lib/toast-store';
+import { useDocumentTitle } from '../lib/use-document-title';
 import { T_LABEL, T_META } from '../lib/typography';
 
 type RightTab = 'outline' | 'comments';
@@ -99,7 +105,7 @@ function ChildPages({ nodeId }: { nodeId: string }) {
                   {child.commentCount}
                 </span>
               )}
-              <span className="flex-none text-sm text-slate-400">{child.ownerName}</span>
+              <span className="flex-none text-sm text-slate-500">{child.ownerName}</span>
             </button>
           </li>
         ))}
@@ -138,13 +144,34 @@ function DepartedBadge() {
 
 function NodeDetailView({ nodeId }: { nodeId: string }) {
   const detail = useNodeDetail(nodeId);
+  // 标签页标题用文档自己的标题 —— 同时开着几篇文档时,标签栏上要能分辨。
+  useDocumentTitle(detail.data?.title);
   const content = useNodeContent(nodeId);
   const updateNode = useUpdateNode();
   const comments = useComments(nodeId);
   const exportMd = useExportMarkdown();
   const openGrants = useGrantDialog((state) => state.open);
+  const openVisibility = useVisibilityDialog((state) => state.open);
   const openMembers = useMembersDialog((state) => state.open);
   const me = useMe();
+
+  /*
+    记一次浏览(v2.14)。
+
+    ⚠️ 必须放在 **effect** 里,不能在渲染期记:
+      · 渲染可能被 React 重放(并发渲染下同一次访问可能渲染多次),
+        在渲染里写 localStorage 会让"最近浏览"出现重复或乱序;
+      · Date.now() 在渲染期调用会直接触发 React Compiler 的 purity 检查。
+    依赖是 nodeId + 标题:标题变了(改名)也要更新记录里显示的名字。
+  */
+  const visit = usePersonal((state) => state.visit);
+  const favoriteIds = usePersonal((state) => state.favorites);
+  const toggleFavorite = usePersonal((state) => state.toggleFavorite);
+  const nodeTitle = detail.data?.title;
+  const isFavorite = favoriteIds.includes(nodeId);
+  useEffect(() => {
+    if (nodeTitle !== undefined && nodeTitle !== '') visit(nodeId, nodeTitle);
+  }, [nodeId, nodeTitle, visit]);
 
   // 切换节点要重建编辑器(见 PageEditor 顶部关于「content 只在挂载时读一次」的说明)。
   // 用 `key` 控制重建,而不是靠 props 更新 —— 后者会把正在输入的内容重置掉。
@@ -153,6 +180,8 @@ function NodeDetailView({ nodeId }: { nodeId: string }) {
   const [tab, setTab] = useState<RightTab>('outline');
   const [titleDraft, setTitleDraft] = useState<string | null>(null);
   const [editorRef, setEditorRef] = useState<Editor | null>(null);
+  /** 批量移动弹窗开着没有(v2.14)。只有 space 节点才有这个入口。 */
+  const [bulkMoveOpen, setBulkMoveOpen] = useState(false);
 
   // 这三个回调要稳定,否则 PageEditor 里的 effect 每次渲染都会重跑
   const handleOutline = useCallback((items: OutlineItem[]) => {
@@ -183,7 +212,7 @@ function NodeDetailView({ nodeId }: { nodeId: string }) {
   );
 
   if (detail.isPending || content.isPending) {
-    return <p className="p-8 text-sm text-slate-400">加载中…</p>;
+    return <p className="p-8 text-sm text-slate-500">加载中…</p>;
   }
   if (detail.isError) {
     return (
@@ -220,7 +249,7 @@ function NodeDetailView({ nodeId }: { nodeId: string }) {
     <div className="flex h-full min-h-0">
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex-none border-b border-slate-200 px-8 pt-5 pb-4">
-          <nav className="flex flex-wrap items-center gap-1.5 text-sm text-slate-400">
+          <nav className="flex flex-wrap items-center gap-1.5 text-sm text-slate-500">
             <Link to="/" className="transition-colors hover:text-slate-700">
               全部
             </Link>
@@ -255,15 +284,29 @@ function NodeDetailView({ nodeId }: { nodeId: string }) {
                     那是**拿错的那一头去迁就**:真正该改大的是元信息(12 → 14),
                     而不是把标题压小。
                   */
-                  className={`text-2xl font-semibold tracking-tight text-slate-900 ${
-                    canEdit ? 'cursor-text rounded-md px-2 py-0.5 hover:bg-slate-50' : 'px-2 py-0.5'
-                  }`}
-                  title={canEdit ? '点击可改名' : undefined}
-                  onClick={() => {
-                    if (canEdit) setTitleDraft(node.title);
-                  }}
+                  className="px-2 py-0.5 text-2xl font-semibold tracking-tight text-slate-900"
                 >
-                  {node.title}
+                  {/*
+                    ⚠️ v2.14:改名从 `<h1 onClick>` 改成了标题里的 `<button>`。
+                    原来那样**键盘完全不可达** —— h1 不可聚焦,回车与空格都没有反应,
+                    于是"改标题"这件事只有鼠标用户做得到(树上的 ✎ 还是悬停才出现的)。
+                    现在 Enter / 空格直接进编辑态,标题的语义(一级标题)也保住了。
+                  */}
+                  <button
+                    type="button"
+                    disabled={!canEdit}
+                    className={`text-left ${
+                      canEdit
+                        ? 'cursor-text rounded-md px-0 hover:bg-slate-50 focus-visible:bg-slate-50'
+                        : 'cursor-default'
+                    }`}
+                    title={canEdit ? '点击可改名(回车或空格也行)' : undefined}
+                    onClick={() => {
+                      setTitleDraft(node.title);
+                    }}
+                  >
+                    {node.title}
+                  </button>
                 </h1>
               )}
             </div>
@@ -295,6 +338,95 @@ function NodeDetailView({ nodeId }: { nodeId: string }) {
                   权限
                 </Button>
               )}
+                {/*
+                  「可见范围」与「权限」刻意是两个按钮、两个弹窗。
+                  它们管的是两件事(能改 / 能读),而且门槛也不同:
+                  权限看 canManage,可见范围看"创建者或所有者"。
+                  合并成一个入口会让人以为"授权 = 也能看",而那不成立。
+                */}
+                {node.visibility === 'restricted' && (
+                  <span
+                    className="rounded bg-amber-50 px-1.5 py-0.5 text-xs text-amber-700 ring-1 ring-amber-200"
+                    title="这个节点(或它的某个上级)是受限的"
+                  >
+                    🔒 受限
+                  </span>
+                )}
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    openVisibility(node.id, node.title);
+                  }}
+                >
+                  可见范围
+                </Button>
+                {/*
+                  批量移动(v2.14)。只在**组 / 部门**上出现 —— 一篇文档下面没有"要整理的内容"。
+                  权限这次交给服务端逐个判:能改这个组、能改目标、且不成环,才真的移动。
+                */}
+                {node.kind === 'space' && node.canEdit && (
+                  <Button
+                    variant="secondary"
+                    title="把这个节点下的内容批量移到别处"
+                    onClick={() => {
+                      setBulkMoveOpen(true);
+                    }}
+                  >
+                    批量移动
+                  </Button>
+                )}
+                {/*
+                  收藏(v2.14)。它是**个人视图**,存在浏览器里(见 personal-store 的说明),
+                  所以不需要任何接口,也不需要权限判定 —— 收藏一篇自己读不到的东西
+                  这个动作本身不成立。
+                */}
+                <Button
+                  variant="secondary"
+                  title={isFavorite ? '取消收藏' : '收藏这篇,首页会列出来'}
+                  aria-pressed={isFavorite}
+                  onClick={() => {
+                    toggleFavorite(node.id);
+                  }}
+                >
+                  {isFavorite ? '★ 已收藏' : '☆ 收藏'}
+                </Button>
+              {/*
+                「复制链接」是知识库最高频的动作之一(把文档发给同事)。
+                在此之前只有「导出 MD」—— 那要求对方自己再导入一次,
+                而原型的 Share 弹窗里本来就有复制按钮,实现时丢了。
+              */}
+              <Button
+                variant="secondary"
+                title="复制这篇文档的链接,发给同事"
+                onClick={() => {
+                  void copyText(window.location.href).then((ok) => {
+                    toast(
+                      ok
+                        ? '链接已复制,发给同事即可打开'
+                        : '浏览器不允许自动复制,请从地址栏手动复制',
+                      ok ? 'success' : 'info',
+                    );
+                  });
+                }}
+              >
+                复制链接
+              </Button>
+
+              {/*
+                打印 / 另存为 PDF。**刻意走浏览器打印**而不是服务端渲染:
+                无头 Chrome 会给镜像加 300~400MB,与构建机 2GB 内存冲突(§2.1)。
+                打印样式在 styles.css 的 @media print 里 —— 只留正文。
+              */}
+              <Button
+                variant="secondary"
+                title="打印,或在打印对话框里选「另存为 PDF」"
+                onClick={() => {
+                  window.print();
+                }}
+              >
+                打印 / PDF
+              </Button>
+
               <Button
                 variant="secondary"
                 disabled={exportMd.isPending}
@@ -330,7 +462,7 @@ function NodeDetailView({ nodeId }: { nodeId: string }) {
               创建者 <span className="text-slate-700">{node.createdByName}</span>
               {node.createdByDeparted && <DepartedBadge />}
             </span>
-            <span className="whitespace-nowrap text-slate-400">
+            <span className="whitespace-nowrap text-slate-500">
               更新于 {formatUpdatedAt(node.updatedAt)}
             </span>
           </div>
@@ -361,7 +493,11 @@ function NodeDetailView({ nodeId }: { nodeId: string }) {
         />
       </div>
 
-      <aside className="flex w-80 flex-none flex-col border-l border-slate-200 bg-slate-50">
+      {/*
+        右栏(目录 / 评论)在 1024px 以下收起。它比左树更窄不得 ——
+        目录项与评论正文都有最小可读宽度,压到 240px 就开始频繁折行。
+      */}
+      <aside className="hidden w-72 flex-none flex-col border-l border-slate-200 bg-slate-50 lg:flex xl:w-80">
         {/*
           右栏是**组件**,它的标签走 14px + Medium 字重(Atlassian 的 `font.body` 档,
           官方原话:"组件里用 14px;配合图标时用 Medium")。
@@ -390,10 +526,10 @@ function NodeDetailView({ nodeId }: { nodeId: string }) {
           <div className="min-h-0 flex-1 overflow-auto px-2 py-3">
             {outline.length === 0 ? (
               <div className="px-4 py-8 text-center">
-                <p className="text-sm leading-relaxed text-slate-400">
+                <p className="text-sm leading-relaxed text-slate-500">
                   这一页还没有标题。
                 </p>
-                <p className={`mt-2 leading-relaxed text-slate-400 ${T_META}`}>
+                <p className={`mt-2 leading-relaxed text-slate-500 ${T_META}`}>
                   用工具栏的 H1 / H2 / H3 建出结构,目录会自动出现在这里。
                 </p>
               </div>
@@ -426,6 +562,16 @@ function NodeDetailView({ nodeId }: { nodeId: string }) {
           <CommentsPanel nodeId={nodeId} />
         )}
       </aside>
+
+      {bulkMoveOpen && detail.data !== undefined && (
+        <BulkMoveDialog
+          parentId={nodeId}
+          title={detail.data.title}
+          onClose={() => {
+            setBulkMoveOpen(false);
+          }}
+        />
+      )}
     </div>
   );
 }

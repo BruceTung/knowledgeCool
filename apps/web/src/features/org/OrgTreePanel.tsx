@@ -11,10 +11,11 @@
  * "按钮在但点了报错"或反之)。
  */
 import type { MyScope, NodeTreeResponse } from '@knowledgecool/shared';
-import { useMemo, useState, type DragEvent } from 'react';
+import { useMemo, useRef, useState, type DragEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { ErrorNote } from '../../components/ui';
+import { resolveTreeKey, treeOrder } from '../../lib/tree-nav';
 import { T_BODY, T_LABEL, T_META } from '../../lib/typography';
 import { useCreateNode, useDeleteNode, useMoveNode, useUpdateNode } from './queries';
 import {
@@ -66,8 +67,8 @@ function kindBadge(node: OrgTreeNode): string {
  * "配合图标时用 Medium 字重",所以这里也给 `font-medium` —— 字形小、
  * 又细的时候,图标会显得脏。
  */
-const ROW_ACTION_CLASS = `flex h-6 w-6 flex-none items-center justify-center rounded text-sm font-medium text-slate-400 transition-colors hover:bg-slate-200/70 hover:text-slate-700`;
-const ROW_ACTION_DANGER_CLASS = `flex h-6 w-6 flex-none items-center justify-center rounded text-sm font-medium text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600`;
+const ROW_ACTION_CLASS = `flex h-6 w-6 flex-none items-center justify-center rounded text-sm font-medium text-slate-500 transition-colors hover:bg-slate-200/70 hover:text-slate-700`;
+const ROW_ACTION_DANGER_CLASS = `flex h-6 w-6 flex-none items-center justify-center rounded text-sm font-medium text-slate-500 transition-colors hover:bg-red-50 hover:text-red-600`;
 
 export function OrgTreePanel({
   tree,
@@ -114,6 +115,75 @@ export function OrgTreePanel({
     setOverrides((prev) => new Map(prev).set(id, open));
   };
 
+  // ---- 键盘可达性(v2.14) ----
+  //
+  // 此前每行都是 `tabIndex={0}`,于是一个 20 行的树要按 20 次 Tab 才能穿过去 ——
+  // 而且带子节点的行**有两个 Tab 停留点**(整行一个、箭头按钮一个)。
+  // ARIA tree 的标准做法是"漫游 tabindex":整棵树只有一个可 Tab 进入的点,
+  // 进来之后用上下左右在树内移动。
+  const [focusedId, setFocusedId] = useState<string | null>(null);
+
+  /** 当前**可见**的节点顺序(展开的才算),键盘上下移动走的就是它。 */
+  /*
+    可见顺序与父节点表 —— 由 lib/tree-nav 的 treeOrder 算(纯函数,有单测)。
+    内联在这里的话要连着 React 一起测,而那种测试没人会写。
+  */
+  const { ids: visibleIds, parentOf } = useMemo(
+    () => treeOrder(nodes, (id) => overrides.get(id) ?? autoExpanded.has(id)),
+    [nodes, overrides, autoExpanded],
+  );
+  const itemRefs = useRef(new Map<string, HTMLLIElement>());
+
+  /** 移动焦点并同步漫游位置。用命令式 focus,因为要真的把光标交过去。 */
+  const focusItem = (id: string | undefined): void => {
+    if (id === undefined) return;
+    setFocusedId(id);
+    itemRefs.current.get(id)?.focus();
+  };
+
+  /**
+   * 树内的方向键。
+   *
+   * 与 ARIA 规范一致:右=展开(已展开则进第一个子节点),左=折叠(已折叠则回父节点)。
+   * 少了"左回父节点"这一条,键盘用户进得去出不来 —— 只能一路 Tab 到页尾。
+   */
+  /**
+   * 方向键 → 执行动作。**判断在 lib/tree-nav 的 resolveTreeKey 里**(纯函数,有单测),
+   * 这里只负责"把动作做出来" —— 于是"按 ← 该去哪"这种问题可以在单测里回答,
+   * 而不必开着浏览器按一遍。
+   */
+  const onTreeKeyDown = (event: React.KeyboardEvent, node: OrgTreeNode): void => {
+    const action = resolveTreeKey({
+      key: event.key,
+      nodeId: node.id,
+      childIds: node.children.map((child) => child.id),
+      visibleIds,
+      parentId: parentOf.get(node.id),
+      isExpanded: isNodeExpanded(node.id),
+    });
+
+    if (action.type === 'none') return;
+    // 只有真的处理了这个键才 preventDefault —— 否则会把浏览器与输入法的
+    // 按键一起吞掉(比如 F5、Ctrl+F)。
+    event.preventDefault();
+
+    switch (action.type) {
+      case 'move':
+        focusItem(action.to);
+        break;
+      case 'expand':
+        setExpandedState(action.id, true);
+        break;
+      case 'collapse':
+        setExpandedState(action.id, false);
+        break;
+      case 'open':
+        void navigate(`/n/${action.id}`);
+        break;
+      default:
+        break;
+    }
+  };
   const toggleExpanded = (id: string): void => {
     setExpandedState(id, !isNodeExpanded(id));
   };
@@ -209,7 +279,9 @@ export function OrgTreePanel({
   function handleDelete(node: OrgTreeNode): void {
     const size = countNodes([node]);
     const label = size > 1 ? `「${node.title}」及其下 ${String(size - 1)} 个节点` : `「${node.title}」`;
-    if (!window.confirm(`将 ${label} 移入回收站?`)) return;
+    // ⚠️ v2.12 起删除是**物理删除、不可恢复**,确认语必须说清后果。
+    // 原来说的是"移入回收站"(可恢复),在回收站被移除之后那句话会骗人。
+    if (!window.confirm(`确定删除 ${label}?\n\n此操作不可恢复,内容将永久丢失。`)) return;
     deleteNode.mutate(node.id);
   }
 
@@ -231,11 +303,36 @@ export function OrgTreePanel({
     ].join(' ');
 
     return (
-      <li key={node.id}>
+      /*
+        ⚠️ `role="treeitem"` 放在 `<li>` 上,不是里面的 `<div>` 上。
+        ARIA 要求 treeitem 是 `role="tree"`/`role="group"` 的**直接子元素**;
+        此前它是 `<ul role="group"><li><div role="treeitem">`,中间隔了一个 `<li>`,
+        屏幕阅读器读出来的层级是乱的(有时干脆不报"这是第几级")。
+        子节点那个 `<ul role="group">` 也必须留在**这个 treeitem 内部** —— 它现在就是。
+      */
+      <li
+        key={node.id}
+        role="treeitem"
+        ref={(element) => {
+          if (element === null) itemRefs.current.delete(node.id);
+          else itemRefs.current.set(node.id, element);
+        }}
+        aria-selected={isActive}
+        // 有子节点才报展开状态。给叶子节点加 aria-expanded 是无效属性,
+        // 屏幕阅读器会念出一个永远为 false 的"已折叠"。
+        {...(node.children.length > 0 ? { 'aria-expanded': isExpanded } : {})}
+        aria-level={node.depth + 1}
+        // 漫游 tabindex:整棵树只有**一个**可 Tab 进入的点。
+        // 未聚焦过时落在当前打开的那一篇上,否则落在第一个节点上。
+        tabIndex={focusedId === node.id || (focusedId === null && isActive) ? 0 : -1}
+        onFocus={() => {
+          setFocusedId(node.id);
+        }}
+        onKeyDown={(event) => {
+          onTreeKeyDown(event, node);
+        }}
+      >
         <div
-          role="treeitem"
-          aria-selected={isActive}
-          tabIndex={0}
           draggable={nodeEditable && renamingId !== node.id}
           className={rowClass}
           style={{
@@ -252,9 +349,6 @@ export function OrgTreePanel({
             paddingLeft: `${String(Math.min(node.depth, 8) * 13 + 4)}px`,
           }}
           onClick={() => void navigate(`/n/${node.id}`)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') void navigate(`/n/${node.id}`);
-          }}
           onDragStart={(event) => {
             setDragId(node.id);
             event.dataTransfer.effectAllowed = 'move';
@@ -316,8 +410,20 @@ export function OrgTreePanel({
           ))}
 
           {node.children.length > 0 ? (
-            <button
-              type="button"
+            /*
+              ⚠️ 这里刻意**不是** <button>(v2.14)。
+
+              它嵌在 role="treeitem" 里面 —— 交互元素嵌套在 treeitem 里会让
+              屏幕阅读器困惑(念出一个可点的东西,却不知道它在树上哪个位置),
+              而且那一行会因此有**两个 Tab 停留点**。
+
+              现在它是 aria-hidden 的装饰元素:
+                · 键盘用户走左右方向键展开 / 折叠(见 onTreeKeyDown)
+                · 鼠标用户照旧点它
+              下面这段尺寸与点击区的说明仍然有效(它是鼠标的瞄准目标)。
+            */
+            <span
+              aria-hidden
               /*
                 展开 / 折叠。
 
@@ -337,13 +443,11 @@ export function OrgTreePanel({
                 悬停时给一层底色,是为了让"这里可点"这件事**看得见** ——
                 只有字形变色的话,用户仍然不知道该往哪儿瞄准。
               */
-              className="flex h-6 w-6 flex-none items-center justify-center rounded text-slate-500 transition-colors hover:bg-slate-200/70 hover:text-slate-800 focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:outline-none"
+              className="flex h-6 w-6 flex-none cursor-pointer items-center justify-center rounded text-slate-500 transition-colors hover:bg-slate-200/70 hover:text-slate-800"
               onClick={(event) => {
                 event.stopPropagation();
                 toggleExpanded(node.id);
               }}
-              aria-label={isExpanded ? '折叠' : '展开'}
-              aria-expanded={isExpanded}
             >
               <svg
                 viewBox="0 0 16 16"
@@ -359,7 +463,7 @@ export function OrgTreePanel({
               >
                 <path d="M6 3.5 10.5 8 6 12.5" />
               </svg>
-            </button>
+            </span>
           ) : (
             // 没有子节点时占同宽的位,否则同一列的徽章会参差不齐
             <span className="h-6 w-6 flex-none" />
@@ -425,11 +529,19 @@ export function OrgTreePanel({
               改成悬浮覆盖:标题永远拿到完整宽度,按钮只在悬停时盖在右端。
               底色用 `bg-white`,与行的 `hover:bg-white` 完全一致,所以看不出接缝。
             */
-            <span className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5 rounded bg-white pl-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+            /*
+              ⚠️ `opacity-0` + `group-hover` 在触屏上是**不可达**的:没有 hover 这回事,
+              而那排按钮在手机上永远不出现(用户不知道怎么新建/重命名)。
+              `focus-within:opacity-100` 让键盘也能唤出它;触屏仍然靠 `title` 无解,
+              所以真正的出路是把这些动作放在节点页上 —— 那里现在已经有「重命名」
+              与「可见范围」等按钮,不依赖悬停。
+            */
+            <span className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5 rounded bg-white pl-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
               {canCreateUnder(node) && (
                 <>
                   <button
                     type="button"
+                    aria-label={'在「' + node.title + '」下新建页面'}
                     title="在此新建页面"
                     className={ROW_ACTION_CLASS}
                     onClick={(event) => {
@@ -441,6 +553,7 @@ export function OrgTreePanel({
                   </button>
                   <button
                     type="button"
+                    aria-label={'在「' + node.title + '」下新建子空间'}
                     title="在此新建子空间 / 组"
                     className={ROW_ACTION_CLASS}
                     onClick={(event) => {
@@ -455,6 +568,7 @@ export function OrgTreePanel({
               {nodeManageable && (
                 <button
                   type="button"
+                  aria-label={'「' + node.title + '」的权限设置'}
                   title="权限设置"
                   className={ROW_ACTION_CLASS}
                   onClick={(event) => {
@@ -468,6 +582,7 @@ export function OrgTreePanel({
               {nodeManageable && (
                 <button
                   type="button"
+                  aria-label={'「' + node.title + '」的成员'}
                   title="成员(组织归属):这个节点下都有谁"
                   className={ROW_ACTION_CLASS}
                   onClick={(event) => {
@@ -481,6 +596,7 @@ export function OrgTreePanel({
               {nodeEditable && (
                 <button
                   type="button"
+                  aria-label={'重命名「' + node.title + '」'}
                   title="重命名"
                   className={ROW_ACTION_CLASS}
                   onClick={(event) => {
@@ -494,7 +610,10 @@ export function OrgTreePanel({
               {nodeEditable && (
                 <button
                   type="button"
-                  title="移入回收站"
+                  // ⚠️ 这里原本写的是「移入回收站」—— 回收站 v2.12 已整体移除,
+                  // 而删除现在是**不可恢复**的。留着旧文案会让用户以为还能捞回来。
+                  aria-label={'删除「' + node.title + '」'}
+                  title="删除(不可恢复)"
                   className={ROW_ACTION_DANGER_CLASS}
                   onClick={(event) => {
                     event.stopPropagation();
@@ -523,7 +642,14 @@ export function OrgTreePanel({
       而组织树里的名字(「市场部工作方式」这类)本来就偏长。
       加宽比缩字更对 —— 被截掉的名字是**信息丢失**,字小了只是**读着费劲**。
     */
-    <div className="flex h-full w-80 flex-none flex-col border-r border-slate-200 bg-slate-50">
+    /*
+      ⚠️ 窄屏隐藏(v2.12)。左右两栏各 320px:1024px 的屏上正文只剩 ~384px
+      (v2.10 的表格菜单注释里已经算过这个数),390px 视口更是直接横向溢出 51px。
+      `hidden md:flex` 在 768px 以下整栏收起 —— 那种宽度本来也不在阶段一的
+      支持范围内(§1.3 明确不做移动端适配),但"不支持"与"溢出"是两回事:
+      后者会让每一页都多一条横向滚动条,而且正文被压成一条细缝。
+    */
+    <div className="hidden h-full w-72 flex-none flex-col border-r border-slate-200 bg-slate-50 md:flex xl:w-80">
       <div className="flex flex-none items-center justify-between gap-2 border-b border-slate-200 px-4 py-3">
         <span className={`text-slate-500 ${T_LABEL}`}>组织结构 · {countNodes(nodes)}</span>
         <button
@@ -552,7 +678,7 @@ export function OrgTreePanel({
               className={`rounded-md border border-dashed px-2 py-1.5 text-center text-xs transition-colors ${
                 rootDropActive
                   ? 'border-blue-400 bg-blue-50 text-blue-700'
-                  : 'border-slate-300 text-slate-400'
+                  : 'border-slate-300 text-slate-500'
               }`}
               onDragOver={(event) => {
                 event.preventDefault();
@@ -576,14 +702,14 @@ export function OrgTreePanel({
             >
               放到这里 → 移到顶层
             </div>
-            <p className={`px-1 text-slate-400 ${T_META}`}>
+            <p className={`px-1 text-slate-500 ${T_META}`}>
               上 / 下四分之一排到前 / 后,中间成为子节点。
             </p>
           </div>
         )}
 
         {nodes.length === 0 ? (
-          <p className={`px-3 py-8 text-center leading-relaxed text-slate-400 ${T_BODY}`}>
+          <p className={`px-3 py-8 text-center leading-relaxed text-slate-500 ${T_BODY}`}>
             组织架构还是空的。
             <br />
             管理员可以到「组织架构」里建部门,或用 Excel 一次性导入全员名单。
@@ -601,13 +727,6 @@ export function OrgTreePanel({
         一个侧栏的底部塞满小字说明,是"信息架构没做、用说明书补"的典型味道。
       */}
       <div className="flex-none space-y-0.5 border-t border-slate-200 p-2">
-        <button
-          type="button"
-          className={`block w-full rounded-md px-3 py-2 text-left text-slate-500 transition-colors hover:bg-white hover:text-slate-900 ${T_BODY}`}
-          onClick={() => void navigate('/trash')}
-        >
-          回收站 →
-        </button>
         <button
           type="button"
           className={`block w-full rounded-md px-3 py-2 text-left text-slate-500 transition-colors hover:bg-white hover:text-slate-900 ${T_BODY}`}

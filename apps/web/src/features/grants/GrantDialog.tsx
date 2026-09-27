@@ -14,6 +14,7 @@
 import type { GrantCandidate, NodeGrantView } from '@knowledgecool/shared';
 import { useState } from 'react';
 
+import { Modal } from '../../components/Modal';
 import { Button, ErrorNote, SelectField } from '../../components/ui';
 import { useModalOpen } from '../../lib/modal-store';
 import { T_META } from '../../lib/typography';
@@ -55,7 +56,7 @@ function PersonRow({
           {name}
           {departed === true && <DepartedBadge />}
         </div>
-        <div className="truncate text-xs text-slate-400">
+        <div className="truncate text-xs text-slate-500">
           {employeeNo}
           {scopePaths !== undefined && scopePaths.length > 0 && ` · ${scopePaths.join('、')}`}
           {note !== undefined && ` · ${note}`}
@@ -126,29 +127,41 @@ export function GrantDialog({
   }
 
   return (
-    <div className="fixed inset-0 z-40 flex items-start justify-center overflow-auto bg-slate-900/20 p-6 pt-16">
-      <div className="absolute inset-0" onClick={onClose} role="presentation" />
-
-      <section className="relative w-full max-w-2xl rounded-xl border border-slate-200 bg-white shadow-2xl">
-        <header className="flex items-center gap-2 border-b border-slate-200 px-5 py-3">
-          <h2 className="min-w-0 flex-1 truncate text-sm font-medium text-slate-900">
-            权限 · {title}
-          </h2>
+    <Modal
+      title={`权限 · ${title}`}
+      onClose={onClose}
+      footer={
+        <>
+          <ErrorNote error={save.error} />
+          <div className="flex-1" />
           <Button variant="secondary" className="flex-none" onClick={onClose}>
-            关闭
+            取消
           </Button>
-        </header>
-
-        <div className="max-h-[70vh] space-y-5 overflow-auto px-5 py-4">
+          <Button
+            className="flex-none"
+            disabled={!canManage || draft === null || save.isPending}
+            onClick={() => {
+              if (grants.data === undefined) return;
+              save.mutate(
+                { version: grants.data.version, userIds: rows.map((row) => row.userId) },
+                { onSuccess: () => { setDraft(null); } },
+              );
+            }}
+          >
+            {save.isPending ? '保存中…' : '保存授权'}
+          </Button>
+        </>
+      }
+    >
           {grants.isError && <ErrorNote error={grants.error} />}
-          {grants.isPending && <p className="text-sm text-slate-400">加载中…</p>}
+          {grants.isPending && <p className="text-sm text-slate-500">加载中…</p>}
 
           {grants.data !== undefined && (
             <>
               {/* ---------- 第 1 段:所有者 ---------- */}
               <div>
                 <div className="mb-1 text-sm font-medium text-slate-700">所有者</div>
-                <p className="mb-2 text-xs leading-relaxed text-slate-400">
+                <p className="mb-2 text-xs leading-relaxed text-slate-500">
                   每个节点都有且只有一个所有者。部门的所有者就是部长,组长由部长任命。
                 </p>
                 {canAppointOwner && !canManage && (
@@ -201,12 +214,12 @@ export function GrantDialog({
                 <div className="mb-1 text-sm font-medium text-slate-700">
                   上级所有者 · {grants.data.inherited.length}
                 </div>
-                <p className="mb-2 text-xs leading-relaxed text-slate-400">
+                <p className="mb-2 text-xs leading-relaxed text-slate-500">
                   他们能改这一篇,是因为在上级链上拥有所有权(例如部长对本部门的全部内容)。
                   <b>不能在这里移除</b> —— 要改变这一点只能调整组织架构或所有者。
                 </p>
                 {grants.data.inherited.length === 0 ? (
-                  <p className="text-xs text-slate-400">这是顶层节点,没有上级所有者。</p>
+                  <p className="text-xs text-slate-500">这是顶层节点,没有上级所有者。</p>
                 ) : (
                   grants.data.inherited.map((item) => (
                     <PersonRow
@@ -225,13 +238,13 @@ export function GrantDialog({
                 <div className="mb-1 text-sm font-medium text-slate-700">
                   额外授权 · {rows.length}
                 </div>
-                <p className="mb-2 text-xs leading-relaxed text-slate-400">
+                <p className="mb-2 text-xs leading-relaxed text-slate-500">
                   只影响<b>这一个节点</b>,不会往下传。收回权限就把人从名单里移除 ——
                   没有"拒绝访问"这种设置。
                 </p>
 
                 {rows.length === 0 ? (
-                  <p className="text-xs text-slate-400">还没有额外授权。</p>
+                  <p className="text-xs text-slate-500">还没有额外授权。</p>
                 ) : (
                   rows.map((row) => (
                     <PersonRow
@@ -287,36 +300,13 @@ export function GrantDialog({
                   </div>
                 )}
                 {canManage && candidates.data?.length === 0 && (
-                  <p className="mt-1 text-xs text-slate-400">
+                  <p className="mt-1 text-xs text-slate-500">
                     没有可授权的人 —— 只能授权给你组织范围内的人。
                   </p>
                 )}
               </div>
             </>
           )}
-        </div>
-
-        <footer className="flex items-center gap-2 border-t border-slate-200 px-5 py-3">
-          <ErrorNote error={save.error} />
-          <div className="flex-1" />
-          <Button variant="secondary" className="flex-none" onClick={onClose}>
-            取消
-          </Button>
-          <Button
-            className="flex-none"
-            disabled={!canManage || draft === null || save.isPending}
-            onClick={() => {
-              if (grants.data === undefined) return;
-              save.mutate(
-                { version: grants.data.version, userIds: rows.map((row) => row.userId) },
-                { onSuccess: () => { setDraft(null); } },
-              );
-            }}
-          >
-            {save.isPending ? '保存中…' : '保存授权'}
-          </Button>
-        </footer>
-      </section>
-    </div>
+    </Modal>
   );
 }

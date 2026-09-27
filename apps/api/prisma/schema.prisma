@@ -20,7 +20,6 @@
 //
 // Prisma schema 表达不了的东西,在 migration 的 SQL 里手写补齐:
 //   - CHECK 约束(状态枚举用 text + check,刻意不用 PG enum:enum 增删值很痛)
-//   - 部分索引 nodes_alive_idx(... where deleted_at is null)
 //   - pg_trgm 的 GIN 索引(node_contents_trgm_idx,已用 type/ops 表达进 schema)
 //   - audit_logs.ip 的类型(Prisma 不支持 inet 标量,用 text)
 
@@ -62,13 +61,16 @@ model User {
   ownedNodes     Node[]          @relation("NodeOwner")
   createdNodes   Node[]          @relation("NodeCreatedBy")
   updatedNodes   Node[]          @relation("NodeUpdatedBy")
-  deletedNodes   Node[]          @relation("NodeDeletedBy")
   /// 组织归属(多归属)
   assignments    OrgAssignment[]
   /// 我授予别人的编辑权
   grantedGrants  NodeGrant[]     @relation("GrantGrantedBy")
   /// 别人授予我的编辑权
   receivedGrants NodeGrant[]     @relation("GrantUser")
+  /// 别人把我加进哪些受限节点的读者名单
+  readableNodes  NodeReader[]    @relation("NodeReaderUser")
+  /// 我授出去的读者名单条目
+  grantedReads   NodeReader[]    @relation("NodeReaderGrantedBy")
   comments       Comment[]
   auditLogs      AuditLog[]
   sessions       Session[]
@@ -121,14 +123,21 @@ model Node {
 
   /// draft | published | archived —— check 约束在 migration 里
   status  String @default("published")
-  /// 乐观锁:结构操作(改名/移动/删除/改所有者)走 REST 并校验,冲突 409
+  /// public | restricted —— check 约束在 migration 里(v2.12 新增)。
+  ///
+  /// restricted = 只有「所有者链 + 读者名单」能读;**整棵子树继承**(后代无法放开)。
+  /// 继承方向是刻意选的:允许放开某个子节点,会让「这棵树到底谁能看」
+  /// 变成需要逐节点推理的事,而漏判一次就是一次信息泄露。
+  visibility String @default("public")
+  /// 乐观锁。**哪些操作校验它、哪些不校验,如实写在这里**(别以为写了这行就都受保护):
+  ///   - **校验**:改名、移动、替换授权名单 —— 三处都是"带 version 条件 +
+  ///     检查影响行数"的比较并交换(CAS),抢不到就 409
+  ///   - **不校验**:删除、变更所有者 —— 这两条的 DTO 里没有 version 字段,
+  ///     属于**已知的欠账**(并发下不会损坏数据,但"后写覆盖前写"是可能的)
   version Int    @default(1)
 
   createdBy String  @map("created_by") @db.Uuid
   updatedBy String? @map("updated_by") @db.Uuid
-
-  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(6)
-  deletedBy String?   @map("deleted_by") @db.Uuid
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
@@ -138,9 +147,9 @@ model Node {
   owner       User             @relation("NodeOwner", fields: [ownerId], references: [id])
   creator     User             @relation("NodeCreatedBy", fields: [createdBy], references: [id])
   updater     User?            @relation("NodeUpdatedBy", fields: [updatedBy], references: [id])
-  deleter     User?            @relation("NodeDeletedBy", fields: [deletedBy], references: [id])
   content     NodeContent?
   grants      NodeGrant[]
+  readers     NodeReader[]
   assignments OrgAssignment[]
   comments    Comment[]
 
@@ -150,9 +159,37 @@ model Node {
   // 下次 migrate dev 生成 DROP INDEX,静默废掉前缀查询(而权限判定正靠它)。
   @@index([materializedPath(ops: raw("text_pattern_ops"))], map: "nodes_path_idx")
   @@index([ownerId], map: "nodes_owner_idx")
-  // nodes_alive_idx(部分索引)Prisma 表达不了,只能在 migration 里手写;
-  // 由 db:check-drift 的白名单守着,见该脚本注释。
+  // ⚠️ v2.12 起**没有** nodes_alive_idx(部分索引)了 —— 它是为软删除服务的,
+  // 而回收站已被整体移除(删除即物理删除)。见 migration 20260927120000_drop_trash。
   @@map("nodes")
+}
+
+// ---------------- 受限节点的读者名单(v2.12 新增) ----------------
+/// 「谁能读」的独立授权表 —— **刻意不复用 node_grants**。
+///
+/// 两张表管的是两件事:
+///   · node_grants  = **能改**(编辑权,可以是别人给的)
+///   · node_readers = **能读**(只在 visibility = restricted 的节点上有意义)
+///
+/// 为什么不合并成一张表加一个 level 列:合并之后,「把某人加进编辑名单」
+/// 与「让某人看得见」会共用一条路径,而**误加一次就是一次泄露**;
+/// 分开之后,两条路径各自的接口、门槛与审计动作都能单独收紧。
+/// 用户的原话也是「创建者单独授权,不复用」。
+model NodeReader {
+  nodeId    String   @map("node_id") @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  /// 谁授的权。留痕用 —— 出问题时能回答「这个人是被谁放进来的」。
+  grantedBy String   @map("granted_by") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  node    Node @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+  user    User @relation("NodeReaderUser", fields: [userId], references: [id], onDelete: Cascade)
+  granter User @relation("NodeReaderGrantedBy", fields: [grantedBy], references: [id], onDelete: Restrict)
+
+  @@id([nodeId, userId])
+  /// 反查「我能读哪些受限节点」要走这个索引
+  @@index([userId], map: "node_readers_user_idx")
+  @@map("node_readers")
 }
 
 // ---------------- 组织归属(多归属,v2.0 新增) ----------------

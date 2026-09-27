@@ -164,7 +164,7 @@ export function ChangePasswordPage() {
         </Button>
       </form>
 
-      <p className="mt-4 text-sm leading-relaxed text-slate-400">
+      <p className="mt-4 text-sm leading-relaxed text-slate-500">
         {isFirstTime
           ? '设置完成后需要用新密码重新登录一次 —— 这样"这个密码真的能用"是当场验证的,而不是等你下次来才发现打错了。'
           : '改完之后当前会话继续有效,不用重新登录。'}
@@ -178,7 +178,7 @@ export function ChangePasswordPage() {
       <p className="mt-4 text-center text-sm">
         <Link
           to="/login"
-          className="text-slate-400 transition-colors hover:text-slate-600"
+          className="text-slate-500 transition-colors hover:text-slate-600"
           onClick={() => {
             // 主动放弃这次改密 → 凭证一并作废,免得再进来还看到旧的那张
             if (isFirstTime) clearSetup();

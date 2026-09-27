@@ -3,15 +3,19 @@ import { randomUUID } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
 import {
   type Actor,
+  type BulkMoveNodesInput,
+  type BulkMoveResult,
+  BULK_MOVE_MAX,
   type CreateNodeInput,
   type MoveNodeInput,
   type NodeBreadcrumb,
   type NodeDetail,
   type NodeKind,
   type NodeTreeResponse,
-  type TrashItem,
   type UpdateNodeInput,
   toNodeStatus,
+  readableNodeIds,
+  toNodeVisibility,
 } from '@knowledgecool/shared';
 
 import { recordAudit } from '../audit/record.js';
@@ -20,7 +24,10 @@ import { AppError } from '../common/errors/app-error.js';
 import { idsOfPath, pathOfChild, pathOfRoot, rootIdOfPath, subtreePrefix } from '../common/node-path.js';
 import { Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { PermissionService } from '../permission/permission.service.js';
+import {
+  PermissionService,
+  type AccessContext,
+} from '../permission/permission.service.js';
 
 /**
  * 节点服务 —— DESIGN.md §6.2 的节点接口 + §8.1/§8.2 的两个关键流程。
@@ -59,6 +66,8 @@ const TREE_SELECT = {
   version: true,
   ownerId: true,
   createdBy: true,
+  // v2.12:树的保密过滤要在内存里判可见性,所以这一列必须进查询
+  visibility: true,
 } satisfies Prisma.NodeSelect;
 
 /** 单节点详情要的字段。 */
@@ -74,7 +83,7 @@ const DETAIL_SELECT = {
   ownerId: true,
   createdBy: true,
   materializedPath: true,
-  deletedAt: true,
+  visibility: true,
   createdAt: true,
   updatedAt: true,
 } satisfies Prisma.NodeSelect;
@@ -98,7 +107,13 @@ const CHAIN_GUARD = 200;
  * 取"祖先"时它不在返回集里(只用于内存向上走),用 `TREE_SELECT` 的完整形状
  * 会逼着查询多取一堆用不上的列。
  */
-type ChainLookup = { id: string; parentId: string | null; ownerId: string };
+type ChainLookup = {
+  id: string;
+  parentId: string | null;
+  ownerId: string;
+  depth: number;
+  visibility: string;
+};
 
 @Injectable()
 export class NodeService {
@@ -112,7 +127,7 @@ export class NodeService {
   // ==================================================================
 
   /**
-   * 整棵树(不含回收站)。给 `rootId` 时只返回**那棵子树**。
+   * 整棵树。给 `rootId` 时只返回**那棵子树**。
    *
    * **不做权限过滤** —— 所有节点对所有登录用户可见(§5.3 规则一)。
    * 但会额外算出「我哪些能改、我哪些能管」交给前端**隐藏按钮**。
@@ -135,20 +150,19 @@ export class NodeService {
     if (rootId !== undefined) {
       const root = await this.prisma.node.findUnique({
         where: { id: rootId },
-        select: { materializedPath: true, deletedAt: true },
+        select: { materializedPath: true },
       });
-      // 不存在或已删就 404,**不要静默返回空树** —— 调用方会把空树
+      // 不存在就 404,**不要静默返回空树** —— 调用方会把空树
       // 读成"这个子树下面什么都没有",而那是个完全不同的事实。
-      if (root === null || root.deletedAt !== null) throw AppError.notFound();
+      if (root === null) throw AppError.notFound();
       scopePath = root.materializedPath;
     }
 
     const rows = await this.prisma.node.findMany({
       where:
         scopePath === null
-          ? { deletedAt: null }
+          ? {}
           : {
-              deletedAt: null,
               OR: [
                 { id: rootId },
                 { materializedPath: { startsWith: subtreePrefix(scopePath) } },
@@ -170,14 +184,42 @@ export class NodeService {
       const missing = idsOfPath(scopePath).filter((id) => !byId.has(id));
       if (missing.length > 0) {
         const ancestors = await this.prisma.node.findMany({
-          where: { id: { in: missing }, deletedAt: null },
-          select: { id: true, parentId: true, ownerId: true },
+          where: { id: { in: missing } },
+          select: { id: true, parentId: true, ownerId: true, depth: true, visibility: true },
         });
         for (const ancestor of ancestors) byId.set(ancestor.id, ancestor);
       }
     }
 
-    const nodeIds = rows.map((row) => row.id);
+    // ---- v2.13:保密过滤 ----
+    //
+    // ⚠️ 判定本身**不在这里**,而是 shared 里的 `readableNodeIds` ——
+    // 这段逻辑「错了不会报错」,只表现为「某一层的标题被不该看见的人看见了」,
+    // 所以它必须能被单测覆盖(见 packages/shared/test/visibility.spec.ts,16 条)。
+    // 写在这里的话要连着 Prisma 一起 mock 才测得到,而那种测试没人会去写。
+    //
+    // 这里只负责**取数**:把判定需要的字段(祖先链 + 受限节点的两张名单)凑齐。
+    // 注意 byId 里必须包含判定范围的全部祖先 —— rootId 场景下祖先不在 rows 里,
+    // 但取祖先那一步已经把它们补进了 byId。
+    const restrictedIds = [...byId.values()]
+      .filter((node) => node.visibility === 'restricted')
+      .map((node) => node.id);
+    const accessLists = await this.permissions.accessListsFor(restrictedIds);
+
+    const readable = readableNodeIds(
+      operator.id,
+      [...byId.values()].map((node) => ({
+        id: node.id,
+        parentId: node.parentId,
+        ownerId: node.ownerId,
+        visibility: node.visibility,
+      })),
+      accessLists,
+    );
+
+    const visibleRows = rows.filter((row) => readable.has(row.id));
+
+    const nodeIds = visibleRows.map((row) => row.id);
     const [grants, commentCounts, briefs] = await Promise.all([
       this.prisma.nodeGrant.findMany({
         where: { nodeId: { in: nodeIds } },
@@ -197,7 +239,7 @@ export class NodeService {
     const editableNodeIds: string[] = [];
     const manageableNodeIds: string[] = [];
 
-    for (const row of rows) {
+    for (const row of visibleRows) {
       // 「能管」:我是这个节点的所有者,或祖先链上任一节点是所有者。
       // 用内存里的 byId 向上走,不再查库。
       let manageable = row.ownerId === operator.id;
@@ -221,7 +263,7 @@ export class NodeService {
     }
 
     return {
-      nodes: rows.map((row) => ({
+      nodes: visibleRows.map((row) => ({
         id: row.id,
         parentId: row.parentId,
         kind: row.kind as NodeKind,
@@ -230,6 +272,9 @@ export class NodeService {
         depth: row.depth,
         status: toNodeStatus(row.status),
         version: row.version,
+        // 受限节点**只可能出现在"我读得到"的位置** —— 读不到的那些已经在
+        // 上面被摘掉了,所以这里如实回传即可(前端据此画锁形图标)。
+        visibility: toNodeVisibility(row.visibility),
         ownerId: row.ownerId,
         ownerName: briefs.get(row.ownerId)?.name ?? '未知',
         commentCount: commentCounts.get(row.id) ?? 0,
@@ -243,6 +288,11 @@ export class NodeService {
   async detail(operator: Actor, nodeId: string): Promise<NodeDetail> {
     const row = await this.pluck(nodeId);
     const access = await this.permissions.access(operator, nodeId);
+
+    // ⚠️ 读不到 → 404,不是 403(v2.12 保密)。403 等于确认"这里有个你看不见
+    // 的东西",而保密的意义正在于不确认它的存在。内部调用(改名/移动)都已经
+    // 通过了 requireEdit,那时 canRead 必然为真,所以这一句只挡直接的读请求。
+    if (!access.canRead) throw AppError.notFound();
 
     const [owner, creator, breadcrumb] = await Promise.all([
       this.userBrief(row.ownerId),
@@ -258,6 +308,7 @@ export class NodeService {
       status: toNodeStatus(row.status),
       depth: row.depth,
       version: row.version,
+      visibility: toNodeVisibility(row.visibility),
       ownerId: row.ownerId,
       ownerName: owner.name,
       ownerDeparted: owner.status === 'departed',
@@ -269,62 +320,6 @@ export class NodeService {
       canEdit: access.canEdit,
       canManage: access.canManage,
     };
-  }
-
-  /**
-   * 回收站:**只列我 `canEdit` 的已删子树根**。
-   *
-   * 只列"子树根"是因为恢复是整棵恢复的 —— 把子树里的每一层都列出来,
-   * 管理员会看到一个明显重复的列表。
-   */
-  async trash(operator: Actor): Promise<TrashItem[]> {
-    const roots = await this.prisma.node.findMany({
-      where: {
-        deletedAt: { not: null },
-        // 子树根 = 自己没有已删除的祖先。用「父节点要么不存在要么没被删」表达。
-        OR: [{ parentId: null }, { parent: { deletedAt: null } }],
-      },
-      orderBy: { deletedAt: 'desc' },
-      select: {
-        id: true,
-        title: true,
-        kind: true,
-        parentId: true,
-        materializedPath: true,
-        deletedAt: true,
-        deletedBy: true,
-        parent: { select: { deletedAt: true } },
-      },
-    });
-
-    const items: TrashItem[] = [];
-    for (const root of roots) {
-      // 已删节点在判定上"算不存在",必须显式放行,否则整条回收站会 404
-      const access = await this.permissions.access(operator, root.id, { allowDeleted: true });
-      if (!access.canEdit) continue;
-
-      const subtreeSize = await this.prisma.node.count({
-        where: {
-          OR: [
-            { id: root.id },
-            { materializedPath: { startsWith: subtreePrefix(root.materializedPath) } },
-          ],
-        },
-      });
-
-      items.push({
-        id: root.id,
-        title: root.title,
-        kind: root.kind as NodeKind,
-        subtreeSize,
-        deletedAt: (root.deletedAt ?? new Date()).toISOString(),
-        deletedByName:
-          root.deletedBy === null ? '未知' : (await this.userBrief(root.deletedBy)).name,
-        parentAlive: root.parent !== null && root.parent.deletedAt === null,
-      });
-    }
-
-    return items;
   }
 
   // ==================================================================
@@ -399,7 +394,7 @@ export class NodeService {
     if (input.status !== undefined) data.status = input.status;
 
     const claimed = await this.prisma.node.updateMany({
-      where: { id: nodeId, version: input.version, deletedAt: null },
+      where: { id: nodeId, version: input.version },
       data,
     });
     if (claimed.count === 0) throw AppError.versionConflict();
@@ -449,43 +444,15 @@ export class NodeService {
       newParentPath = parent.materializedPath;
     }
 
-    const newPath = newParentPath === null ? pathOfRoot(nodeId) : pathOfChild(newParentPath, nodeId);
-    const newDepth = newParentPath === null ? 0 : idsOfPath(newParentPath).length;
-    const oldPrefix = row.materializedPath;
-
     await runSerializable(this.prisma, async (tx) => {
-      const claimed = await tx.node.updateMany({
-        where: { id: nodeId, version: input.version, deletedAt: null },
-        data: { version: { increment: 1 }, updatedBy: operator.id },
-      });
-      if (claimed.count === 0) throw AppError.versionConflict();
-
-      // ⚠️ 这一步是整棵树的核心。从「旧前缀长度 + 1」处截掉前缀,再接上新前缀:
-      // 自身(整串 = 旧前缀)截出来是空串,恰好得到 newPath;
-      // 子孙则保留下半段相对路径。一条语句覆盖整棵子树。
-      //
-      // ⚠️⚠️ 必须用 `substr(x, $n::int)`,**不能**写 `substring(x from $n)`:
-      // PostgreSQL 里 `substring(string from pattern)` 是 POSIX 正则那一种,
-      // 当参数类型是 unknown(Prisma 的 $executeRaw 就是这么发的)时会被解析到
-      // 正则分支,结果**静默返回 NULL** —— 实测踩过。若 materialized_path 可空,
-      // 这会把整棵子树的路径悄悄清掉,而不报任何错。
-      await tx.$executeRaw`
-        UPDATE nodes
-           SET materialized_path = ${newPath}::text || substr(materialized_path, ${oldPrefix.length + 1}::int),
-               depth = depth + ${newDepth - row.depth}::int,
-               updated_at = now()
-         WHERE id = ${nodeId}::uuid
-            OR materialized_path LIKE ${subtreePrefix(oldPrefix)}::text || '%'
-      `;
-
-      const position =
-        input.newPosition === undefined
-          ? await nextPositionIn(tx, input.newParentId)
-          : await makeRoomAt(tx, input.newParentId, nodeId, input.newPosition);
-
-      await tx.node.update({
-        where: { id: nodeId },
-        data: { parentId: input.newParentId, position },
+      await applyMoveTo(tx, {
+        nodeId,
+        row,
+        newParentId: input.newParentId,
+        newParentPath,
+        actorId: operator.id,
+        version: input.version,
+        position: input.newPosition,
       });
     });
 
@@ -504,120 +471,118 @@ export class NodeService {
   }
 
   /**
-   * 软删除:**整棵子树**一起进回收站(§8.2)。
+   * **批量移动**(v2.14)。
    *
-   * 子树跟着标记是必须的 —— 否则父节点没了、子节点还挂在树上,
-   * 而它们的路径里还写着已删除的父 id。
-   */
-  async remove(operator: Actor, nodeId: string): Promise<{ removedCount: number }> {
-    const { row } = await this.permissions.requireEdit(operator, nodeId);
-
-    // 整批用**同一个时间戳**。注意 `deletedAt: null` 这个条件不能少:
-    // 子树里可能已经有早先单独删掉的节点,再盖一次新时间戳既没有意义,
-    // 也会让返回的 removedCount 虚高(界面上会显示成「删了 N 个」而实际只动了 1 个)。
-    const at = new Date();
-    const result = await this.prisma.node.updateMany({
-      where: {
-        deletedAt: null,
-        OR: [
-          { id: nodeId },
-          { materializedPath: { startsWith: subtreePrefix(row.materializedPath) } },
-        ],
-      },
-      data: { deletedAt: at, deletedBy: operator.id },
-    });
-
-    await recordAudit(this.prisma, {
-      actorId: operator.id,
-      action: 'node.delete',
-      targetType: 'node',
-      targetId: nodeId,
-      detail: { removedCount: result.count },
-    });
-
-    return { removedCount: result.count };
-  }
-
-  /**
-   * 从回收站恢复(含整棵子树)。
+   * ## 为什么只做"移动",不做"批量删除"
    *
-   * 若原父节点也还在回收站里(或已被彻底删除),就**挂回顶层** ——
-   * 否则恢复出来的节点会挂在一个看不见的父节点下。
+   * 移动是**可逆**的(再移回去就行),而删除 v2.12 起不可恢复。
+   * 批量删除的误操作代价和它的价值完全不成比例 —— 真要清理一整块旧内容,
+   * 删那个组本身就够了。所以这里**刻意只开移动**。
+   *
+   * ## 两条为了"结果可预测"而加的限制
+   *
+   * 1. **不允许批量里出现互为祖先的节点**。
+   *    选了 A 又选它里面的 B 时,结果取决于执行顺序:先移 A 会把 B 一起带走,
+   *    再移 B 又把它拽出来 —— 两者最终都在目标下,但用户看到的中间态与
+   *    "我明明只选了两个,怎么动了三个"这类疑问都会出现。直接拒绝更清楚。
+   * 2. **逐节点校验权限**,不做任何"选了一批就一起放行"的捷径。
+   *    审批式的批量放行是越权的常见来源。
+   *
+   * ## 原子性
+   *
+   * 全部校验通过之后,**一个事务里全做或全不做**。
+   * 不做"部分成功 + 失败清单":那会留下一个用户没预期过的中间状态,
+   * 而他需要自己去核对哪几个动了 —— 对"整理目录"这种操作来说是纯粹的负担。
    */
-  async restore(operator: Actor, nodeId: string): Promise<NodeDetail> {
-    // ⚠️ `allowDeleted` 必须一路传到 requireEdit —— 只给 chainOf 传是不够的:
-    // 判定本身也会把已删节点当成不存在,于是恢复接口永远报 404。
-    const { row } = await this.permissions.requireEdit(operator, nodeId, { allowDeleted: true });
-
-    if (row.deletedAt === null) throw AppError.validation('该节点不在回收站里');
-
-    const full = await this.pluck(nodeId, { allowDeleted: true });
-
-    let mustReparent = false;
-    if (full.parentId !== null) {
-      const parent = await this.prisma.node.findUnique({
-        where: { id: full.parentId },
-        select: { deletedAt: true },
-      });
-      mustReparent = parent === null || parent.deletedAt !== null;
+  async bulkMove(operator: Actor, input: BulkMoveNodesInput): Promise<BulkMoveResult> {
+    const ids = [...new Set(input.nodeIds)];
+    if (ids.length === 0) throw AppError.validation('请先选择要移动的节点');
+    if (ids.length > BULK_MOVE_MAX) {
+      throw AppError.validation(`一次最多移动 ${String(BULK_MOVE_MAX)} 个节点`);
     }
 
-    const oldPrefix = full.materializedPath;
-    const newPath = pathOfRoot(nodeId);
-    const subtree = subtreePrefix(oldPrefix);
+    // ---- 校验阶段:全部通过才开始写 ----
+    const rows = new Map<string, AccessContext['row']>();
+    for (const id of ids) {
+      const { row } = await this.permissions.requireEdit(operator, id);
+      rows.set(id, row);
+    }
 
+    const target = input.newParentId;
+    await this.permissions.requireEdit(operator, target);
+    const parentRow = await this.pluck(target);
+
+    // 不能把某个节点移到它自己或它的子孙下
+    for (const [id, row] of rows) {
+      const isSelfOrDescendant =
+        target === id || parentRow.materializedPath.startsWith(subtreePrefix(row.materializedPath));
+      if (isSelfOrDescendant) {
+        throw AppError.validation(`「${row.title}」不能移动到它自己或它的子节点下`);
+      }
+    }
+
+    // 批量里不能互为祖先 —— 见上面第 1 条限制
+    for (const [id, row] of rows) {
+      for (const [otherId, otherRow] of rows) {
+        if (id === otherId) continue;
+        if (otherRow.materializedPath.startsWith(subtreePrefix(row.materializedPath))) {
+          throw AppError.validation(
+            `「${otherRow.title}」在「${row.title}」里面,请只选最外层的那几个`
+          );
+        }
+      }
+    }
+
+    const newParentPath = parentRow.materializedPath;
+
+    // ---- 执行阶段:一个事务,全做或全不做 ----
     await runSerializable(this.prisma, async (tx) => {
-      // 先清 deleted_at:这一步用**旧路径前缀**圈整棵子树。
-      // 顺序很讲究 —— 后面的路径重建会用新前缀,届时旧前缀就找不到了。
-      await tx.node.updateMany({
-        where: { OR: [{ id: nodeId }, { materializedPath: { startsWith: subtree } }] },
-        data: { deletedAt: null, deletedBy: null },
-      });
-
-      if (mustReparent) {
-        // parent_id = NULL 只对本棵子树的根做(子孙保持各自父子关系)。
-        // substr(x, $n::int) 的写法同上:不能用 substring(x from $n)。
-        await tx.$executeRaw`
-          UPDATE nodes
-             SET materialized_path = ${newPath}::text || substr(materialized_path, ${oldPrefix.length + 1}::int),
-                 depth = depth + ${-full.depth}::int,
-                 parent_id = CASE WHEN id = ${nodeId}::uuid THEN NULL ELSE parent_id END,
-                 updated_at = now()
-           WHERE id = ${nodeId}::uuid
-              OR materialized_path LIKE ${subtree}::text || '%'
-        `;
+      for (const id of ids) {
+        const row = rows.get(id);
+        if (row === undefined) continue;
+        await applyMoveTo(tx, {
+          nodeId: id,
+          row,
+          newParentId: target,
+          newParentPath,
+          actorId: operator.id,
+          // 批量移动一律**追加到末尾**。让每个节点都能指定位置的话,
+          // 用户要在脑子里模拟一次完整的排序,而那是拖拽该做的事。
+          position: undefined,
+        });
       }
     });
 
-    await this.permissions.invalidateByNode(nodeId);
+    // 路径变了 → 每个被移动节点(及其子树)的祖先链都变了
+    for (const id of ids) await this.permissions.invalidateByNode(id);
 
     await recordAudit(this.prisma, {
       actorId: operator.id,
-      action: 'node.restore',
+      action: 'node.bulkMove',
       targetType: 'node',
-      targetId: nodeId,
-      detail: { reparentedToRoot: mustReparent },
+      targetId: target,
+      detail: { count: ids.length, titles: [...rows.values()].map((row) => row.title), nodeId: target },
     });
 
-    return this.detail(operator, nodeId);
+    return { moved: ids.length, newParentId: target };
   }
 
   /**
-   * 彻底删除(不可逆)。**只允许作用于回收站里的节点** ——
-   * 强制「先软删除、再彻底删除」两步,避免手一滑把活着的节点永久删掉。
+   * 删除节点 —— **整棵子树一起物理删除,不可恢复**(v2.12)。
    *
-   * ⚠️ 门槛是 `canManage`(祖先链所有者)而**不是** `canEdit` ——
-   * 被授权者能改能软删(可恢复),但不能彻底销毁(§5.4)。
+   * ⚠️ 门槛是 `canManage`(该节点或祖先链上的所有者),**不是** `canEdit`。
+   * v2.12 之前这里是软删除(进回收站、可恢复),所以"能改"就够了;现在删除
+   * 不可逆,门槛必须与破坏性相称 —— 被授权者仍然能改,但不能销毁。
+   * (旧模型里 `purge` 走的就是 `canManage`,这条边界一直都在,
+   *  只是现在它成了唯一的删除路径。)
    */
-  async purge(operator: Actor, nodeId: string): Promise<void> {
-    // 同 restore:`allowDeleted` 要一路传到判定里,否则界面上的「彻底删除」永远用不了
-    const { row } = await this.permissions.requireManage(operator, nodeId, { allowDeleted: true });
+  async remove(operator: Actor, nodeId: string): Promise<{ removedCount: number }> {
+    const { row } = await this.permissions.requireManage(operator, nodeId);
 
-    if (row.deletedAt === null) {
-      throw AppError.validation('只能彻底删除回收站里的节点,请先移入回收站');
-    }
-
-    await this.purgeSubtree({ id: row.id, materializedPath: row.materializedPath });
+    const removedCount = await this.deleteSubtree({
+      id: row.id,
+      materializedPath: row.materializedPath,
+    });
 
     // ⚠️ 用**删除前**记下的路径算部门 id。节点此刻已经不在库里了,
     // `invalidateByNode` 会查不到路径然后静默跳过失效 —— 缓存会一直残留到 TTL。
@@ -625,22 +590,26 @@ export class NodeService {
 
     await recordAudit(this.prisma, {
       actorId: operator.id,
-      action: 'node.purge',
+      action: 'node.delete',
       targetType: 'node',
       targetId: nodeId,
-      detail: { title: row.title },
+      detail: { title: row.title, removedCount },
     });
+
+    return { removedCount };
   }
 
+
+
   /**
-   * 物理删除一棵**已删子树**,返回删掉的节点总数。
+   * 物理删除一棵子树,返回删掉的节点总数。
    *
-   * ⚠️ **不含任何权限判定** —— 判权由调用方负责。抽出来的理由是让两条路径
-   * 共用同一份删除逻辑:手工「彻底删除」走 `canManage`,回收站到期清理走
-   * "保留期已过"。写两份的话,总有一天其中一份会漏掉下面那条外键约束的坑,
-   * 而那个坑的表现是"偶尔删不掉",极难复现。
+   * ⚠️ **不含任何权限判定** —— 判权由调用方负责(`remove` 走 `canManage`)。
+   * 抽出来的理由是这类"按深度从叶子往根删"的逻辑只能有一份:写两份的话,
+   * 总有一天其中一份会漏掉下面那条外键约束的坑,而那个坑的表现是
+   * "偶尔删不掉",极难复现。
    */
-  async purgeSubtree(input: { id: string; materializedPath: string }): Promise<number> {
+  async deleteSubtree(input: { id: string; materializedPath: string }): Promise<number> {
     const subtree = subtreePrefix(input.materializedPath);
 
     return runSerializable(this.prisma, async (tx) => {
@@ -677,17 +646,13 @@ export class NodeService {
   // 私有
   // ==================================================================
 
-  /** 取一个节点。已删除的默认视同不存在。 */
-  private async pluck(
-    nodeId: string,
-    options: { allowDeleted?: boolean } = {},
-  ): Promise<DetailRow> {
+  /** 取一个节点。取不到就 404。 */
+  private async pluck(nodeId: string): Promise<DetailRow> {
     const row = await this.prisma.node.findUnique({
       where: { id: nodeId },
       select: DETAIL_SELECT,
     });
     if (row === null) throw AppError.notFound();
-    if (row.deletedAt !== null && options.allowDeleted !== true) throw AppError.notFound();
     return row;
   }
 
@@ -753,12 +718,80 @@ function defaultTitleFor(kind: NodeKind): string {
 }
 
 /** 同级末尾的下一个位置。 */
+/**
+ * 一次移动的**全部写入**,跑在调用方给的 tx 上。
+ *
+ * ⚠️ 抽出来是因为 `move` 与 `bulkMove` 必须走**同一份**路径重写逻辑。
+ * 抄一份出来的代价:某天有人只修了其中一份,另一份就开始悄悄出错 ——
+ * 而物化路径写错的表现是「某棵子树的祖先链错了」,那会连带把权限判定也带偏,
+ * 且不报任何错(§9.4:凡是写数据的逻辑,只允许存在一份)。
+ *
+ * 三件事:乐观锁、子树路径重写、位置。顺序不能换 ——
+ * 位置要在路径改好之后再算(否则算的是旧父节点下的兄弟)。
+ */
+async function applyMoveTo(
+  tx: Prisma.TransactionClient,
+  params: {
+    nodeId: string;
+    /** 判定那一步取回来的行 —— 与 PermissionService 的判据同一份数据。 */
+    row: AccessContext['row'];
+    newParentId: string | null;
+    newParentPath: string | null;
+    actorId: string;
+    /** 省略 = 不做乐观锁(CAS)。批量移动不逐个校验版本 —— 见 bulkMove 的说明。 */
+    version?: number;
+    /** 省略 = 追加到目标末尾。 */
+    position?: number;
+  },
+): Promise<void> {
+  const { nodeId, row, newParentId, newParentPath, actorId } = params;
+
+  if (params.version !== undefined) {
+    const claimed = await tx.node.updateMany({
+      where: { id: nodeId, version: params.version },
+      data: { version: { increment: 1 }, updatedBy: actorId },
+    });
+    if (claimed.count === 0) throw AppError.versionConflict();
+  } else {
+    await tx.node.update({ where: { id: nodeId }, data: { updatedBy: actorId } });
+  }
+
+  const newPath = newParentPath === null ? pathOfRoot(nodeId) : pathOfChild(newParentPath, nodeId);
+  const newDepth = newParentPath === null ? 0 : idsOfPath(newParentPath).length;
+  const oldPrefix = row.materializedPath;
+
+  // ⚠️ 这一步是整棵树的核心。从「旧前缀长度 + 1」处截掉前缀,再接上新前缀:
+  // 自身(整串 = 旧前缀)截出来是空串,恰好得到 newPath;
+  // 子孙则保留下半段相对路径。一条语句覆盖整棵子树。
+  //
+  // ⚠️⚠️ 必须用 substr(x, $n::int),**不能**写 substring(x from $n):
+  // PostgreSQL 里 substring(string from pattern) 是 POSIX 正则那一种,
+  // 当参数类型是 unknown(Prisma 的 $executeRaw 就是这么发的)时会被解析到
+  // 正则分支,结果**静默返回 NULL** —— 实测踩过。若 materialized_path 可空,
+  // 这会把整棵子树的路径悄悄清掉,而不报任何错。
+  await tx.$executeRaw`
+    UPDATE nodes
+       SET materialized_path = ${newPath}::text || substr(materialized_path, ${oldPrefix.length + 1}::int),
+           depth = depth + ${newDepth - row.depth}::int,
+           updated_at = now()
+     WHERE id = ${nodeId}::uuid
+        OR materialized_path LIKE ${subtreePrefix(oldPrefix)}::text || '%'
+  `;
+
+  const position =
+    params.position === undefined
+      ? await nextPositionIn(tx, newParentId)
+      : await makeRoomAt(tx, newParentId, nodeId, params.position);
+
+  await tx.node.update({ where: { id: nodeId }, data: { parentId: newParentId, position } });
+}
+
 async function nextPositionIn(
   tx: Prisma.TransactionClient,
   parentId: string | null,
 ): Promise<number> {
   const last = await tx.node.findFirst({
-    where: { parentId, deletedAt: null },
+    where: { parentId },
     orderBy: { position: 'desc' },
     select: { position: true },
   });
@@ -778,7 +811,7 @@ async function makeRoomAt(
   position: number,
 ): Promise<number> {
   await tx.node.updateMany({
-    where: { parentId, deletedAt: null, position: { gte: position }, id: { not: excludeId } },
+    where: { parentId, position: { gte: position }, id: { not: excludeId } },
     data: { position: { increment: 1 } },
   });
   return position;

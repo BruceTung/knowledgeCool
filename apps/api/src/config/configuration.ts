@@ -39,15 +39,23 @@ export interface AppConfiguration {
    */
   sessionSecret: string;
   /**
-   * 回收站保留天数(v2.4)。
+   * 登录失败多少次后锁定账号(小于等于 0 表示关闭锁定)。
    *
-   * **`<= 0` 表示关闭自动清理** —— 回收站里的东西不会自己消失。
-   * 这是刻意的:自动删除用户数据这类行为必须能被明确关掉,
-   * 而不是"把天数设得很大"来代替。
+   * 默认 5。这条是阶段一最实际的加固:初始密码统一是 123456、工号可枚举,
+   * 没有它的话暴力破解是不限次数的。见 auth/login-throttle.ts。
    */
-  trashRetentionDays: number;
-  /** 自动清理的扫描间隔(小时)。`<= 0` 同样表示关闭。 */
-  trashPurgeIntervalHours: number;
+  loginMaxAttempts: number;
+  /** 锁定时长(分钟)。默认 15。 */
+  loginLockMinutes: number;
+  /**
+   * 同一来源 IP 在窗口内允许的**失败**次数(小于等于 0 表示关闭)。
+   *
+   * 默认 100。只数失败,成功不计 —— 否则早上集体登录会把办公室 IP 顶掉。
+   * 内网常多人共用一个出口 IP,所以这个值刻意给得宽,可以调大或关闭。
+   */
+  loginIpMaxFailures: number;
+  /** IP 限速窗口(分钟)。默认 15。 */
+  loginIpWindowMinutes: number;
 }
 
 function toInt(value: string | undefined, fallback: number): number {
@@ -79,10 +87,9 @@ export function loadConfiguration(): AppConfiguration {
     sessionCookieSecure: toBool(process.env.SESSION_COOKIE_SECURE, isProduction),
     // 空字符串表示未配置 —— 由使用方(首登改密)决定怎么处理,这里不做兜底默认值。
     sessionSecret: process.env.SESSION_SECRET ?? '',
-    // 默认 30 天。设 0(或负数)即关闭 —— 见接口上的说明。
-    trashRetentionDays: toInt(process.env.TRASH_RETENTION_DAYS, 30),
-    // 默认 6 小时扫一次。清理本身很轻(一个走索引的查询),
-    // 但没必要更频繁 —— 回收站里的东西早一小时晚一小时消失,没人会察觉。
-    trashPurgeIntervalHours: toInt(process.env.TRASH_PURGE_INTERVAL_HOURS, 6),
+    loginMaxAttempts: toInt(process.env.LOGIN_MAX_ATTEMPTS, 5),
+    loginLockMinutes: toInt(process.env.LOGIN_LOCK_MINUTES, 15),
+    loginIpMaxFailures: toInt(process.env.LOGIN_IP_MAX_FAILURES, 100),
+    loginIpWindowMinutes: toInt(process.env.LOGIN_IP_WINDOW_MINUTES, 15),
   };
 }

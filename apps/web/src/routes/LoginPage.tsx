@@ -1,9 +1,27 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { Navigate, useLocation, useNavigate } from 'react-router-dom';
 
 import { AuthShell, Button, ErrorNote, FullScreenNote, TextField } from '../components/ui';
 import { useLogin, useMe, useSetupState } from '../features/auth/queries';
 import { useSetupStore } from '../features/auth/setup-store';
+import { ApiError } from '../lib/api';
+import { useDocumentTitle } from '../lib/use-document-title';
+
+/**
+ * 后端在 RATE_LIMITED 的 details 里给的等待秒数。
+ * 不是所有 RATE_LIMITED 都带这个字段,所以取不到就返回 0(只影响倒计时体验)。
+ */
+function retryAfterOf(error: unknown): number {
+  if (!(error instanceof ApiError) || error.code !== 'RATE_LIMITED') return 0;
+  const details = error.details as { retryAfterSeconds?: unknown } | undefined;
+  const value = details?.retryAfterSeconds;
+  return typeof value === 'number' && value > 0 ? Math.ceil(value) : 0;
+}
+
+function waitLabel(seconds: number): string {
+  if (seconds <= 60) return String(seconds) + ' 秒';
+  return String(Math.ceil(seconds / 60)) + ' 分钟';
+}
 
 /**
  * 登录页(DESIGN.md §7.2 的 `/login`)。
@@ -20,6 +38,8 @@ import { useSetupStore } from '../features/auth/setup-store';
  * 账号枚举口子又捅开。
  */
 export function LoginPage() {
+  useDocumentTitle('登录');
+
   const me = useMe();
   const setupState = useSetupState();
   const login = useLogin();
@@ -29,6 +49,31 @@ export function LoginPage() {
 
   const [employeeNo, setEmployeeNo] = useState('');
   const [password, setPassword] = useState('');
+  /**
+   * 锁定到期时刻,以及驱动倒计时的"当前时刻"。
+   *
+   * 两个都在**失败回调里**写入(那是事件上下文,读时钟与 setState 都合法),
+   * 而不是在渲染期间读 Date.now()、也不是在 effect 里同步 setState ——
+   * 后两种写法会踩本仓库 lint 里的 React Compiler 规则,而且它们确实是真实的坏味道
+   * (渲染期读时钟 = 渲染不纯;effect 里同步 setState = 级联渲染)。
+   *
+   * 时间到之后 lockedSeconds 归零,表单自动恢复可提交,不需要刷新页面。
+   */
+  const [lockedUntil, setLockedUntil] = useState(0);
+  const [nowMs, setNowMs] = useState(0);
+
+  useEffect(() => {
+    if (lockedUntil <= 0) return undefined;
+    const handle = setInterval(() => {
+      setNowMs(Date.now());
+    }, 1000);
+    return () => {
+      clearInterval(handle);
+    };
+  }, [lockedUntil]);
+
+  const lockedSeconds =
+    lockedUntil > nowMs ? Math.max(0, Math.ceil((lockedUntil - nowMs) / 1000)) : 0;
 
   // 刚从改密页跳回来 —— 必须明说"用新密码登一次",
   // 否则用户会以为"我改完了怎么又要登,是不是没成功"。
@@ -62,6 +107,15 @@ export function LoginPage() {
             return;
           }
           void navigate('/', { replace: true });
+        },
+        onError: (error) => {
+          // 被锁了就起算倒计时。放在这里而不是从 query 的 error 派生:
+          // 这样"再次被锁"能重新起算,也不必在渲染期读时钟。
+          const seconds = retryAfterOf(error);
+          if (seconds <= 0) return;
+          const now = Date.now();
+          setLockedUntil(now + seconds * 1000);
+          setNowMs(now);
         },
       },
     );
@@ -97,18 +151,35 @@ export function LoginPage() {
           }}
         />
 
-        <ErrorNote error={login.error} />
+        {lockedSeconds > 0 ? (
+          <p
+            role="status"
+            className="rounded-md bg-amber-50 px-3 py-2 text-sm leading-relaxed text-amber-800"
+          >
+            {'登录尝试次数过多,已临时锁定。请 ' +
+              waitLabel(lockedSeconds) +
+              ' 后再试。若忘记密码,请联系管理员重置。'}
+          </p>
+        ) : (
+          <ErrorNote error={login.error} />
+        )}
 
-        <Button type="submit" disabled={login.isPending} className="w-full py-2">
-          {login.isPending ? '登录中…' : '登录'}
+        <Button
+          type="submit"
+          disabled={login.isPending || lockedSeconds > 0}
+          className="w-full py-2"
+        >
+          {lockedSeconds > 0 ? '已锁定(' + waitLabel(lockedSeconds) + ')' : login.isPending ? '登录中…' : '登录'}
         </Button>
       </form>
 
-      <p className="mt-6 text-sm leading-relaxed text-slate-400">
+      {/* 刻意**不**在这里写出初始密码。它虽然人人皆知,但登录页是未认证访问者
+          也能看到的地方 —— 把默认口令印在最显眼的页面上,等于替一次横向撞库
+          省掉了全部信息收集成本。改成"由管理员告知",谁需要知道谁去问。 */}
+      <p className="mt-6 text-sm leading-relaxed text-slate-500">
         账号由管理员通过组织架构导入统一预置,不需要自行注册。
         <br />
-        首次登录的初始密码是 <code className="rounded bg-slate-100 px-1">123456</code>,
-        登录后先设一个新密码,再用新密码登录一次。
+        初始密码由管理员告知。首次登录必须先设置自己的新密码,再用新密码登录一次。
       </p>
     </AuthShell>
   );

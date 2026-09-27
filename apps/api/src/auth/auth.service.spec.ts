@@ -29,6 +29,8 @@ function createService(overrides: { userCount?: number } = {}) {
     user: { count: vi.fn(), findUnique: vi.fn(), create: vi.fn(), update: vi.fn() },
     orgAssignment: { findMany: vi.fn() },
     node: { findMany: vi.fn() },
+    // 锁定要写审计(auth.login.locked),桩必须跟着服务走。
+    auditLog: { create: vi.fn() },
     $transaction: vi.fn(),
   };
   prisma.user.count.mockResolvedValue(overrides.userCount ?? 0);
@@ -63,13 +65,21 @@ function createService(overrides: { userCount?: number } = {}) {
     get: vi.fn((key: string) => (key === 'sessionSecret' ? 'test-secret' : undefined)),
   };
 
+  // 登录限流。默认"没锁",各用例按需覆盖 ——
+  // 这样老的用例不必关心限流,v2.12 新增的用例再显式改它的返回值。
+  const throttle = { check: vi.fn(), recordFailure: vi.fn(), recordSuccess: vi.fn() };
+  throttle.check.mockResolvedValue({ locked: false, retryAfterSeconds: 0 });
+  throttle.recordFailure.mockResolvedValue({ locked: false, retryAfterSeconds: 0 });
+  throttle.recordSuccess.mockResolvedValue(undefined);
+
   const service = new AuthService(
     prisma as never,
     passwords as never,
     sessions as never,
     config as never,
+    throttle as never,
   );
-  return { service, prisma, passwords, sessions, config };
+  return { service, prisma, passwords, sessions, config, throttle };
 }
 
 describe('AuthService.setup —— 首次初始化', () => {
@@ -127,6 +137,87 @@ describe('AuthService.login —— 不给账号枚举留口子', () => {
       user: { employeeNo: ACTIVE_USER.employeeNo },
     });
     expect(sessions.issue).toHaveBeenCalledTimes(1);
+  });
+
+  // ---------------- v2.12:登录限流与账号锁定 ----------------
+
+  it('已锁定时回 429,且**根本不去查库、也不校验密码**', async () => {
+    const { service, prisma, passwords, throttle } = createService();
+    throttle.check.mockResolvedValueOnce({ locked: true, retryAfterSeconds: 900 });
+
+    await expect(
+      service.login({ employeeNo: 'KC-nobody', password: 'whatever' }, {}),
+    ).rejects.toMatchObject({
+      code: 'RATE_LIMITED',
+      details: { retryAfterSeconds: 900 },
+    });
+
+    // 这两条是"锁定期间不校验密码"的证据 —— 只挡结果不挡开销的话,
+    // "被锁"与"密码错"的耗时差异又能被用来枚举账号。
+    expect(prisma.user.findUnique).not.toHaveBeenCalled();
+    expect(passwords.verify).not.toHaveBeenCalled();
+  });
+
+  it('限流检查排在 bcrypt 之前', async () => {
+    const { service, prisma, passwords, throttle } = createService();
+    prisma.user.findUnique.mockResolvedValueOnce(ACTIVE_USER);
+
+    await service.login({ employeeNo: ACTIVE_USER.employeeNo, password: 'right' }, {});
+
+    expect(throttle.check.mock.invocationCallOrder[0]).toBeLessThan(
+      passwords.verify.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER,
+    );
+  });
+
+  it('密码错误 → 记一次失败,并把来源 IP 一起带上(IP 那道闸要用)', async () => {
+    const { service, prisma, passwords, throttle } = createService();
+    prisma.user.findUnique.mockResolvedValueOnce(ACTIVE_USER);
+    passwords.verify.mockResolvedValueOnce(false);
+
+    await expect(
+      service.login({ employeeNo: ACTIVE_USER.employeeNo, password: 'wrong' }, { ip: '10.0.0.9' }),
+    ).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+
+    expect(throttle.recordFailure).toHaveBeenCalledWith(ACTIVE_USER.employeeNo, '10.0.0.9');
+  });
+
+  it('登录成功 → 清掉该账号的失败计数,免得零星打错累积成"某天突然被锁"', async () => {
+    const { service, prisma, throttle } = createService();
+    prisma.user.findUnique.mockResolvedValueOnce(ACTIVE_USER);
+
+    await service.login({ employeeNo: ACTIVE_USER.employeeNo, password: 'right' }, {});
+
+    expect(throttle.recordSuccess).toHaveBeenCalledWith(ACTIVE_USER.employeeNo);
+  });
+
+  it('这次失败导致锁定、且账号真实存在 → 写一条审计(actor 为空 = 系统判定)', async () => {
+    const { service, prisma, passwords, throttle } = createService();
+    prisma.user.findUnique.mockResolvedValueOnce(ACTIVE_USER);
+    passwords.verify.mockResolvedValueOnce(false);
+    throttle.recordFailure.mockResolvedValueOnce({ locked: true, retryAfterSeconds: 900 });
+
+    await expect(
+      service.login({ employeeNo: ACTIVE_USER.employeeNo, password: 'wrong' }, {}),
+    ).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+
+    const entry = prisma.auditLog.create.mock.calls[0]?.[0] as {
+      data: { action: string; actorId: string | null; targetId: string };
+    };
+    expect(entry.data.action).toBe('auth.login.locked');
+    expect(entry.data.actorId).toBeNull();
+    expect(entry.data.targetId).toBe(ACTIVE_USER.id);
+  });
+
+  it('工号不存在时不写锁定审计 —— 否则未登录的人能往"只写不删"的审计表里灌数据', async () => {
+    const { service, prisma, throttle } = createService();
+    prisma.user.findUnique.mockResolvedValueOnce(null);
+    throttle.recordFailure.mockResolvedValueOnce({ locked: true, retryAfterSeconds: 900 });
+
+    await expect(
+      service.login({ employeeNo: 'KC-nobody', password: 'wrong' }, {}),
+    ).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
   });
 
   it('密码错误 → 401', async () => {

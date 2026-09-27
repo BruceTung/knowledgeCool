@@ -78,6 +78,34 @@ export function isExportFormat(value: unknown): value is ExportFormat {
   return typeof value === 'string' && (EXPORT_FORMATS as readonly string[]).includes(value);
 }
 
+/**
+ * 一个节点(页面)最多能放几张图片。
+ *
+ * ⚠️ v2.12 之前**没有任何上限** —— 一个页面想插多少张就插多少张。
+ * 用户的要求是"限制每个页面的最大文件上传数量,限制 10 个"。
+ *
+ * 放在 shared 而不是两端各写一个常量:服务端是**强制的闸**,前端用它做即时反馈,
+ * 两边的数字必须是同一个 —— 否则会出现"前端拦了后端不拦"或者反过来的错位。
+ *
+ * 数的是**文档里的图片节点**,不是"上传过几次"。上传了但没插进文档的图片
+ * 不计入,也不会被回收(见 DESIGN §11.3 的"孤儿附件"一条)。
+ */
+export const MAX_IMAGES_PER_NODE = 10;
+
+/**
+ * 数一棵文档树里的图片节点。
+ *
+ * 纯函数、零依赖,前后端共用 —— 这样这条规则就只有一个实现、一处可测。
+ * 递归整棵树而不是只看顶层:图片可以嵌在表格单元格、引用块里面,
+ * 只数顶层会漏掉它们,表现为"插到第 11 张才被拦、而且提示说只有 3 张"。
+ */
+export function countImages(doc: ProseMirrorNode | null | undefined): number {
+  if (doc === null || doc === undefined) return 0;
+  let count = doc.type === 'image' ? 1 : 0;
+  for (const child of doc.content ?? []) count += countImages(child);
+  return count;
+}
+
 /** 校验任意值是否是一个"够用"的 ProseMirror 文档。服务端入库前的最后一道闸。 */
 export function isProseMirrorDoc(value: unknown): value is ProseMirrorDoc {
   if (typeof value !== 'object' || value === null) return false;

@@ -78,7 +78,6 @@ export class OrgImportService {
 
     const [nodes, users, assignments] = await Promise.all([
       this.prisma.node.findMany({
-        where: { deletedAt: null },
         select: {
           id: true,
           title: true,
@@ -337,9 +336,8 @@ export class OrgImportService {
   private async loadState(): Promise<CurrentState> {
     const [nodes, users, assignments] = await Promise.all([
       this.prisma.node.findMany({
-        // 已删除的节点**不进快照** —— 这样表格里引用它时会得到
-        // "该 ID 不存在(可能已被删除)"的明确报错,而不是静默把归属挂到回收站里的节点上
-        where: { deletedAt: null },
+        // v2.12 起没有"已删除但仍存在"的节点 —— 引用不存在的 ID 会得到
+        // "该 ID 不存在"的明确报错。
         select: {
           id: true,
           title: true,
@@ -404,14 +402,22 @@ export class OrgImportService {
         const lastPositionOf = async (parentId: string | null): Promise<number> => {
           const cacheKey = parentId ?? '__root__';
           const cached = nextPosition.get(cacheKey);
-          if (cached !== undefined) return cached;
+          if (cached !== undefined) {
+            // ⚠️ 命中缓存后必须**把它推进一位**再返回。
+            // 原实现直接 `return cached`:于是同一批里新建的每个兄弟都拿到
+            // **同一个 position** —— 同级顺序变成随机的(取决于数据库返回顺序),
+            // 而且不报任何错。这段注释原来写的就是"不要互相撞位",代码反着做了。
+            nextPosition.set(cacheKey, cached + 1);
+            return cached;
+          }
           const last = await tx.node.findFirst({
-            where: { parentId, deletedAt: null },
+            where: { parentId },
             orderBy: { position: 'desc' },
             select: { position: true },
           });
           const value = (last?.position ?? -1) + 1;
-          nextPosition.set(cacheKey, value);
+          // 存的是"下一个可用值",所以初次也要 +1
+          nextPosition.set(cacheKey, value + 1);
           return value;
         };
 

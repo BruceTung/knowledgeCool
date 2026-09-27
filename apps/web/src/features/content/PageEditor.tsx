@@ -35,9 +35,14 @@ import {
 } from 'react';
 
 import type { Editor, EditorEvents } from '@tiptap/core';
-import type { NodeContentResponse, ProseMirrorNode } from '@knowledgecool/shared';
+import {
+  MAX_IMAGES_PER_NODE,
+  countImages,
+  type NodeContentResponse,
+  type ProseMirrorNode,
+} from '@knowledgecool/shared';
 
-import { ApiError } from '../../lib/api';
+import { ApiError, sendBeaconJson } from '../../lib/api';
 import { Button } from '../../components/ui';
 import { useSaveContent } from '../org/queries';
 import { DEFAULT_CODE_LANGUAGE, createLowlighter } from './code-languages';
@@ -113,6 +118,10 @@ export function PageEditor({
   const upload = useImageUpload();
 
   const [state, setState] = useState<SaveState>('idle');
+  /** 当前页面的图片张数 —— 工具栏据此显示剩余额度并封顶。 */
+  const [imageCount, setImageCount] = useState(0);
+  /** 图片相关的提示(到达上限 / 上传失败)。与"保存状态"分开,两者的原因与后续动作都不一样。 */
+  const [imageNotice, setImageNotice] = useState<string | null>(null);
   /**
    * 只为了在**光标移动时**重渲染一次。
    *
@@ -127,6 +136,23 @@ export function PageEditor({
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** 有没有"还没落库"的改动。卸载时用它决定要不要补一次保存。 */
   const dirtyRef = useRef(false);
+  /**
+   * 内容的最新快照。
+   *
+   * ⚠️ 卸载时**不能**再去问编辑器要 `getJSON()`:React 按声明顺序清理 effect,
+   * `useEditor` 内部的销毁排在前面,等我们的清理函数跑到时编辑器已经不可靠了。
+   * 所以每次输入时就把快照存下来,卸载时只读这个 ref。
+   * 顺带省掉一次 `getJSON()` —— `onOutline` 本来就要算一次。
+   */
+  const snapshotRef = useRef<ProseMirrorNode | null>(null);
+  /**
+   * 卸载 / 离开页面时用的最新 `flush`。
+   *
+   * 卸载 effect 的依赖必须是空数组(只在卸载跑一次),所以不能直接把 `flush`
+   * 写进去 —— 那样闭包会拿到第一次渲染时那一份,里面的 `save` 还是旧的 nodeId。
+   * 用 ref 把最新的一份递过去。
+   */
+  const flushRef = useRef<((content: ProseMirrorNode) => void) | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const updateState = useCallback(
@@ -136,6 +162,48 @@ export function PageEditor({
     },
     [onSaveStateChange],
   );
+
+  /**
+   * 把当前内容写回服务端。
+   *
+   * ⚠️ 参数是**文档快照**而不是编辑器实例。原来传实例,于是在卸载时踩了坑:
+   * `useEditor` 的销毁排在我们的清理函数之前,那一刻实例已经不可靠。
+   * 现在快照在每次输入时就算好(反正 `onOutline` 本来也要算)。
+   *
+   * ⚠️ 必须存结构化文档树,不能存任何序列化后的字符串 ——
+   * §10 约束 2:正文存结构化文档树,绝不存 Markdown 字符串。
+   */
+  const flush = useCallback(
+    async (content: ProseMirrorNode) => {
+      if (!canEdit) return;
+      if (!dirtyRef.current) return;
+
+      updateState('saving');
+      try {
+        const saved = await save.mutateAsync({
+          content: content as NodeContentResponse['content'],
+          baseUpdatedAt: baseRef.current,
+        });
+        baseRef.current = saved.updatedAt;
+        dirtyRef.current = false;
+        updateState('saved');
+      } catch (error: unknown) {
+        if (error instanceof ApiError && error.code === 'VERSION_CONFLICT') {
+          // 不自动覆盖:让别人写的版本留在库里,由用户决定怎么办
+          dirtyRef.current = false;
+          updateState('conflict');
+          return;
+        }
+        // 网络抖动之类:保持 dirty,下次输入还会再试
+        updateState('error');
+      }
+    },
+    [canEdit, save, updateState],
+  );
+
+  useEffect(() => {
+    flushRef.current = flush;
+  }, [flush]);
 
   const extensions = useMemo(
     () => [
@@ -176,17 +244,23 @@ export function PageEditor({
       },
     },
     onUpdate: ({ editor: instance }: EditorEvents['update']) => {
+      // 先把快照留下 —— 卸载或关页面时,这是唯一还能拿到内容的来源
+      const doc = instance.getJSON() as ProseMirrorNode;
+      snapshotRef.current = doc;
       dirtyRef.current = true;
       updateState('dirty');
-      onOutline(extractOutline(instance.getJSON() as ProseMirrorNode));
+      onOutline(extractOutline(doc));
+      setImageCount(countImages(doc));
 
       if (timerRef.current !== null) clearTimeout(timerRef.current);
       timerRef.current = setTimeout(() => {
-        void flush(instance);
+        void flushRef.current?.(doc);
       }, AUTOSAVE_DELAY_MS);
     },
     onCreate: ({ editor: instance }: EditorEvents['create']) => {
-      onOutline(extractOutline(instance.getJSON() as ProseMirrorNode));
+      const doc = instance.getJSON() as ProseMirrorNode;
+      onOutline(extractOutline(doc));
+      setImageCount(countImages(doc));
     },
     onSelectionUpdate: () => {
       bumpSelectionVersion();
@@ -194,45 +268,57 @@ export function PageEditor({
   });
 
   /**
-   * 把当前内容写回服务端。
+   * 卸载时补一次保存 —— 用户点了别的页面就走,不该丢掉刚打的字。
    *
-   * ⚠️ 必须拿 `editor.getJSON()` 而不是任何序列化后的字符串 ——
-   * §10 约束 2:正文存结构化文档树,绝不存 Markdown 字符串。
+   * ⚠️ 这里**必须真的写回服务端**。上一版只 `clearTimeout` 了待执行的自动保存
+   * 就返回了,等于"把还没来得及写的那一次改动直接取消掉" —— 注释承诺的
+   * 正是它没做的事。停笔 1.2 秒之内切页就是静默丢字(已实测复现:
+   * 输入后 250ms 导航离开,零写入请求,服务端内容不变)。
+   *
+   * 依赖数组保持空:内部一律经 ref 取最新值,否则闭包会把旧的 nodeId 带回来。
    */
-  const flush = useCallback(
-    async (instance: Editor) => {
-      if (!instance.isEditable) return;
-      if (!dirtyRef.current) return;
-
-      updateState('saving');
-      try {
-        const saved = await save.mutateAsync({
-          content: instance.getJSON() as NodeContentResponse['content'],
-          baseUpdatedAt: baseRef.current,
-        });
-        baseRef.current = saved.updatedAt;
-        dirtyRef.current = false;
-        updateState('saved');
-      } catch (error: unknown) {
-        if (error instanceof ApiError && error.code === 'VERSION_CONFLICT') {
-          // 不自动覆盖:让别人写的版本留在库里,由用户决定怎么办
-          dirtyRef.current = false;
-          updateState('conflict');
-          return;
-        }
-        // 网络抖动之类:保持 dirty,下次输入还会再试
-        updateState('error');
-      }
-    },
-    [save, updateState],
-  );
-
-  // 卸载时补一次保存 —— 用户点了别的页面就走,不该丢掉刚打的字
   useEffect(() => {
     return () => {
       if (timerRef.current !== null) clearTimeout(timerRef.current);
+      const pending = snapshotRef.current;
+      if (pending !== null && dirtyRef.current) {
+        void flushRef.current?.(pending);
+      }
     };
   }, []);
+
+  /**
+   * 关标签页 / 刷新时的兜底。
+   *
+   * 自动保存有 1.2 秒的防抖窗口,这段时间里关页面同样会丢字,而卸载清理
+   * 在这个场景下不会跑(页面整个没了)。两条一起上:
+   *
+   *   1. `sendBeacon` 把快照交给浏览器投递 —— 页面卸载后它仍会继续发;
+   *   2. **同时**按浏览器规矩弹一次确认。因为 beacon 是否真的送达,
+   *      我们在页面里无法确认,而"多问一句"远比"静默丢字"便宜。
+   *
+   * 只对未保存的改动弹窗 —— 没有 dirty 就完全不打扰。
+   */
+  useEffect(() => {
+    function onBeforeUnload(event: BeforeUnloadEvent): void {
+      if (!dirtyRef.current) return;
+      const pending = snapshotRef.current;
+      if (pending !== null) {
+        sendBeaconJson(`/nodes/${nodeId}/content`, {
+          content: pending,
+          baseUpdatedAt: baseRef.current,
+        });
+      }
+      event.preventDefault();
+      // 老浏览器要求 returnValue 有值才弹;现代浏览器看 preventDefault。
+      event.returnValue = '';
+    }
+
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => {
+      window.removeEventListener('beforeunload', onBeforeUnload);
+    };
+  }, [nodeId]);
 
   useEffect(() => {
     if (editor !== null) onReady?.(editor);
@@ -240,17 +326,34 @@ export function PageEditor({
 
   async function handleImage(file: File) {
     if (editor === null) return;
+
+    // 再数一次,**不依赖上面那个 state** —— 工具栏的按钮可能在 state 同步之前
+    // 就被点到了,而这道闸失效的后果是"超出上限之后才被服务端拒绝"。
+    if (countImages(editor.getJSON() as ProseMirrorNode) >= MAX_IMAGES_PER_NODE) {
+      setImageNotice(
+        `一个页面最多放 ${String(MAX_IMAGES_PER_NODE)} 张图片,已经放满了 —— 先删掉一张再插新的。`,
+      );
+      return;
+    }
+    setImageNotice(null);
+
     try {
       const result = await upload.mutateAsync(file);
       editor.chain().focus().setImage({ src: result.url, alt: file.name }).run();
-    } catch {
-      // 上传失败的提示交给下面的状态条 —— 这里不额外弹窗
-      updateState('error');
+    } catch (error: unknown) {
+      // ⚠️ 上传失败**不能**复用下面那条"保存失败"状态。
+      // 原来两者共用 state='error',而那条横幅写的是
+      // "保存失败。内容还留在编辑器里,继续输入会自动重试。"
+      // —— 对一次图片上传失败来说这句里没有一句成立:没有"保存",
+      // 也没有任何"自动重试"。
+      setImageNotice(
+        error instanceof ApiError ? `图片上传失败:${error.message}` : '图片上传失败,请重试。',
+      );
     }
   }
 
   if (editor === null) {
-    return <p className="p-8 text-sm text-slate-400">编辑器加载中…</p>;
+    return <p className="p-8 text-sm text-slate-500">编辑器加载中…</p>;
   }
 
   return (
@@ -260,6 +363,7 @@ export function PageEditor({
           editor={editor}
           onPickImage={() => fileInputRef.current?.click()}
           imageUploading={upload.isPending}
+          imageCount={imageCount}
         />
       )}
 
@@ -272,13 +376,26 @@ export function PageEditor({
         </div>
       )}
 
+      {imageNotice !== null && (
+        <div
+          role="status"
+          className="mx-8 mt-3 flex items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800"
+        >
+          <span>{imageNotice}</span>
+          <Button variant="secondary" onClick={() => setImageNotice(null)}>
+            知道了
+          </Button>
+        </div>
+      )}
+
       {state === 'error' && (
         <div className="mx-8 mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
           保存失败。内容还留在编辑器里,继续输入会自动重试。
         </div>
       )}
 
-      <div className="min-h-0 flex-1 overflow-auto px-8 py-5">
+      {/* kc-print-area:打印时这个滚动容器要展开,否则只会印出第一屏(见 styles.css) */}
+      <div className="kc-print-area min-h-0 flex-1 overflow-auto px-8 py-5">
         <EditorContent editor={editor} />
       </div>
 
@@ -309,8 +426,8 @@ export function SaveStateLabel({ state }: { state: SaveState }) {
     conflict: '保存冲突',
   };
   const color: Record<SaveState, string> = {
-    idle: 'text-slate-400',
-    dirty: 'text-slate-400',
+    idle: 'text-slate-500',
+    dirty: 'text-slate-500',
     saving: 'text-blue-600',
     saved: 'text-emerald-600',
     error: 'text-red-600',

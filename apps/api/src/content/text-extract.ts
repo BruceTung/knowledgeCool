@@ -106,27 +106,3 @@ function normalize(raw: string): string {
     ? collapsed.slice(0, TEXT_FOR_SEARCH_MAX_LENGTH)
     : collapsed;
 }
-
-/**
- * 生成检索结果里的片段。
- *
- * 刻意**不在服务端拼 `<em>` 标签**:那样等于把 HTML 生成放在后端,
- * 一旦忘了转义就是 XSS。这里只返回纯文本片段,高亮交给前端按索引切分。
- *
- * @param text  被搜索的纯文本
- * @param query 关键词
- * @param radius 关键词前后各保留多少个字符
- */
-export function buildSnippet(text: string, query: string, radius = 60): string {
-  if (text === '') return '';
-  const q = query.trim();
-  if (q === '') return text.slice(0, radius * 2);
-
-  const at = text.toLowerCase().indexOf(q.toLowerCase());
-  if (at < 0) return text.slice(0, radius * 2);
-
-  const start = Math.max(0, at - radius);
-  const end = Math.min(text.length, at + q.length + radius);
-
-  return `${start > 0 ? '…' : ''}${text.slice(start, end)}${end < text.length ? '…' : ''}`;
-}

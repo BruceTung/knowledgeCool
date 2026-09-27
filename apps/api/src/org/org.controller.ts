@@ -22,6 +22,7 @@ import type {
   NodeMembersResponse,
   OrgImportResponse,
   OrgScopeOption,
+  OrgUserListResponse,
   OrgUserView,
 } from '@knowledgecool/shared';
 import type { Response } from 'express';
@@ -162,10 +163,27 @@ export class OrgController {
 
   // ---------------- 人员(超管) ----------------
 
-  /** 人员列表。**超管专属** —— 名册里含账号状态与登录时间,不是公开信息。 */
+  /**
+   * 人员列表。**超管专属** —— 名册里含账号状态与登录时间,不是公开信息。
+   *
+   * 分页是游标式的(`cursor` = 上一页最后一行的工号),不是 offset:
+   * 按工号排序时 offset 分页在有人新建账号后会跳过或重复记录。
+   * `limit` 上限 500 —— 下拉选择器需要尽量全的名单,它没法翻页。
+   */
   @Get('admin/users')
-  listUsers(@CurrentUser() user: AuthUser, @Query('q') q?: string): Promise<OrgUserView[]> {
-    return this.org.listUsers(user, q);
+  listUsers(
+    @CurrentUser() user: AuthUser,
+    @Query('q') q?: string,
+    @Query('cursor') cursor?: string,
+    @Query('limit') limit?: string,
+  ): Promise<OrgUserListResponse> {
+    const parsed = limit === undefined ? undefined : Number.parseInt(limit, 10);
+    return this.org.listUsers(
+      user,
+      q,
+      cursor,
+      parsed !== undefined && Number.isFinite(parsed) ? parsed : undefined,
+    );
   }
 
   @Post('admin/users')

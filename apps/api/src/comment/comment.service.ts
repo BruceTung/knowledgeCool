@@ -67,11 +67,11 @@ export class CommentService {
   /**
    * 节点的评论列表。顶层评论按时间正序,回复挂在各自的 `replies` 下。
    *
-   * **不鉴权** —— 读全员开放(§5.3 规则一)。但仍确认节点存在且未删除,
-   * 否则前端无法区分"这篇没人评论"与"这篇不存在"。
+   * v2.12 起**要过读判定** —— 受限节点的评论也不该被未授权的人看到。
+   * (评论正文常常比文档本身更直白,漏掉这一条等于保密只做了一半。)
    */
   async list(operator: Actor, nodeId: string): Promise<CommentListResponse> {
-    await this.assertNodeVisible(nodeId);
+    await this.permissions.requireRead(operator, nodeId);
 
     const rows = await this.prisma.comment.findMany({
       where: { nodeId },
@@ -134,7 +134,7 @@ export class CommentService {
     nodeId: string,
     input: CreateCommentInput,
   ): Promise<CommentView> {
-    await this.assertNodeVisible(nodeId);
+    await this.permissions.requireRead(operator, nodeId);
 
     const body = input.body.trim();
     if (body === '') throw AppError.validation('评论内容不能为空');
@@ -263,12 +263,14 @@ export class CommentService {
     return Object.fromEntries(rows.map((row) => [row.nodeId, row._count._all]));
   }
 
-  private async assertNodeVisible(nodeId: string): Promise<void> {
-    const node = await this.prisma.node.findUnique({
-      where: { id: nodeId },
-      select: { deletedAt: true },
-    });
-    if (node === null || node.deletedAt !== null) throw AppError.notFound();
+  /**
+   * 确认节点存在**且读得到**。
+   *
+   * v2.12 起改成走 PermissionService —— 少了这一步,受限节点会通过评论接口
+   * 暴露"它存在"这件事(以及它的评论内容)。
+   */
+  private async assertReadable(operator: Actor, nodeId: string): Promise<void> {
+    await this.permissions.requireRead(operator, nodeId);
   }
 
   /**

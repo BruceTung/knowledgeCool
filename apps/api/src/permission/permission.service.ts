@@ -20,12 +20,19 @@ import {
   type Chain,
   type ChainNode,
   type GrantCandidate,
+  type NodeAccessLists,
   type NodeGrantsResponse,
+  type NodeReadersResponse,
+  type ReaderCandidate,
   type SaveNodeGrantsInput,
+  type SaveNodeReadersInput,
   canEdit as canEditPure,
   canGrantTo,
   canManage as canManagePure,
+  canManageReaders as canManageReadersPure,
+  canRead as canReadPure,
   isWithinSubtree,
+  toNodeVisibility,
 } from '@knowledgecool/shared';
 
 import { recordAudit } from '../audit/record.js';
@@ -46,6 +53,15 @@ export interface AccessContext {
   nodeId: string;
   chain: Chain;
   row: JudgeRow;
+  /**
+   * 能不能读(v2.12)。
+   *
+   * ⚠️ 读不到时**必须回 404 而不是 403** —— 403 等于确认「这里有个你看不见的
+   * 东西」,而保密的意义就在于不确认它的存在。
+   * (v2.0~v2.11 期间 errors.ts 特意不用 404 掩盖 FORBIDDEN,那是因为当时读
+   *  对全员开放、没有"存在但读不到"的资源。受限节点让那个前提不再成立。)
+   */
+  canRead: boolean;
   canEdit: boolean;
   canManage: boolean;
 }
@@ -59,10 +75,24 @@ const JUDGE_SELECT = {
   depth: true,
   materializedPath: true,
   version: true,
-  deletedAt: true,
+  // v2.12 保密能力:判定「能读吗」要用到这两列
+  visibility: true,
+  createdBy: true,
 } satisfies Prisma.NodeSelect;
 
 type JudgeRow = Prisma.NodeGetPayload<{ select: typeof JUDGE_SELECT }>;
+
+/** 链上的一环只要这几列。与 JUDGE_SELECT 分开,免得取链时多查一堆用不上的字段。 */
+const CHAIN_SELECT = {
+  id: true,
+  ownerId: true,
+  title: true,
+  depth: true,
+  visibility: true,
+  createdBy: true,
+} satisfies Prisma.NodeSelect;
+
+type ChainRow = Prisma.NodeGetPayload<{ select: typeof CHAIN_SELECT }>;
 
 const USER_BRIEF_SELECT = {
   id: true,
@@ -93,23 +123,20 @@ export class PermissionService {
    * 靠物化路径的前缀集合做 `in` 匹配。这是整棵树里唯一性能敏感的路径,
    * 所以刻意不写成递归 CTE —— 前缀集合可以在应用层一次算好,查询走索引。
    */
-  async chainOf(
-    nodeId: string,
-    options: { allowDeleted?: boolean } = {},
-  ): Promise<{ chain: Chain; row: JudgeRow }> {
-    const self = await this.pluck(nodeId, options);
+  async chainOf(nodeId: string): Promise<{ chain: Chain; row: JudgeRow }> {
+    const self = await this.pluck(nodeId);
     const prefixes = prefixPathsOf(self.materializedPath);
 
     const rows = await this.prisma.node.findMany({
-      where: { materializedPath: { in: prefixes }, deletedAt: null },
-      select: { id: true, ownerId: true, title: true, depth: true },
+      where: { materializedPath: { in: prefixes } },
+      select: CHAIN_SELECT,
       orderBy: { depth: 'asc' },
     });
 
-    const ancestors: ChainNode[] = rows.filter((row) => row.id !== self.id);
+    const ancestors: ChainNode[] = rows.filter((row) => row.id !== self.id).map(toChainNode);
     return {
       chain: {
-        self: { id: self.id, ownerId: self.ownerId, title: self.title, depth: self.depth },
+        self: toChainNode(self),
         ancestors,
       },
       row: self,
@@ -119,60 +146,78 @@ export class PermissionService {
   /**
    * 判定某人某节点。带 Redis 缓存 —— **Redis 不可用时自动回源,判定正确性不依赖它**。
    *
-   * ⚠️ `allowDeleted` 必须能传下去。回收站列表、恢复、彻底删除这三处
-   * 都要对**已经删掉的**节点做判定;少了这个开关,它们会在判定这一步
-   * 就抛 404 —— 表现是"回收站打不开、恢复和彻底删除都用不了"。
-   * (这条在实跑验收时才发现,见 DESIGN §9.3。)
-   *
-   * 传了 `allowDeleted` 就**不走缓存**:已删节点是极少数,而缓存里
-   * 那点省下的开销不值得冒"缓存了删除前/删除后两种语义"的风险。
+   * ⚠️ v2.12 起**没有 `allowDeleted` 了**。回收站被整体移除,节点只有
+   * "存在"与"不存在"两种状态,不再需要"对已删除的节点判定"这条分支 ——
+   * 于是缓存里也不会再出现"删除前 / 删除后"两种语义并存的问题。
    */
-  async access(
-    operator: Actor,
-    nodeId: string,
-    options: { allowDeleted?: boolean } = {},
-  ): Promise<AccessContext> {
-    const { chain, row } = await this.chainOf(nodeId, options);
+  async access(operator: Actor, nodeId: string): Promise<AccessContext> {
+    const { chain, row } = await this.chainOf(nodeId);
 
-    const compute = async (): Promise<{ canEdit: boolean; canManage: boolean }> => {
+    const compute = async (): Promise<{
+      canRead: boolean;
+      canEdit: boolean;
+      canManage: boolean;
+    }> => {
       const granted = await this.grantedUserIdsOf(nodeId);
       return {
+        // 只在链上真的存在受限节点时才去查名单 —— 绝大多数节点是 public,
+        // 那种情况下这一条不产生任何查询(判定的热路径不能多一次往返)。
+        canRead: canReadPure(operator, chain, await this.accessListsOf(chain)),
         canEdit: canEditPure(operator, chain, granted),
         canManage: canManagePure(operator, chain),
       };
     };
 
-    if (options.allowDeleted === true) {
-      return { nodeId, chain, row, ...(await compute()) };
+    const rootId = rootIdOf(chain);
+
+    // ⚠️ 世代号**只读一次**,并且这一个值贯穿"读缓存"与"写缓存"两端。
+    //
+    // 原实现在 writeCache 内部又读了一次 —— 如果 compute() 期间恰好有 INCR
+    // 落进来(有人改了权限),就会把"失效之前算出来的那个结果"写进**新世代**,
+    // 于是它躲过了这次失效,并且存活满 30 秒。表现是"权限已经改完了,
+    // 但某个人还能改",**静默越权**,而且不会报任何错。
+    //
+    // 用同一个世代号之后:INCR 之后这次的写入会落进旧世代 —— 不会再有人读它,
+    // 自然作废。这是世代号方案本来就该有的用法。
+    const generation = await this.generationOf(rootId);
+
+    if (generation !== null) {
+      const cached = await this.readCacheAt(generation, operator.id, nodeId);
+      if (cached !== null) return { nodeId, chain, row, ...cached };
     }
 
-    const rootId = rootIdOf(chain);
-    const cached = await this.readCache(operator.id, nodeId, rootId);
-    if (cached !== null) return { nodeId, chain, row, ...cached };
-
     const result = await compute();
-    await this.writeCache(operator.id, nodeId, rootId, result);
+    if (generation !== null) {
+      await this.writeCacheAt(generation, operator.id, nodeId, result);
+    }
     return { nodeId, chain, row, ...result };
   }
 
+  /**
+   * 断言可读(v2.12)。
+   *
+   * ⚠️ 读不到时抛的是 **404 而不是 403**。403 会确认「这里确实有个东西,
+   * 只是你看不见」—— 对保密来说那就是泄露。见 AccessContext.canRead 的说明。
+   */
+  async requireRead(operator: Actor, nodeId: string): Promise<AccessContext> {
+    const context = await this.access(operator, nodeId);
+    if (!context.canRead) throw AppError.notFound();
+    return context;
+  }
+
   /** 断言可改。**这里是唯一入口** —— 调用点不要自己判断。 */
-  async requireEdit(
-    operator: Actor,
-    nodeId: string,
-    options: { allowDeleted?: boolean } = {},
-  ): Promise<AccessContext> {
-    const context = await this.access(operator, nodeId, options);
+  async requireEdit(operator: Actor, nodeId: string): Promise<AccessContext> {
+    const context = await this.access(operator, nodeId);
+    // 先判读:读不到的节点连"你没有编辑权限"都不该说 —— 那句话本身就承认了它存在。
+    if (!context.canRead) throw AppError.notFound();
     if (!context.canEdit) throw AppError.forbidden('你没有编辑该节点的权限');
     return context;
   }
 
   /** 断言可管(决定这个节点还有谁能改)。 */
-  async requireManage(
-    operator: Actor,
-    nodeId: string,
-    options: { allowDeleted?: boolean } = {},
-  ): Promise<AccessContext> {
-    const context = await this.access(operator, nodeId, options);
+  async requireManage(operator: Actor, nodeId: string): Promise<AccessContext> {
+    const context = await this.access(operator, nodeId);
+    if (!context.canRead) throw AppError.notFound();
     if (!context.canManage) {
       throw AppError.forbidden('只有该节点或其上级的所有者才能修改权限');
     }
@@ -318,8 +363,6 @@ export class PermissionService {
     if (!canManagePure(operator, chain)) {
       throw AppError.forbidden('只有该节点或其上级的所有者才能修改权限');
     }
-    if (row.version !== input.version) throw AppError.versionConflict();
-
     const targetIds = [...new Set(input.userIds)];
 
     for (const targetId of targetIds) {
@@ -337,14 +380,27 @@ export class PermissionService {
     }
 
     await this.prisma.$transaction(async (tx) => {
+      // ⚠️ 乐观锁必须在**事务内**认领,写法是"带 version 条件 + 检查影响行数"
+      // (比较并交换),而不是事务外比一下、事务内无条件 +1。
+      //
+      // 原写法是 TOCTOU:两个管理员同时改同一个节点的授权名单时,两次都在事务外
+      // 通过了 version 比较,然后各自在事务里删表、重建、+1 —— 后写的那次
+      // **静默覆盖**前一次,而两个人都以为保存成功了。
+      // 这正是 version 这个号存在的目的,所以必须在这一步就抢。
+      const claimed = await tx.node.updateMany({
+        where: { id: nodeId, version: input.version },
+        data: { version: { increment: 1 } },
+      });
+      if (claimed.count === 0) throw AppError.versionConflict();
+
+      // 增量的理由与顺序:先认领(CAS),再整表替换名单。
+      // 两者在同一个事务里,不存在"名单被替换了但 version 没动"的窗口。
       await tx.nodeGrant.deleteMany({ where: { nodeId } });
       if (targetIds.length > 0) {
         await tx.nodeGrant.createMany({
           data: targetIds.map((userId) => ({ nodeId, userId, grantedBy: operator.id })),
         });
       }
-      // 乐观锁:名单变了 version 也要动,否则两个管理员同时改会互相覆盖
-      await tx.node.update({ where: { id: nodeId }, data: { version: { increment: 1 } } });
     });
 
     await this.invalidateByNode(nodeId);
@@ -399,6 +455,150 @@ export class PermissionService {
   }
 
   // ================================================================
+  // 可见性与读者名单(v2.12)
+  // ================================================================
+
+  /**
+   * 一个节点的可见性 + 读者名单。
+   *
+   * `inheritedFrom` 是**最容易被误解的一点**:节点显示"受限",但所有者可能
+   * 从没在这里设过 —— 限制是从祖先继承的。不说明的话,管理员会在这个节点上
+   * 反复尝试改回公开,而那做不到(只能去祖先那一层改)。
+   */
+  async readersOverview(operator: Actor, nodeId: string): Promise<NodeReadersResponse> {
+    const { chain, row } = await this.chainOf(nodeId);
+
+    const rows = await this.prisma.nodeReader.findMany({
+      where: { nodeId },
+      select: { userId: true, grantedBy: true, createdAt: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    const briefs = await this.userBriefMap([
+      ...rows.map((item) => item.userId),
+      ...rows.map((item) => item.grantedBy),
+    ]);
+
+    // 祖先链上**离它最近**的受限节点(ancestors 是根→父,所以反过来找第一个)
+    const nearest = [...chain.ancestors].reverse().find((node) => node.visibility === 'restricted');
+
+    return {
+      nodeId,
+      visibility: toNodeVisibility(row.visibility),
+      readers: rows.map((item) => {
+        const brief = briefs.get(item.userId);
+        return {
+          userId: item.userId,
+          name: brief?.name ?? '未知',
+          employeeNo: brief?.employeeNo ?? '',
+          departed: brief?.status === 'departed',
+          grantedByName: briefs.get(item.grantedBy)?.name ?? '未知',
+          grantedAt: item.createdAt.toISOString(),
+        };
+      }),
+      canManage: canManageReadersPure(operator, chain),
+      version: row.version,
+      inheritedFrom:
+        nearest === undefined ? null : { nodeId: nearest.id, title: nearest.title },
+    };
+  }
+
+  /**
+   * 整表替换可见性与读者名单。
+   *
+   * 门槛是 `canManageReaders`:创建者或所有者链。
+   * ⚠️ 与授权名单不同,这里**刻意不做组织范围校验** —— 受限节点的读者常常
+   * 就是本部门之外的人(否则"保密"就没有意义了)。这是刻意的取舍,不是漏写。
+   */
+  async replaceReaders(
+    operator: Actor,
+    nodeId: string,
+    input: SaveNodeReadersInput,
+  ): Promise<NodeReadersResponse> {
+    const { chain, row } = await this.chainOf(nodeId);
+
+    if (!canManageReadersPure(operator, chain)) {
+      throw AppError.forbidden('只有这个节点的创建者或所有者能管理它的可见范围');
+    }
+
+    const targetIds = [...new Set(input.userIds)];
+    await this.assertAssignableUsers(targetIds);
+
+    const nextVisibility = input.visibility ?? toNodeVisibility(row.visibility);
+
+    await this.prisma.$transaction(async (tx) => {
+      // 乐观锁:CAS,与 replaceGrants 同一套写法(带 version 条件 + 查影响行数)
+      const claimed = await tx.node.updateMany({
+        where: { id: nodeId, version: input.version },
+        data: { version: { increment: 1 } },
+      });
+      if (claimed.count === 0) throw AppError.versionConflict();
+
+      await tx.node.update({
+        where: { id: nodeId },
+        data: { visibility: nextVisibility, updatedBy: operator.id },
+      });
+
+      await tx.nodeReader.deleteMany({ where: { nodeId } });
+      if (targetIds.length > 0) {
+        await tx.nodeReader.createMany({
+          data: targetIds.map((userId) => ({ nodeId, userId, grantedBy: operator.id })),
+        });
+      }
+    });
+
+    // 可见性/名单变了 → 这个人能不能读这个节点变了 → 缓存必须失效
+    await this.invalidateByNode(nodeId);
+
+    await recordAudit(this.prisma, {
+      actorId: operator.id,
+      action: 'visibility.replace',
+      targetType: 'node',
+      targetId: nodeId,
+      detail: { title: row.title, visibility: nextVisibility, count: targetIds.length },
+    });
+
+    return this.readersOverview(operator, nodeId);
+  }
+
+  /**
+   * 可选的读者。
+   *
+   * **所有在职账号**,不受组织范围限制 —— 理由与 replaceReaders 一样:
+   * 受限节点的读者本来就可能是外部门的人。
+   */
+  async readerCandidates(operator: Actor, nodeId: string): Promise<ReaderCandidate[]> {
+    const { chain } = await this.chainOf(nodeId);
+    if (!canManageReadersPure(operator, chain)) return [];
+
+    const rows = await this.prisma.user.findMany({
+      where: { status: 'active' },
+      select: {
+        ...USER_BRIEF_SELECT,
+        assignments: { select: { node: { select: { materializedPath: true } } } },
+      },
+      orderBy: [{ employeeNo: 'asc' }],
+    });
+
+    return rows.map((item) => ({
+      userId: item.id,
+      name: item.name,
+      employeeNo: item.employeeNo,
+      scopePaths: item.assignments.map((assignment) => assignment.node.materializedPath),
+    }));
+  }
+
+  /** 名单里的人必须都存在且可用 —— 把一个离职/停用的人放进读者名单没有意义。 */
+  private async assertAssignableUsers(userIds: readonly string[]): Promise<void> {
+    if (userIds.length === 0) return;
+    const found = await this.prisma.user.count({
+      where: { id: { in: [...userIds] }, status: 'active' },
+    });
+    if (found !== userIds.length) {
+      throw AppError.validation('名单里有不存在或已停用/离职的账号');
+    }
+  }
+
+  // ================================================================
   // 缓存与失效
   // ================================================================
 
@@ -430,37 +630,42 @@ export class PermissionService {
     await this.invalidate(rootIdOfPath(node.materializedPath));
   }
 
-  private async readCache(
+  /** 按**调用方给定的**世代号读缓存 —— 世代号由 access() 读一次并传下来。 */
+  private async readCacheAt(
+    generation: string,
     userId: string,
     nodeId: string,
-    rootId: string,
-  ): Promise<{ canEdit: boolean; canManage: boolean } | null> {
-    const generation = await this.generationOf(rootId);
-    if (generation === null) return null;
-
+  ): Promise<{ canRead: boolean; canEdit: boolean; canManage: boolean } | null> {
     try {
       const raw = await this.redis.client.get(this.cacheKey(generation, userId, nodeId));
       if (raw === null) return null;
       const parsed: unknown = JSON.parse(raw);
       if (typeof parsed !== 'object' || parsed === null) return null;
 
-      const value = parsed as { canEdit?: unknown; canManage?: unknown };
-      if (typeof value.canEdit !== 'boolean' || typeof value.canManage !== 'boolean') return null;
-      return { canEdit: value.canEdit, canManage: value.canManage };
+      const value = parsed as { canRead?: unknown; canEdit?: unknown; canManage?: unknown };
+      // ⚠️ 三个字段都要是布尔。少了 canRead 这一条,升级前写进去的旧缓存
+      // (只有 canEdit/canManage)会被当成有效,于是**受限节点会被当成可读** ——
+      // 一次静默的泄露。加上这一条之后旧缓存自然失效。
+      if (
+        typeof value.canRead !== 'boolean' ||
+        typeof value.canEdit !== 'boolean' ||
+        typeof value.canManage !== 'boolean'
+      ) {
+        return null;
+      }
+      return { canRead: value.canRead, canEdit: value.canEdit, canManage: value.canManage };
     } catch {
       return null;
     }
   }
 
-  private async writeCache(
+  /** 按**调用方给定的**世代号写缓存。刻意不在这里再读一次世代号,理由见 access()。 */
+  private async writeCacheAt(
+    generation: string,
     userId: string,
     nodeId: string,
-    rootId: string,
-    value: { canEdit: boolean; canManage: boolean },
+    value: { canRead: boolean; canEdit: boolean; canManage: boolean },
   ): Promise<void> {
-    const generation = await this.generationOf(rootId);
-    if (generation === null) return;
-
     try {
       await this.redis.client.set(
         this.cacheKey(generation, userId, nodeId),
@@ -490,21 +695,57 @@ export class PermissionService {
   // 私有
   // ================================================================
 
-  /**
-   * 取一个节点。已删除的默认视同不存在 ——
-   * 只有回收站相关操作会传 `allowDeleted`。
-   */
-  private async pluck(
-    nodeId: string,
-    options: { allowDeleted?: boolean } = {},
-  ): Promise<JudgeRow> {
+  /** 取一个节点。取不到就 404 —— v2.12 起没有"已删除但仍存在"这种状态了。 */
+  private async pluck(nodeId: string): Promise<JudgeRow> {
     const row = await this.prisma.node.findUnique({
       where: { id: nodeId },
       select: JUDGE_SELECT,
     });
     if (row === null) throw AppError.notFound();
-    if (row.deletedAt !== null && options.allowDeleted !== true) throw AppError.notFound();
     return row;
+  }
+
+  /**
+   * 取链上**受限节点**的两张名单(读者 + 编辑被授权者)。
+   *
+   * ⚠️ 链上没有受限节点时**一个查询都不发**。读路径是热路径,
+   * 而绝大多数节点是 public —— 不能为一个很少用的功能给每次判定都加一次往返。
+   */
+  private async accessListsOf(chain: Chain): Promise<Map<string, NodeAccessLists>> {
+    const restricted = [chain.self, ...chain.ancestors].filter(
+      (node) => node.visibility === 'restricted',
+    );
+    return this.listsOfNodeIds(restricted.map((node) => node.id));
+  }
+
+  /**
+   * 批量取名单 —— 给**树的保密过滤**用。
+   *
+   * 树要在内存里判几千个节点,逐个节点调 access() 会退化成 N+1 次查询;
+   * 这里一次把范围内所有受限节点的名单取回来。
+   */
+  async accessListsFor(nodeIds: readonly string[]): Promise<Map<string, NodeAccessLists>> {
+    return this.listsOfNodeIds(nodeIds);
+  }
+
+  private async listsOfNodeIds(ids: readonly string[]): Promise<Map<string, NodeAccessLists>> {
+    if (ids.length === 0) return new Map();
+    const [readers, grants] = await Promise.all([
+      this.prisma.nodeReader.findMany({
+        where: { nodeId: { in: [...ids] } },
+        select: { nodeId: true, userId: true },
+      }),
+      this.prisma.nodeGrant.findMany({
+        where: { nodeId: { in: [...ids] } },
+        select: { nodeId: true, userId: true },
+      }),
+    ]);
+
+    const map = new Map<string, { readers: Set<string>; grantees: Set<string> }>();
+    for (const id of ids) map.set(id, { readers: new Set<string>(), grantees: new Set<string>() });
+    for (const item of readers) map.get(item.nodeId)?.readers.add(item.userId);
+    for (const item of grants) map.get(item.nodeId)?.grantees.add(item.userId);
+    return map;
   }
 
   private async grantedUserIdsOf(nodeId: string): Promise<ReadonlySet<string>> {
@@ -541,6 +782,24 @@ export class PermissionService {
     });
     return new Map(rows.map((row) => [row.id, row]));
   }
+}
+
+/**
+ * 把一行判定数据收敛成链上的一环。
+ *
+ * 自身与祖先两处共用同一个映射 —— 分开写的话,新加字段(比如 visibility)
+ * 时必然漏掉一处,而漏掉的表现是"某个方向上的判定少看了一个条件",
+ * 也就是静默的越权或失权。
+ */
+function toChainNode(row: ChainRow): ChainNode {
+  return {
+    id: row.id,
+    ownerId: row.ownerId,
+    title: row.title,
+    depth: row.depth,
+    visibility: toNodeVisibility(row.visibility),
+    createdBy: row.createdBy,
+  };
 }
 
 /** 祖先链的第一个就是根;没有祖先说明自己就是一级节点。 */

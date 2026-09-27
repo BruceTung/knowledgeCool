@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -34,9 +34,15 @@ const LAST_SEEN_REFRESH_MS = 60 * 60 * 1000;
  *  2. **会话落 PG 而不是 Redis。** §3.2 明确 Redis「不作为唯一数据源」;
  *     会话若只放 Redis,一次 flush 就全员掉线,且认证会变成 Redis 硬依赖。
  */
+/** 过期会话的清理周期。默认 6 小时 —— 过期行早几小时晚几小时被删掉,没人会察觉。 */
+const PURGE_INTERVAL_MS = 6 * 60 * 60 * 1000;
+
 @Injectable()
-export class SessionService {
+export class SessionService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(SessionService.name);
   private readonly ttlMs: number;
+  /** 清理定时器。null 表示还没装上(或已卸下)。 */
+  private purgeTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -44,6 +50,37 @@ export class SessionService {
   ) {
     const hours = config.get<number>('sessionTtlHours') ?? 24 * 30;
     this.ttlMs = hours * 60 * 60 * 1000;
+  }
+
+  /**
+   * 装上过期会话的清理定时器。
+   *
+   * ⚠️ 刻意不引 @nestjs/schedule:为一个六小时跑一次、每次一条 DELETE 的任务
+   * 拉一个依赖不值当。两点要注意:
+   *   1. `unref()` —— 定时器不能把事件循环钉住,否则容器收到 SIGTERM 后
+   *      要等超时才退出,表现为"部署时要多等一截"。
+   *   2. `onModuleDestroy` 里清掉 —— 测试与优雅关闭都不该留着它跑。
+   */
+  onModuleInit(): void {
+    this.purgeTimer = setInterval(() => {
+      void this.purgeExpired()
+        .then((count) => {
+          if (count > 0) this.logger.log(`已清理 ${String(count)} 条过期会话`);
+        })
+        .catch((error: unknown) => {
+          this.logger.warn(
+            `清理过期会话失败: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        });
+    }, PURGE_INTERVAL_MS);
+    this.purgeTimer.unref?.();
+  }
+
+  onModuleDestroy(): void {
+    if (this.purgeTimer !== null) {
+      clearInterval(this.purgeTimer);
+      this.purgeTimer = null;
+    }
   }
 
   /** token → 入库主键。用 sha256 十六进制(64 字符,对应 schema 里的 CHAR(64))。 */
@@ -113,7 +150,12 @@ export class SessionService {
     return result.count;
   }
 
-  /** 清理过期会话。供将来的定时任务调用;M2 先提供能力,不接线。 */
+  /**
+   * 清理过期会话。
+   *
+   * ⚠️ 它曾经是**死代码**:注释写着"供将来的定时任务调用",而"将来"一直没来,
+   * 于是 sessions 表只增不减、过期行永远留着。现在由上面那个定时器驱动。
+   */
   async purgeExpired(): Promise<number> {
     const result = await this.prisma.session.deleteMany({
       where: { expiresAt: { lte: new Date() } },

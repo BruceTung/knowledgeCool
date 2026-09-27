@@ -5,12 +5,13 @@
  * 建部门、建人、设归属、导入 —— 组织架构是管理层的事。
  * 例外是「任命组长」:部长就能做(`PATCH /nodes/:id/owner`)。
  */
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
   CreateUserInput,
   GrantCandidate,
   OrgImportResponse,
   OrgScopeOption,
+  OrgUserListResponse,
   OrgUserView,
   SetUserAssignmentsInput,
   UpdateUserInput,
@@ -25,15 +26,54 @@ export function useOrgScopes() {
   });
 }
 
-export function useOrgUsers(query: string) {
+/**
+ * 人员列表 —— **分页**。
+ *
+ * ⚠️ 改成包装对象是为了修一个静默截断:此前服务端 `take: 200` 一截了事,
+ * 全公司 320 人时管理员只看到 200 个而界面上没有任何迹象。
+ * 现在前端拿得到 `total`,能判断出"我没看到全部"。
+ *
+ * 用 `useInfiniteQuery` 而不是手写 page 状态:翻页时要**追加**而不是替换,
+ * 手写一个 `pages` 数组很容易在搜索词变化时忘了清空 —— 表现是搜索"张"之后
+ * 第一页却混着上一次的结果。
+ *
+ * @param limit 每页条数。下拉选择器用它一次要全(500),表格用默认的 50。
+ */
+export function useOrgUsers(query: string, limit?: number) {
   const trimmed = query.trim();
-  return useQuery({
-    queryKey: ['org', 'users', trimmed],
-    queryFn: () =>
-      apiFetch<OrgUserView[]>(
-        `/admin/users${trimmed === '' ? '' : `?q=${encodeURIComponent(trimmed)}`}`,
+  const size = limit === undefined ? '' : `&limit=${String(limit)}`;
+
+  const infinite = useInfiniteQuery({
+    queryKey: ['org', 'users', trimmed, limit ?? 'default'],
+    queryFn: ({ pageParam }) =>
+      apiFetch<OrgUserListResponse>(
+        `/admin/users?q=${encodeURIComponent(trimmed)}${size}` +
+          (pageParam === '' ? '' : `&cursor=${encodeURIComponent(pageParam)}`),
       ),
+    initialPageParam: '',
+    getNextPageParam: (last) => last.nextCursor ?? undefined,
   });
+
+  const users = (infinite.data?.pages ?? []).flatMap((page) => page.users);
+  const total = infinite.data?.pages[0]?.total ?? 0;
+
+  return {
+    users,
+    total,
+    /** 还有没加载的页 */
+    hasMore: infinite.hasNextPage,
+    /** 是否被 limit 截断了(下拉选择器这种"一次要全"的场景用) */
+    truncated: total > users.length,
+    isPending: infinite.isPending,
+    isError: infinite.isError,
+    error: infinite.error,
+    isFetchingNextPage: infinite.isFetchingNextPage,
+    // 暴露 refetch:错误提示上的「重试」要用它。少了它,用户唯一的出路是刷新整页。
+    refetch: infinite.refetch,
+    loadMore: () => {
+      void infinite.fetchNextPage();
+    },
+  };
 }
 
 export function useCreateUser() {

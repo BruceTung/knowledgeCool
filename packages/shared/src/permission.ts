@@ -13,12 +13,18 @@
  * 这是刻意的:权限判定属于「错了不会立刻报错」的高危逻辑,必须能被单测整体覆盖。
  */
 
+import type { NodeVisibility } from './node.js';
+
 /** 判定链上的一环。只带判定需要的字段。 */
 export interface ChainNode {
   id: string;
   ownerId: string;
   title: string;
   depth: number;
+  /** 这一环自己的可见性(v2.12)。判定「能读吗」要用它。 */
+  visibility: NodeVisibility;
+  /** 这一环的创建者(v2.12)。受限节点的读者名单由创建者与所有者维护。 */
+  createdBy: string;
 }
 
 /**
@@ -38,17 +44,76 @@ export interface Actor {
   isSuperAdmin: boolean;
 }
 
+/** 某个节点上的两张名单 —— 判定「能读吗」时要一起看。 */
+export interface NodeAccessLists {
+  /** 读者名单(node_readers)。只在 restricted 节点上有意义。 */
+  readers: ReadonlySet<string>;
+  /** 编辑授权名单(node_grants)。能改的人**必须**也能读。 */
+  grantees: ReadonlySet<string>;
+}
+
 /**
- * 能读吗?
+ * 能读吗?(v2.12 —— **它真的会返回 false 了**)
  *
- * **回答永远是 `true`。** 读对所有登录用户开放(§5.3 规则一)。
+ * v2.0 起这个函数一直返回 `true`,并留了一句「将来若真要做保密,改动点
+ * 集中在这里」。v2.12 就是那个「将来」:用户要求加上保密能力。
  *
- * 之所以保留这个函数而不是在调用点写 `if (true)`,是为了让「读也要过判定」
- * 这件事在代码上**显式存在** —— 将来若真的要做保密,改动点集中在这里,
- * 而不是散落在几十个 controller 里。
+ * ## 规则
+ *
+ *   1. 链上(自身 + 全部祖先)**没有 restricted** → 可读。这是绝大多数节点。
+ *   2. 链上有 restricted → 那些受限节点**每一个**都必须放行,整条链才可读。
+ *      放行的三条路(满足任一):
+ *        a. 我是它的所有者
+ *        b. 我是它某个**祖先**的所有者(越靠上权限越大,与 canEdit 同一方向)
+ *        c. 我在它的读者名单里,或者本来就是它的编辑被授权者
+ *
+ * ## 两处刻意的决定
+ *
+ * · **必须逐个受限节点都放行,不能只看最近的那个。** 只看最近的话,
+ *   「外层受限节点里再放一个更内层的受限节点」时,只在**外层**名单里的人
+ *   会读到内层 —— 那是泄露。
+ * · **编辑被授权者也放行(c 的后半句)。** 否则会出现「能改但不能看」,
+ *   那不成立:能改的人打开文档就是空白,只会被当成 bug 报上来。
+ *
+ * @param listsByNode 调用方查好的名单表:节点 id → 两张名单。**只包含受限节点**即可
+ *                   (非受限节点根本不查名单)。
  */
-export function canRead(_actor: Actor, _chain: Chain): boolean {
+export function canRead(
+  actor: Actor,
+  chain: Chain,
+  listsByNode: ReadonlyMap<string, NodeAccessLists>,
+): boolean {
+  // 根 → 自身。顺序无所谓,但按顺序走便于理解"祖先在 index 之前"。
+  const lineage: readonly ChainNode[] = [...chain.ancestors, chain.self];
+
+  for (let index = 0; index < lineage.length; index += 1) {
+    const node = lineage[index];
+    if (node === undefined || node.visibility !== 'restricted') continue;
+
+    const ownsNodeOrAncestor =
+      node.ownerId === actor.id ||
+      lineage.slice(0, index).some((ancestor) => ancestor.ownerId === actor.id);
+    if (ownsNodeOrAncestor) continue;
+
+    const lists = listsByNode.get(node.id);
+    const listed =
+      (lists?.readers.has(actor.id) ?? false) || (lists?.grantees.has(actor.id) ?? false);
+    if (!listed) return false;
+  }
+
   return true;
+}
+
+/**
+ * 能管**读者名单**吗?(v2.12)
+ *
+ * 用户的要求是「创建者单独授权,不复用」—— 所以这里认**创建者**。
+ * 同时认**所有者链**:所有者是内容责任人,而且少了这一条,
+ * 创建者一旦离职,那个节点的读者名单就永久冻结(再也加不进人,也移不出人)。
+ */
+export function canManageReaders(actor: Actor, chain: Chain): boolean {
+  if (actor.id === chain.self.createdBy) return true;
+  return actor.id === chain.self.ownerId || chain.ancestors.some((n) => n.ownerId === actor.id);
 }
 
 /**

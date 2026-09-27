@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { ProseMirrorNode } from '@knowledgecool/shared';
 
-import { TEXT_FOR_SEARCH_MAX_LENGTH, buildSnippet, extractPlainText } from './text-extract.js';
+import { TEXT_FOR_SEARCH_MAX_LENGTH, extractPlainText } from './text-extract.js';
 
 function doc(...content: ProseMirrorNode[]): ProseMirrorNode {
   return { type: 'doc', content: content.length === 0 ? [] : content };
@@ -118,27 +118,5 @@ describe('extractPlainText', () => {
   it('连续空白归一成一个空格(换行会让跨行短语搜不到)', () => {
     const text = extractPlainText(doc(para('前后    有     空格')));
     expect(text).toBe('前后 有 空格');
-  });
-});
-
-describe('buildSnippet', () => {
-  it('关键词在中间时两侧各留一段,并加省略号', () => {
-    const text = `${'甲'.repeat(100)}目标词${'乙'.repeat(100)}`;
-    const snippet = buildSnippet(text, '目标词', 10);
-    expect(snippet).toContain('目标词');
-    expect(snippet.startsWith('…')).toBe(true);
-    expect(snippet.endsWith('…')).toBe(true);
-  });
-
-  it('关键词在开头时不加前置省略号', () => {
-    expect(buildSnippet('目标词在后面还有一点内容', '目标词', 10).startsWith('…')).toBe(false);
-  });
-
-  it('未命中时退回开头一段,不返回空串', () => {
-    expect(buildSnippet('完全无关的内容', '不存在', 5)).toBe('完全无关的内容');
-  });
-
-  it('空文本返回空串', () => {
-    expect(buildSnippet('', 'x')).toBe('');
   });
 });

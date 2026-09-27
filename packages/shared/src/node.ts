@@ -17,6 +17,26 @@ export type NodeKind = (typeof NODE_KINDS)[number];
 export const NODE_STATUSES = ['draft', 'published', 'archived'] as const;
 export type NodeStatus = (typeof NODE_STATUSES)[number];
 
+/**
+ * 节点可见性(v2.12 新增)。
+ *
+ *   · `public`(默认)—— 所有登录用户都能读。与 v2.0 以来的行为完全一致,
+ *     所以这个字段是**加法**,不是改语义:存量节点一律 public,没人会突然看不见东西。
+ *   · `restricted` —— 只有「所有者链 + 读者名单 + 编辑被授权者」能读。
+ *     **整棵子树继承**,后代无法放开(见 schema 里的说明)。
+ */
+export const NODE_VISIBILITIES = ['public', 'restricted'] as const;
+export type NodeVisibility = (typeof NODE_VISIBILITIES)[number];
+
+export function isNodeVisibility(value: unknown): value is NodeVisibility {
+  return typeof value === 'string' && (NODE_VISIBILITIES as readonly string[]).includes(value);
+}
+
+/** 把库里读出的字符串收敛成合法可见性,未知值一律按 `public`。 */
+export function toNodeVisibility(value: string | null | undefined): NodeVisibility {
+  return isNodeVisibility(value) ? value : 'public';
+}
+
 export function isNodeKind(value: unknown): value is NodeKind {
   return typeof value === 'string' && (NODE_KINDS as readonly string[]).includes(value);
 }
@@ -47,6 +67,8 @@ export interface NodeSummary {
    * 结果是**拖拽静默落到错误位置**,而且不报错。
    */
   version: number;
+  /** 可见性(v2.12)。前端据此画锁形图标 —— 但**不是安全边界**,服务端才是。 */
+  visibility: NodeVisibility;
   /** 所有者 */
   ownerId: string;
   ownerName: string;
@@ -88,6 +110,8 @@ export interface NodeDetail {
   depth: number;
   /** 乐观锁:结构操作要带上,冲突返回 409 */
   version: number;
+  /** 可见性(v2.12)。restricted 时,未授权的人连请求都读不到(404)。 */
+  visibility: NodeVisibility;
   ownerId: string;
   ownerName: string;
   /** 所有者是否已离职 —— 前端在名字旁标注「已离职」(v2.2) */
@@ -116,6 +140,27 @@ export interface UpdateNodeInput {
   version: number;
 }
 
+/**
+ * 批量移动(v2.14)。
+ *
+ * ⚠️ 只做**移动**,不做批量删除。移动是可逆的,而删除 v2.12 起不可恢复 ——
+ * 批量删除的误操作代价与它的价值完全不成比例(要清一整块旧内容,删那个组就够了)。
+ */
+export interface BulkMoveNodesInput {
+  /** 要移动的节点。服务端会去重、限个数,并**逐个校验权限**。 */
+  nodeIds: string[];
+  /** 目标父节点。批量移动一律追加到它的末尾 */
+  newParentId: string;
+}
+
+export interface BulkMoveResult {
+  /** 实际移动了几个 */
+  moved: number;
+  newParentId: string;
+}
+
+/** 一次最多移动多少个。给的是"整理目录"的量级,不是"搬迁整棵树"。 */
+export const BULK_MOVE_MAX = 50;
 export interface MoveNodeInput {
   /** null = 移到一级 */
   newParentId: string | null;
@@ -127,42 +172,6 @@ export interface MoveNodeInput {
    */
   newPosition?: number;
   version: number;
-}
-
-/** 回收站条目。**只列被删子树的根** —— 子树整体恢复,逐条列没有意义。 */
-export interface TrashItem {
-  id: string;
-  title: string;
-  kind: NodeKind;
-  /** 被删子树里的节点总数(含自身)。前端显示「含 N 个子节点」 */
-  subtreeSize: number;
-  deletedAt: string;
-  deletedByName: string;
-  /** 原父节点还在不在树上 —— 决定恢复时会挂回原位还是挂到顶层 */
-  parentAlive: boolean;
-}
-
-/** 回收站保留策略 —— 界面用它告诉用户"东西会自己消失"(v2.4)。 */
-export interface TrashPolicy {
-  /** 保留天数。`0` 表示自动清理**已关闭** */
-  retentionDays: number;
-  /** 扫描间隔(小时)。`0` 表示关闭 */
-  purgeIntervalHours: number;
-}
-
-/**
- * 回收站保留策略的执行结果(v2.4)。
- *
- * 这条策略的背景:回收站此前**不会自己清理** —— 删掉的东西一直留着,
- * 这既吃磁盘,也让"回收站里那些陈年条目还能恢复吗"变成一个说不清的问题。
- */
-export interface TrashPurgeResult {
-  /** 当前生效的保留天数。`0` 表示自动清理**已关闭** */
-  retentionDays: number;
-  /** 本次(或将)被清理的子树根。`dryRun` 时就靠它预览 */
-  roots: { id: string; title: string; deletedAt: string; subtreeSize: number }[];
-  /** 实际删除的节点数。`dryRun` 时恒为 `0` */
-  purgedNodes: number;
 }
 
 /** 把树形打平后按父子关系重建 —— 前端消费用。 */

@@ -20,16 +20,17 @@ export const AUDIT_ACTIONS = [
   'node.create',
   'node.update',
   'node.move',
+  /** 批量移动(v2.14)—— 一次动多个,留痕时带上是哪几个 */
+  'node.bulkMove',
+  /** 删除节点 —— v2.12 起是**物理删除**,不可恢复(回收站已移除) */
   'node.delete',
-  'node.restore',
-  'node.purge',
-  /** 保留期到点后由定时任务清理回收站 —— `actor` 为空,是系统自己做的 */
-  'node.purge.auto',
   'node.content.update',
   /** 任命 / 变更所有者 —— 直接改变"谁能改什么",是最该留痕的一类 */
   'node.owner.update',
   // 授权
   'grant.replace',
+  /** 可见性 / 读者名单被改动(v2.13)—— 保密相关的变更必须留痕 */
+  'visibility.replace',
   // 组织架构
   'org.import',
   'org.user.create',
@@ -56,13 +57,12 @@ export const AUDIT_ACTION_LABELS: Readonly<Record<string, string>> = Object.free
   'node.create': '新建节点',
   'node.update': '修改节点',
   'node.move': '移动节点',
-  'node.delete': '移入回收站',
-  'node.restore': '从回收站恢复',
-  'node.purge': '彻底删除',
-  'node.purge.auto': '回收站过期自动清理',
+  'node.bulkMove': '批量移动节点',
+  'node.delete': '删除节点',
   'node.content.update': '保存正文',
   'node.owner.update': '变更所有者',
   'grant.replace': '调整授权名单',
+  'visibility.replace': '修改可见范围',
   'org.import': '导入组织架构',
   'org.user.create': '新建人员',
   'org.user.update': '修改人员',
@@ -98,3 +98,13 @@ export interface AuditLogPage {
 }
 
 export const AUDIT_PAGE_SIZE = 50;
+
+/**
+ * 导出上限(v2.14)。
+ *
+ * ⚠️ 这个上限不是「性能优化」,而是**防止一次导出把服务打挂**:
+ * 审计表只增不减,不加限制就是一次全表扫描加一个几百 MB 的响应。
+ * 超了要**明确告诉用户**只导出了最近多少条 —— 审计数据的静默截断
+ * 比没有导出更糟(他会以为这就是全部)。
+ */
+export const AUDIT_EXPORT_MAX_ROWS = 5000;

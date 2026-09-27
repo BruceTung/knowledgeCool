@@ -10,12 +10,17 @@ import type { AuditLogPage } from '@knowledgecool/shared';
 
 import { apiFetch } from '../../lib/api';
 
-export function useAuditLogs(enabled: boolean) {
+/**
+ * @param action 按动作筛选。**筛选键必须进 queryKey** ——
+ *   否则切换筛选条件时会命中上一次的缓存,用户看到的是"选了 A 却显示 B 的结果"。
+ */
+export function useAuditLogs(enabled: boolean, action = '') {
   return useInfiniteQuery({
-    queryKey: ['audit-logs'],
+    queryKey: ['audit-logs', action],
     queryFn: ({ pageParam }) =>
       apiFetch<AuditLogPage>(
-        `/audit-logs?limit=50${pageParam === null ? '' : `&cursor=${String(pageParam)}`}`,
+        `/audit-logs?limit=50${action === '' ? '' : `&action=${encodeURIComponent(action)}`}` +
+          (pageParam === null ? '' : `&cursor=${String(pageParam)}`),
       ),
     initialPageParam: null as string | null,
     // 游标分页:下一页的游标就是上一页最后一条的 id

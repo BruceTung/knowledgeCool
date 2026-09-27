@@ -1,7 +1,7 @@
 import { USER_STATUS_LABELS, type OrgUserView, type UserStatus } from '@knowledgecool/shared';
 import { useState } from 'react';
 
-import { Button, ErrorNote, SelectField, TextField } from '../components/ui';
+import { Button, ErrorNote, SelectField, Skeleton, TextField } from '../components/ui';
 import {
   useCreateUser,
   useOrgScopes,
@@ -12,6 +12,8 @@ import {
 } from '../features/admin/queries';
 import { describeReset } from '../features/admin/reset-note';
 import { useMe } from '../features/auth/queries';
+import { toast } from '../lib/toast-store';
+import { useDebounced } from '../lib/use-debounced';
 import { T_META } from '../lib/typography';
 
 /**
@@ -86,7 +88,7 @@ function AssignmentsEditor({ user }: { user: OrgUserView }) {
           </label>
         ))}
         {options.length === 0 && (
-          <p className="text-sm text-slate-400">还没有任何组织节点,先去「组织架构」建部门。</p>
+          <p className="text-sm text-slate-500">还没有任何组织节点,先去「组织架构」建部门。</p>
         )}
       </div>
 
@@ -108,6 +110,7 @@ function AssignmentsEditor({ user }: { user: OrgUserView }) {
               {
                 onSuccess: () => {
                   setDraft(null);
+                  toast(`已更新「${user.name}」的组织归属`, 'success');
                 },
               },
             );
@@ -115,7 +118,7 @@ function AssignmentsEditor({ user }: { user: OrgUserView }) {
         >
           保存归属
         </Button>
-        <span className="text-xs text-slate-400">已选 {selected.size} 条</span>
+        <span className="text-xs text-slate-500">已选 {selected.size} 条</span>
       </div>
       <ErrorNote error={save.error} />
     </div>
@@ -125,7 +128,8 @@ function AssignmentsEditor({ user }: { user: OrgUserView }) {
 export function UsersAdminPage() {
   const [query, setQuery] = useState('');
   const me = useMe();
-  const users = useOrgUsers(query);
+  // 防抖:此前每敲一个键就发一次名册请求(几百人的名单时很浪费)。
+  const users = useOrgUsers(useDebounced(query, 250));
   const createUser = useCreateUser();
   const updateUser = useUpdateUser();
   const resetPassword = useResetUserPassword();
@@ -205,7 +209,15 @@ export function UsersAdminPage() {
       {/* ---------------- 人员列表 ---------------- */}
       <section className="rounded-lg border border-slate-200 bg-white">
         <div className="flex items-center gap-3 border-b border-slate-200 px-4 py-3">
-          <h2 className="text-sm font-medium text-slate-900">人员 · {users.data?.length ?? 0}</h2>
+          <h2 className="text-sm font-medium text-slate-900">
+          人员 · {users.users.length}
+          {/* 显示总数,让"只看到一部分"这件事在界面上是显式的 */}
+          {users.total > users.users.length && (
+            <span className="ml-1 font-normal text-slate-500">
+              / 共 {users.total} 人
+            </span>
+          )}
+        </h2>
           <div className="flex-1" />
           <input
             value={query}
@@ -217,15 +229,20 @@ export function UsersAdminPage() {
           />
         </div>
 
-        {users.isPending && <p className="px-4 py-6 text-sm text-slate-400">加载中…</p>}
+        {users.isPending && <Skeleton className="px-4 py-6" lines={5} />}
         {users.isError && (
           <div className="px-4 py-3">
-            <ErrorNote error={users.error} />
+            <ErrorNote
+              error={users.error}
+              onRetry={() => {
+                void users.refetch?.();
+              }}
+            />
           </div>
         )}
 
         <ul className="divide-y divide-slate-100">
-          {(users.data ?? []).map((user) => (
+          {users.users.map((user) => (
             <li key={user.id} className="px-4 py-3">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="w-24 flex-none font-mono text-sm text-slate-500">
@@ -296,11 +313,11 @@ export function UsersAdminPage() {
                   )}
                 </span>
 
-                <span className="w-52 flex-none truncate text-sm text-slate-400">
+                <span className="w-52 flex-none truncate text-sm text-slate-500">
                   {user.scopePaths.length === 0 ? '未归属任何节点' : user.scopePaths.join('、')}
                 </span>
 
-                <span className="w-28 flex-none text-sm text-slate-400">
+                <span className="w-28 flex-none text-sm text-slate-500">
                   {user.lastLoginAt === null
                     ? '从未登录'
                     : `上次登录 ${new Date(user.lastLoginAt).toLocaleDateString('zh-CN')}`}
@@ -318,7 +335,43 @@ export function UsersAdminPage() {
                     aria-label="账号状态"
                     onChange={(event) => {
                       const status = event.target.value as UserStatus;
-                      updateUser.mutate({ userId: user.id, status });
+                      if (status === user.status) return;
+
+                      // ⚠️ 必须在这里问一句,而不是直接提交。
+                      // 选「已停用 / 已离职」会**立刻吊销他的全部会话** ——
+                      // 他正在写的文档当场保存失败(而且看起来像网络故障)。
+                      // 这是本页唯一一个不做确认的破坏性动作,而它还是个
+                      // 滚轮敏感的下拉框:在滚动页面时误触是很容易发生的。
+                      if (status !== 'active') {
+                        const ok = window.confirm(
+                          `把「${user.name}(${user.employeeNo})」改成「${USER_STATUS_LABELS[status]}」?\n\n` +
+                            '· 他的登录会话会**立刻失效**,正在编辑的内容会保存失败\n' +
+                            '· 他不能再登录\n' +
+                            (status === 'departed'
+                              ? '· 他创建的内容旁会显示「已离职」(历史记录不抹掉)\n'
+                              : '') +
+                            '\n想让他继续登录,请选「在职」。',
+                        );
+                        if (!ok) {
+                          // 受控 select 在"取消"后不会自己回退(没有 state 变化
+                          // 就没有重渲染),所以手工把它拨回去 ——
+                          // 否则界面会显示成一个并没有生效的状态。
+                          event.target.value = user.status;
+                          return;
+                        }
+                      }
+
+                      updateUser.mutate(
+                        { userId: user.id, status },
+                        {
+                          onSuccess: () => {
+                            toast(
+                              `已把「${user.name}」的状态改为「${USER_STATUS_LABELS[status]}」`,
+                              'success',
+                            );
+                          },
+                        },
+                      );
                     }}
                   >
                     {STATUS_OPTIONS.map((status) => (
@@ -350,7 +403,19 @@ export function UsersAdminPage() {
                       }
                       onClick={() => {
                         if (!window.confirm(describeReset(user))) return;
-                        resetPassword.mutate(user.id);
+                        resetPassword.mutate(user.id, {
+                          onSuccess: () => {
+                            // 用户的要求是「管理员重置密码以后直接弹出通知即可」。
+                            // 系统里没有通知中心(那是阶段二),所以这里由**管理员**
+                            // 收到一条明确回执 —— 并提醒他「要当面告诉本人」,
+                            // 因为被重置的人只会看到"下次登录要求改密"。
+                            toast(
+                              `已把「${user.name}」的密码重置为 123456,并踢掉了他所有会话。` +
+                                '他下次登录会先被要求设新密码 —— 请把这件事当面告知他。',
+                              'success',
+                            );
+                          },
+                        });
                       }}
                     >
                       重置密码
@@ -373,10 +438,31 @@ export function UsersAdminPage() {
           ))}
         </ul>
 
-        {users.data?.length === 0 && (
-          <p className="px-4 py-8 text-center text-sm text-slate-400">
+        {users.users.length === 0 && !users.isPending && (
+          <p className="px-4 py-8 text-center text-sm text-slate-500">
             没有匹配的人员。
           </p>
+        )}
+
+        {/*
+          「加载更多」而不是页码。名单按工号升序,而分页是游标式的
+          (服务端用 employeeNo > cursor) —— 页码会让人以为可以跳到任意位置,
+          而游标分页不保证那个位置仍然存在(期间有人新建账号)。
+        */}
+        {users.hasMore && (
+          <div className="border-t border-slate-100 px-4 py-3 text-center">
+            <Button
+              variant="secondary"
+              disabled={users.isFetchingNextPage}
+              onClick={() => {
+                users.loadMore();
+              }}
+            >
+              {users.isFetchingNextPage
+                ? '加载中…'
+                : `加载更多(还有 ${String(users.total - users.users.length)} 人)`}
+            </Button>
+          </div>
         )}
       </section>
 

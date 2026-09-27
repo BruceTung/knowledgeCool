@@ -19,7 +19,8 @@ import { buildTree } from '../features/org/tree-utils';
  */
 export function OrgAdminPage() {
   const scopes = useOrgScopes();
-  const users = useOrgUsers('');
+  // 下拉选择器一次要尽可能全的名单(它没法翻页),所以显式要上限 500
+  const users = useOrgUsers('', 500);
   const tree = useOrgTree();
   const createNode = useCreateOrgNode();
 
@@ -29,7 +30,7 @@ export function OrgAdminPage() {
   const [groupParent, setGroupParent] = useState('');
   const [groupOwner, setGroupOwner] = useState('');
 
-  const activeUsers = (users.data ?? []).filter((user) => user.status === 'active');
+  const activeUsers = users.users.filter((user) => user.status === 'active');
 
   return (
     <div className="mx-auto max-w-3xl space-y-8 px-8 py-8">
@@ -47,6 +48,17 @@ export function OrgAdminPage() {
         <p className="mt-1 text-sm text-slate-500">
           部门必须有一个负责人(部长),否则这个部门没人能管。负责人必须是<b>在职</b>账号。
         </p>
+        {/*
+          下拉里的名单若被截断,**必须说出来**。静默少人时管理员会得出
+          "这个人不在系统里"的结论,然后去重复建号 —— 而工号是唯一的,他会撞库。
+        */}
+        {users.truncated && (
+          <p className="mt-2 rounded-md bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">
+            下拉里只列出了前 {users.users.length} 位在职账号(共 {users.total} 位)。
+            人数超过 500 时请到「人员管理」页按姓名或工号搜索。
+          </p>
+        )}
+
         <div className="mt-3 flex flex-wrap items-end gap-2">
           <div className="min-w-[180px] flex-1">
             <TextField
@@ -175,7 +187,7 @@ export function OrgAdminPage() {
       {/* ---------------- 现有结构 ---------------- */}
       <section className="rounded-lg border border-slate-200 bg-white p-4">
         <h2 className="text-sm font-medium text-slate-900">现有结构</h2>
-        {tree.isPending && <p className="mt-2 text-sm text-slate-400">加载中…</p>}
+        {tree.isPending && <p className="mt-2 text-sm text-slate-500">加载中…</p>}
         {tree.data !== undefined && (
           <ul className="mt-2 space-y-1">
             {buildTree(tree.data.nodes).map((department) => (
@@ -184,7 +196,7 @@ export function OrgAdminPage() {
                   <Link to={`/n/${department.id}`} className="text-slate-900 hover:underline">
                     {department.title}
                   </Link>
-                  <span className="text-xs text-slate-400">
+                  <span className="text-xs text-slate-500">
                     部长 {department.ownerName} · {department.children.length} 个子节点
                   </span>
                 </div>
@@ -206,7 +218,7 @@ export function OrgAdminPage() {
                         <Link to={`/n/${child.id}`} className="text-slate-600 hover:underline">
                           {child.title}
                         </Link>
-                        <span className="text-xs text-slate-400">
+                        <span className="text-xs text-slate-500">
                           {child.kind === 'space' ? '组长' : '所有者'} {child.ownerName}
                         </span>
                       </li>
@@ -218,7 +230,7 @@ export function OrgAdminPage() {
           </ul>
         )}
         {tree.data?.nodes.length === 0 && (
-          <p className="mt-2 text-sm text-slate-400">
+          <p className="mt-2 text-sm text-slate-500">
             还没有任何部门。可以手工建,也可以用下面的 Excel 一次导入。
           </p>
         )}

@@ -3,8 +3,6 @@ import {
   Controller,
   Delete,
   Get,
-  HttpCode,
-  HttpStatus,
   Param,
   ParseUUIDPipe,
   Patch,
@@ -13,24 +11,24 @@ import {
   Query,
   Res,
 } from '@nestjs/common';
-import type {
-  AuthUser,
-  NodeContentResponse,
-  NodeDetail,
-  NodeTreeResponse,
-  TrashItem,
-  TrashPolicy,
-  TrashPurgeResult,
+import {
+  EXPORT_FORMATS,
+  type AuthUser,
+  type NodeContentResponse,
+  type NodeDetail,
+  type NodeTreeResponse,
+  isExportFormat,
+  type BulkMoveResult,
 } from '@knowledgecool/shared';
 import type { Response } from 'express';
 
 import { CurrentUser } from '../auth/current-user.decorator.js';
 import { AppError } from '../common/errors/app-error.js';
 import { ContentService } from './content.service.js';
+import { BulkMoveDto } from './dto/bulk-move.dto.js';
 import { CreateNodeDto, MoveNodeDto, UpdateNodeDto } from './dto/node.dto.js';
 import { SaveContentDto } from './dto/save-content.dto.js';
 import { NodeService } from './node.service.js';
-import { RetentionService } from './retention.service.js';
 
 /**
  * 节点接口(空间与页面合并后的统一资源)。
@@ -38,18 +36,19 @@ import { RetentionService } from './retention.service.js';
  * v2.0 的三处路由变化:
  *   - `/spaces/:id/pages`(整树) → **`/org/tree`**(全公司一棵树,不再按空间分)
  *   - `/pages/:id` → `/nodes/:id`
- *   - `/spaces/:id/trash` → **`/trash`**(回收站列"我所有能改的",天然跨部门)
  *
- * ⚠️ `GET trash` 必须注册在 `nodes/:nodeId` **之前**?—— 不必,路径前缀不同
- * (`trash` vs `nodes/...`),不会撞。但 `nodes/:nodeId` 与 `nodes/:nodeId/content`
- * 的先后是有意义的:Nest 按注册顺序匹配,更具体的路径要放前面。
+ * ⚠️ `nodes/:nodeId` 与 `nodes/:nodeId/content` 的先后是有意义的:
+ * Nest 按注册顺序匹配,更具体的路径要放前面。
+ *
+ * ⚠️ v2.12 起回收站整体移除:没有 `GET /trash`、`GET /trash/policy`、
+ * `POST /admin/maintenance/trash-purge`、`POST /nodes/:id/restore`、
+ * `DELETE /nodes/:id/purge`。`DELETE /nodes/:id` 现在是**物理删除**。
  */
 @Controller()
 export class NodeController {
   constructor(
     private readonly nodes: NodeService,
     private readonly contents: ContentService,
-    private readonly retention: RetentionService,
   ) {}
 
   /**
@@ -60,7 +59,7 @@ export class NodeController {
    *
    * `?root=<nodeId>` 只返回那棵子树(v2.4)。留这个口子是因为"全员开放读 +
    * 一棵大树"在公司到几千人时会很大 —— 但**不要把接口做成只能返回全部**,
-   * 否则将来改成按需加载要动接口形状(§11.3)。根不存在或已删 → 404。
+   * 否则将来改成按需加载要动接口形状(§11.3)。根不存在 → 404。
    */
   @Get('org/tree')
   tree(
@@ -70,53 +69,17 @@ export class NodeController {
     return this.nodes.tree(user, root);
   }
 
-  /**
-   * 回收站保留策略(只读,登录即可)。
-   *
-   * ⚠️ 必须注册在 `trash` **之前**?—— 不必:两者是精确路径,`trash` 不会
-   * 匹配 `trash/policy`。但放在前面读起来更顺(更具体的先写)。
-   */
-  @Get('trash/policy')
-  trashPolicy(): TrashPolicy {
-    return this.retention.policy();
-  }
-
-  /** 回收站:只列我 `canEdit` 的已删子树根。 */
-  @Get('trash')
-  trash(@CurrentUser() user: AuthUser): Promise<TrashItem[]> {
-    return this.nodes.trash(user);
-  }
-
-  /**
-   * 按保留策略清理回收站(v2.4)。**超管**。
-   *
-   * 平时由 `RetentionService` 定时自动跑;这条是给运维的显式入口 ——
-   * 首次上线时清掉历史积压、或临时调整保留天数之后立刻生效。
-   *
-   * `?dryRun=true` 只列不删:一个会删数据的任务必须能先空跑一次。
-   */
-  @Post('admin/maintenance/trash-purge')
-  @HttpCode(HttpStatus.OK)
-  trashPurge(
-    @CurrentUser() user: AuthUser,
-    @Query('dryRun') dryRun?: string,
-  ): Promise<TrashPurgeResult> {
-    // ⚠️ 权限判断放在最前 —— 不要等解析完参数再说(§9.3 踩过:顺序错了
-    // 会让"参数不对"的 400 先于 403 返回,等于确认了这个接口存在)。
-    if (!user.isSuperAdmin) {
-      throw AppError.forbidden('只有管理员能手动清理回收站');
-    }
-    return this.retention.run({ dryRun: dryRun === 'true' });
-  }
-
   @Post('nodes')
   create(@CurrentUser() user: AuthUser, @Body() body: CreateNodeDto): Promise<NodeDetail> {
     return this.nodes.create(user, body);
   }
 
   @Get('nodes/:nodeId/content')
-  getContent(@Param('nodeId', ParseUUIDPipe) nodeId: string): Promise<NodeContentResponse> {
-    return this.contents.get(nodeId);
+  getContent(
+    @CurrentUser() user: AuthUser,
+    @Param('nodeId', ParseUUIDPipe) nodeId: string,
+  ): Promise<NodeContentResponse> {
+    return this.contents.get(user, nodeId);
   }
 
   @Put('nodes/:nodeId/content')
@@ -128,13 +91,30 @@ export class NodeController {
     return this.contents.save(user, nodeId, body);
   }
 
-  /** 导出 Markdown。以 `text/markdown` 直接下载,不经 JSON 包装。 */
+  /**
+   * 导出。以 `text/markdown` 直接下载,不经 JSON 包装。
+   *
+   * `?format=` 只支持 `md`(省略也行);**其它值一律 400**。
+   * v2.12 之前这个参数被完全忽略:传 `?format=pdf` 会静默返回一份 Markdown,
+   * 调用方以为拿到了 PDF。**契约里写了参数却不去读它,比没有这个参数更坏。**
+   *
+   * PDF 的路线已经定了:**前端打印样式 + `window.print()`**,不在服务端渲染 ——
+   * 无头 Chrome 会给镜像加 300~400MB,与构建机的内存上限冲突(见 DESIGN §2.1)。
+   */
   @Get('nodes/:nodeId/export')
   async exportMarkdown(
+    @CurrentUser() user: AuthUser,
     @Param('nodeId', ParseUUIDPipe) nodeId: string,
+    @Query('format') format: string | undefined,
     @Res() res: Response,
   ): Promise<void> {
-    const result = await this.contents.exportMarkdown(nodeId);
+    if (format !== undefined && !isExportFormat(format)) {
+      throw AppError.validation(
+        `暂不支持导出为 ${format},目前只支持 ${EXPORT_FORMATS.join(' / ')}`,
+      );
+    }
+
+    const result = await this.contents.exportMarkdown(user, nodeId);
     // 中文标题要走 RFC 5987 的 filename*,否则下载下来是乱码文件名
     const filename = encodeURIComponent(`${result.title}.md`);
     res
@@ -160,6 +140,24 @@ export class NodeController {
     return this.nodes.update(user, nodeId, body);
   }
 
+  /**
+   * 批量移动(v2.14)。
+   *
+   * ⚠️ 路径是 `nodes/bulk/move` 而**不是** `nodes/bulk-move`,而且必须注册在
+   * `nodes/:nodeId/...` **之前**:Express 按注册顺序匹配,`bulk` 会被当成一个 nodeId,
+   * 然后被 ParseUUIDPipe 以 400 拒掉 —— 表现是这条接口"不管怎么调都说参数不对"。
+   *
+   * ⚠️ 只做移动,不做批量删除。移动可逆,删除不可恢复 ——
+   * 两者的风险差一个量级,不该共用一个入口。
+   */
+  @Post('nodes/bulk/move')
+  bulkMove(
+    @CurrentUser() user: AuthUser,
+    @Body() body: BulkMoveDto,
+  ): Promise<BulkMoveResult> {
+    return this.nodes.bulkMove(user, body);
+  }
+
   /** 拖拽排序与改父级是同一个操作。 */
   @Post('nodes/:nodeId/move')
   move(
@@ -170,35 +168,17 @@ export class NodeController {
     return this.nodes.move(user, nodeId, body);
   }
 
-  /** 软删除:整棵子树进回收站。 */
+  /**
+   * 删除节点 —— **整棵子树物理删除,不可恢复**(v2.12)。
+   *
+   * 门槛是 `canManage`(该节点或祖先链的所有者)而非 `canEdit` ——
+   * 被授权者能改,但不能销毁。删除不可逆之后,这条边界必须守住。
+   */
   @Delete('nodes/:nodeId')
   remove(
     @CurrentUser() user: AuthUser,
     @Param('nodeId', ParseUUIDPipe) nodeId: string,
   ): Promise<{ removedCount: number }> {
     return this.nodes.remove(user, nodeId);
-  }
-
-  @Post('nodes/:nodeId/restore')
-  restore(
-    @CurrentUser() user: AuthUser,
-    @Param('nodeId', ParseUUIDPipe) nodeId: string,
-  ): Promise<NodeDetail> {
-    return this.nodes.restore(user, nodeId);
-  }
-
-  /**
-   * 彻底删除。**不可逆**,且只允许作用于回收站里的节点。
-   *
-   * 门槛是 `canManage`(祖先链所有者)而非 `canEdit` ——
-   * 被授权者能改能软删(可恢复),但不能彻底销毁(§5.4)。
-   */
-  @Delete('nodes/:nodeId/purge')
-  @HttpCode(HttpStatus.NO_CONTENT)
-  purge(
-    @CurrentUser() user: AuthUser,
-    @Param('nodeId', ParseUUIDPipe) nodeId: string,
-  ): Promise<void> {
-    return this.nodes.purge(user, nodeId);
   }
 }

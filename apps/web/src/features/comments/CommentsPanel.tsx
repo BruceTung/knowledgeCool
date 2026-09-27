@@ -17,7 +17,7 @@ export function CommentsPanel({ nodeId }: { nodeId: string }) {
   const [draft, setDraft] = useState('');
   const [replyTo, setReplyTo] = useState<string | null>(null);
 
-  if (comments.isPending) return <p className="p-4 text-sm text-slate-400">加载评论…</p>;
+  if (comments.isPending) return <p className="p-4 text-sm text-slate-500">加载评论…</p>;
   if (comments.isError) {
     return (
       <div className="p-4">
@@ -46,7 +46,7 @@ export function CommentsPanel({ nodeId }: { nodeId: string }) {
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="min-h-0 flex-1 overflow-auto px-4 py-3">
         {data.threads.length === 0 ? (
-          <p className="px-4 py-8 text-center text-sm leading-relaxed text-slate-400">
+          <p className="px-4 py-8 text-center text-sm leading-relaxed text-slate-500">
             还没有评论。评论区用来讨论这一页的内容。
           </p>
         ) : (
@@ -101,7 +101,7 @@ export function CommentsPanel({ nodeId }: { nodeId: string }) {
             className={`w-full resize-none rounded-md border border-slate-300 px-2 py-1.5 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 ${T_BODY}`}
           />
           <div className="mt-2 flex items-center justify-between">
-            <span className={`text-slate-400 ${T_META}`}>
+            <span className={`text-slate-500 ${T_META}`}>
               {draft.length}/{COMMENT_BODY_MAX_LENGTH}
             </span>
             <Button disabled={create.isPending || draft.trim() === ''} onClick={submit}>
@@ -152,7 +152,7 @@ function CommentCard({
             已离职
           </span>
         )}
-        <span className={`ml-auto text-slate-400 ${T_META}`}>
+        <span className={`ml-auto text-slate-500 ${T_META}`}>
           {new Date(comment.createdAt).toLocaleString('zh-CN')}
         </span>
       </div>

@@ -22,6 +22,7 @@ import {
   type NodeMembersResponse,
   type NodeMemberView,
   type OrgScopeOption,
+  type OrgUserListResponse,
   type OrgUserView,
   type SetUserAssignmentsInput,
   type UpdateUserInput,
@@ -55,8 +56,18 @@ const USER_VIEW_SELECT = {
 
 type UserViewRow = Prisma.UserGetPayload<{ select: typeof USER_VIEW_SELECT }>;
 
-/** 一页最多返回多少人。组织架构页是"翻着看"的场景,不是无限滚动。 */
-const USER_PAGE_SIZE = 200;
+/**
+ * 人员列表的分页参数。
+ *
+ * 默认 50 是给管理表格用的(一屏大约看得到这么多);
+ * 上限 500 是给**下拉选择器**用的 —— 「任命负责人」那个下拉需要尽可能全的名单,
+ * 它没法翻页。超过 500 人的组织会看到明确的截断提示,而不是静默少人。
+ *
+ * ⚠️ 游标是 `employeeNo`(唯一且有升序索引)。不用 offset:按工号排序时,
+ * offset 分页在有人新建账号之后会**跳过或重复**记录。
+ */
+const USER_DEFAULT_PAGE_SIZE = 50;
+const USER_MAX_PAGE_SIZE = 500;
 
 @Injectable()
 export class OrgService {
@@ -82,30 +93,58 @@ export class OrgService {
    * `GET /nodes/:id/members`(v2.4,读全员开放)。公开的是**组织归属**,
    * 不是账号状态与登录时间。
    */
-  async listUsers(operator: Actor, query?: string): Promise<OrgUserView[]> {
+  async listUsers(
+    operator: Actor,
+    query?: string,
+    cursor?: string,
+    limit?: number,
+  ): Promise<OrgUserListResponse> {
     this.requireSuperAdmin(operator);
 
     const keyword = query?.trim();
+    const size = Math.min(Math.max(Math.trunc(limit ?? USER_DEFAULT_PAGE_SIZE), 1), USER_MAX_PAGE_SIZE);
 
-    const rows = await this.prisma.user.findMany({
-      where:
-        keyword === undefined || keyword === ''
-          ? {}
-          : {
-              OR: [
-                { employeeNo: { contains: keyword, mode: 'insensitive' } },
-                { name: { contains: keyword, mode: 'insensitive' } },
-              ],
-            },
-      select: {
-        ...USER_VIEW_SELECT,
-        assignments: { select: { node: { select: { id: true, materializedPath: true } } } },
-      },
-      orderBy: [{ employeeNo: 'asc' }],
-      take: USER_PAGE_SIZE,
-    });
+    const filter: Prisma.UserWhereInput =
+      keyword === undefined || keyword === ''
+        ? {}
+        : {
+            OR: [
+              { employeeNo: { contains: keyword, mode: 'insensitive' } },
+              { name: { contains: keyword, mode: 'insensitive' } },
+            ],
+          };
 
-    return this.toViews(rows);
+    // 游标与搜索条件必须用 AND 组合。写成"有游标就覆盖掉 where"会让
+    // 第二页悄悄丢掉搜索条件 —— 于是搜索"张"之后翻页,出现的是一整页无关的人。
+    const pageWhere: Prisma.UserWhereInput =
+      cursor === undefined || cursor === ''
+        ? filter
+        : { AND: [filter, { employeeNo: { gt: cursor } }] };
+
+    const [rows, total] = await Promise.all([
+      this.prisma.user.findMany({
+        where: pageWhere,
+        select: {
+          ...USER_VIEW_SELECT,
+          assignments: { select: { node: { select: { id: true, materializedPath: true } } } },
+        },
+        orderBy: [{ employeeNo: 'asc' }],
+        // 多取一条:它的存在就说明还有下一页。比再发一次 count 便宜。
+        take: size + 1,
+      }),
+      this.prisma.user.count({ where: filter }),
+    ]);
+
+    const hasMore = rows.length > size;
+    const page = hasMore ? rows.slice(0, size) : rows;
+
+    return {
+      // toViews 是异步的(它要解析归属路径)。忘了 await 的话返回的是
+      // 一个 Promise 被塞进数组字段 —— 而 TS 只会在两边类型都对不上时才报错。
+      users: await this.toViews(page),
+      total,
+      nextCursor: hasMore ? (page.at(-1)?.employeeNo ?? null) : null,
+    };
   }
 
   /**
@@ -286,13 +325,13 @@ export class OrgService {
     const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { id: true } });
     if (user === null) throw AppError.notFound();
 
-    // 校验节点都存在且未删除 —— 归属指向一个已删节点会让"组织范围"算错
+    // 校验节点都存在 —— 归属指向一个不存在的节点会让"组织范围"算错
     if (input.nodeIds.length > 0) {
       const found = await this.prisma.node.count({
-        where: { id: { in: input.nodeIds }, deletedAt: null },
+        where: { id: { in: input.nodeIds } },
       });
       if (found !== new Set(input.nodeIds).size) {
-        throw AppError.validation('归属目标里有不存在或已删除的节点');
+        throw AppError.validation('归属目标里有不存在的节点');
       }
     }
 
@@ -340,9 +379,9 @@ export class OrgService {
     if (input.parentId !== null) {
       const parent = await this.prisma.node.findUnique({
         where: { id: input.parentId },
-        select: { materializedPath: true, depth: true, deletedAt: true },
+        select: { materializedPath: true, depth: true },
       });
-      if (parent === null || parent.deletedAt !== null) throw AppError.notFound();
+      if (parent === null) throw AppError.notFound();
       parentPath = parent.materializedPath;
       depth = parent.depth + 1;
     }
@@ -355,7 +394,7 @@ export class OrgService {
 
     const row = await this.prisma.$transaction(async (tx) => {
       const last = await tx.node.findFirst({
-        where: { parentId: input.parentId, deletedAt: null },
+        where: { parentId: input.parentId },
         orderBy: { position: 'desc' },
         select: { position: true },
       });
@@ -678,7 +717,7 @@ export class OrgService {
   /** 组织范围下拉用:一级 / 二级节点的路径 + 该范围内的人数。 */
   async scopeOptions(): Promise<OrgScopeOption[]> {
     const nodes = await this.prisma.node.findMany({
-      where: { deletedAt: null, depth: { lte: 1 } },
+      where: { depth: { lte: 1 } },
       select: { id: true, title: true, depth: true, materializedPath: true },
       orderBy: [{ depth: 'asc' }, { position: 'asc' }],
     });

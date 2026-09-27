@@ -41,10 +41,18 @@ const FORBIDDEN_TABLES = [
   'page_contents',
 ];
 
+/**
+ * v2.12 起**必须不存在**的结构 —— 回收站被整体移除了。
+ *
+ * 留着列或索引意味着有人把软删除改回来了,而那种回退是**静默的**:
+ * 代码里会重新出现 deleted_at 过滤,但没有任何地方会报错。
+ */
+const FORBIDDEN_INDEXES = ['nodes_alive_idx'];
+const FORBIDDEN_NODE_COLUMNS = ['deleted_at', 'deleted_by'];
+
 const REQUIRED_INDEXES = [
   'nodes_tree_idx',
   'nodes_path_idx',
-  'nodes_alive_idx',
   'nodes_owner_idx',
   'org_assignments_node_idx',
   'node_contents_trgm_idx',
@@ -109,9 +117,18 @@ async function main() {
   if (!pathDef.includes('text_pattern_ops')) {
     failures.push('nodes_path_idx 未使用 text_pattern_ops,子孙前缀查询会退化成全表扫描');
   }
-  const aliveDef = await indexDef('nodes_alive_idx');
-  if (!/where/i.test(aliveDef)) {
-    failures.push('nodes_alive_idx 不是部分索引(缺少 WHERE deleted_at IS NULL)');
+  for (const name of FORBIDDEN_INDEXES) {
+    if (indexes.includes(name)) {
+      failures.push(`索引 ${name} 属于已移除的回收站(v2.12),不应当存在`);
+    }
+  }
+  const nodeColumns = await column(
+    "select column_name from information_schema.columns where table_name = 'nodes'",
+  );
+  for (const name of FORBIDDEN_NODE_COLUMNS) {
+    if (nodeColumns.includes(name)) {
+      failures.push(`nodes.${name} 属于已移除的回收站(v2.12),不应当存在`);
+    }
   }
   const trgmDef = await indexDef('node_contents_trgm_idx');
   if (!trgmDef.includes('gin_trgm_ops')) {

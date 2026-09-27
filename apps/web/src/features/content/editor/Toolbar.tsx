@@ -13,6 +13,7 @@
  * 而不是铺一排按钮。
  */
 import type { Editor } from '@tiptap/core';
+import { MAX_IMAGES_PER_NODE } from '@knowledgecool/shared';
 import type { MouseEvent } from 'react';
 
 import { CodeLanguageSelect } from './CodeLanguageSelect';
@@ -39,11 +40,15 @@ export function EditorToolbar({
   editor,
   onPickImage,
   imageUploading,
+  imageCount,
 }: {
   editor: Editor;
   onPickImage: () => void;
   imageUploading: boolean;
+  /** 当前页面已有的图片张数 —— 用来在到达上限时**禁用并说明原因**。 */
+  imageCount: number;
 }) {
+  const imagesFull = imageCount >= MAX_IMAGES_PER_NODE;
   /**
    * ⚠️ 用 `onMouseDown` 而不是 `onClick`,并且 `preventDefault()`。
    * 点按钮会先把焦点从编辑器抢走,选区随之丢失 ——
@@ -69,7 +74,10 @@ export function EditorToolbar({
   const triggerClass = `${TOOL_BUTTON_CLASS} ${TOOL_BUTTON_IDLE_CLASS}`;
 
   return (
-    <div className="flex flex-wrap items-center gap-0.5 border-b border-slate-200 px-8 py-2">
+    <div
+      data-print="hide"
+      className="flex flex-wrap items-center gap-0.5 border-b border-slate-200 px-8 py-2"
+    >
       {button('B', editor.isActive('bold'), () => editor.chain().focus().toggleBold().run(), '粗体')}
       {button('I', editor.isActive('italic'), () => editor.chain().focus().toggleItalic().run(), '斜体')}
       {button('U', editor.isActive('underline'), () => editor.chain().focus().toggleUnderline().run(), '下划线')}
@@ -114,14 +122,24 @@ export function EditorToolbar({
         active={editor.isActive('link')}
       />
 
+      {/*
+        ⚠️ 到达上限时**先禁用**,而不是等他选完文件、等一次上传之后再拒绝。
+        点了才被拒的体验更差 —— 那时用户已经付出了一次等待。
+        剩余额度写在 title 里而不是按钮文字上:正文列只有 400 多 px,
+        v2.8 已经因为按钮文字过长折过行。
+      */}
       <button
         type="button"
-        title="插入图片"
-        disabled={imageUploading}
+        title={
+          imagesFull
+            ? `一个页面最多 ${String(MAX_IMAGES_PER_NODE)} 张图片,已经放满`
+            : `插入图片(还能放 ${String(MAX_IMAGES_PER_NODE - imageCount)} 张)`
+        }
+        disabled={imageUploading || imagesFull}
         onMouseDown={guard(onPickImage)}
-        className={`${TOOL_BUTTON_CLASS} ${TOOL_BUTTON_IDLE_CLASS} disabled:opacity-50`}
+        className={`${TOOL_BUTTON_CLASS} ${TOOL_BUTTON_IDLE_CLASS} disabled:cursor-not-allowed disabled:opacity-50`}
       >
-        {imageUploading ? '上传中…' : '图片'}
+        {imageUploading ? '上传中…' : imagesFull ? '图片已满' : '图片'}
       </button>
 
       <TableMenu editor={editor} triggerClass={triggerClass} />

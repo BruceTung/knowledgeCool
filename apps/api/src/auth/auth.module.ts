@@ -4,6 +4,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { AuthController } from './auth.controller.js';
 import { AuthGuard } from './auth.guard.js';
 import { AuthService } from './auth.service.js';
+import { LoginThrottleService } from './login-throttle.js';
 import { PasswordService } from './password.service.js';
 import { SessionService } from './session.service.js';
 
@@ -29,6 +30,7 @@ import { SessionService } from './session.service.js';
     AuthService,
     PasswordService,
     SessionService,
+    LoginThrottleService,
     { provide: APP_GUARD, useClass: AuthGuard },
   ],
   exports: [AuthService, SessionService, PasswordService],

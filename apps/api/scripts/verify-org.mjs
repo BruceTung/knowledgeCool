@@ -109,7 +109,13 @@ async function api(method, path, body, options = {}) {
   });
   syncCookie(response);
 
-  const text = await response.text();
+  // ⚠️ 先取**字节**再自己解码,不能用 `response.text()` ——
+  // `Response.text()` 按 WHATWG 规范会**吃掉开头的 BOM**(它用默认的 UTF-8 解码,
+  // 而 TextDecoder 默认忽略 BOM)。于是"导出带不带 BOM"这条断言
+  // 在 `text()` 上**永远为假**,尽管字节流里 BOM 明明在(实测 `ef bb bf`)。
+  // `Buffer.toString("utf8")` 不会吃 BOM,所以 `text` 与 `bytes` 都保留。
+  const bytes = Buffer.from(await response.arrayBuffer());
+  const text = bytes.toString('utf8');
   let json;
   try {
     json = text === '' ? null : JSON.parse(text);
@@ -119,7 +125,13 @@ async function api(method, path, body, options = {}) {
   // `setCookie` 单独给出来:有一条断言必须看**响应头**才知道结果 ——
   // "首次登录不下发会话 Cookie"。只看 `cookie` 变量是看不出来的
   // (它会在没有新 Cookie 时保留上一次的值)。
-  return { status: response.status, body: json, text, setCookie: response.headers.getSetCookie?.() ?? [] };
+  return {
+    status: response.status,
+    body: json,
+    text,
+    bytes,
+    setCookie: response.headers.getSetCookie?.() ?? [],
+  };
 }
 
 /** 响应里是否下发了会话 Cookie。 */
@@ -136,9 +148,56 @@ function issuedSession(response) {
  *
  * 顺带把"首登改密"这条链路每次都验一遍。
  */
+/**
+ * 每个账号**已经试成功过的密码**。
+ *
+ * ⚠️ 这不是优化,是**正确性修复**。原来每次登录都从头遍历候选密码,
+ * 而错的那几次会被 v2.12 的登录限流记成失败 —— 5 次就锁 15 分钟。
+ * 后果:脚本跑到后半段时 KC004 已经被自己锁住,于是「名单里的人读得到」
+ * 这类断言拿到的是 429/401,却被当成 404 记成失败。
+ * **真机部署时就是这么误报的:7 条"失败"全部来自脚本自己,没有一条是产品缺陷。**
+ */
+const knownPassword = new Map();
+
+/**
+ * 登录。**登不上就抛错**,绝不"悄悄继续用上一个人的会话"。
+ *
+ * ⚠️⚠️ 这是 v2.12 真机验收时挖出来的一个**很危险的**脚本缺陷:
+ * 原来登不上时只 `return false`,而**52 个调用点里只有 4 个看了返回值** ——
+ * 于是其余 48 处会带着**上一步那个人的会话来发请求**。
+ *
+ * 实际后果:脚本想以「无关的人 KC004」去改可见范围,但 KC004 那次没登上,
+ * 请求就带着**上一步 KC005(市场部所有者)的会话**发出去了 → 服务端返回 200,
+ * 断言报「★ 无关的人改可见范围 → 200」—— **看起来像一次越权漏洞**。
+ * 实际是脚本自己在冒充另一个人。这类假阳性比漏测更坏:
+ * 它会让人去"修"一个根本不存在的安全问题,而真正的缺陷仍留在原处。
+ *
+ * 所以:每次登录**先把 cookie 清空**,登不上直接抛错。
+ */
 async function login(employeeNo, candidates) {
-  for (const password of candidates) {
+  // 试过的顺序要保住,但**已经知道对的那个排最前** —— 正常路径上就只有 1 次尝试
+  const known = knownPassword.get(employeeNo);
+  const ordered =
+    known === undefined ? [...candidates] : [known, ...candidates.filter((c) => c !== known)];
+
+  // 先清空:哪怕这次登不上,也绝不会把上一个人的会话带进下一步
+  cookie = '';
+
+  for (const password of ordered) {
     const attempt = await api('POST', '/auth/login', { employeeNo, password });
+
+    // 429 = 被限流锁住了。**必须立刻说清楚**,不能继续往下走 ——
+    // 否则后面每一条断言都会拿到 401/404,然后被报成"功能坏了"。
+    if (attempt.status === 429) {
+      const wait = String(attempt.body?.retryAfterSeconds ?? "?");
+      throw new Error(
+        `${employeeNo} 被登录限流锁住了(HTTP 429,还需约 ${wait} 秒)。` +
+          "这不是功能缺陷,是 v2.12 的登录限流在生效。等它过期,或清掉计数:" +
+          "  compose exec redis redis-cli --scan --pattern kc:login:*(逐个 del);" +
+          "  也可以把 LOGIN_MAX_ATTEMPTS 设为 0 来关掉账号锁(IP 门仍生效)。",
+      );
+    }
+
     if (attempt.status !== 200 && attempt.status !== 201) continue;
 
     if (attempt.body?.kind === 'password-change-required') {
@@ -157,13 +216,34 @@ async function login(employeeNo, candidates) {
           `${employeeNo} 改密之后重新登录失败:HTTP ${String(again.status)} ${JSON.stringify(again.body)}`,
         );
       }
+      knownPassword.set(employeeNo, SEED_PASSWORD);
       console.log(`  · ${employeeNo} 用初始密码登录 → 被要求先改密,改完重新登录(顺带验过这条链路)`);
       return true;
     }
 
+    knownPassword.set(employeeNo, password);
     return true;
   }
-  return false;
+
+  throw new Error(
+    `${employeeNo} 登录失败:候选密码一个都不对(${candidates.join(" / ")})。` +
+      "继续跑下去会带着**上一个人的会话**发请求,那比直接失败更坏,所以这里中止。" +
+      "如果这个账号的密码不在候选里,把它加进调用处的候选列表。",
+  );
+}
+
+/**
+ * 只在"这个账号现在能不能登"本身是被测对象时用 —— 登不上返回 false,**不抛**。
+ * 它会清空 cookie,所以调用方之后必须重新登录才能继续发请求。
+ */
+async function tryLogin(employeeNo, candidates) {
+  try {
+    await login(employeeNo, candidates);
+    return true;
+  } catch {
+    cookie = '';
+    return false;
+  }
 }
 
 async function whoami() {
@@ -252,12 +332,12 @@ async function restoreToolState() {
 
   try {
     cookie = '';
-    if (!(await login('KC001', [ADMIN_PASSWORD]))) {
+    if (!(await tryLogin('KC001', [ADMIN_PASSWORD]))) {
       notes.push('拿不到超管会话,未能还原');
       return notes;
     }
 
-    const users = arr((await api('GET', '/admin/users')).body);
+    const users = arr((await api('GET', '/admin/users?limit=500')).body.users);
     const wangId = users.find((u) => u.employeeNo === 'KC003')?.id;
     const tree = (await api('GET', '/org/tree')).body ?? { nodes: [] };
 
@@ -277,12 +357,11 @@ async function restoreToolState() {
 
         for (const [employeeNo, passwords] of identities) {
           cookie = '';
-          if (!(await login(employeeNo, passwords))) continue;
+          if (!(await tryLogin(employeeNo, passwords))) continue;
 
-          // 节点可能已经在回收站里(上一次软删成功、彻底删失败),
-          // 这时软删会回 400 —— 但彻底删照样能做,所以不看软删的结果。
-          await api('DELETE', `/nodes/${node.id}`);
-          const hard = await api('DELETE', `/nodes/${node.id}/purge`);
+          // v2.12 起 `DELETE /nodes/:id` 本身就是物理删除,一次调用删干净整棵子树
+          // (以前要"先软删、再彻底删"两步,现在没有回收站了)。
+          const hard = await api('DELETE', `/nodes/${node.id}`);
           if (hard.status < 300) {
             cleaned = employeeNo;
             break;
@@ -505,7 +584,7 @@ async function main() {
   // 摸清树与人的位置(用超管)
   // ============================================================
   cookie = '';
-  if (!(await login('KC001', [ADMIN_PASSWORD]))) {
+  if (!(await tryLogin('KC001', [ADMIN_PASSWORD]))) {
     console.error('✗ 超管 KC001 登录失败 —— 先跑 pnpm seed:dev');
     process.exit(1);
   }
@@ -514,7 +593,7 @@ async function main() {
 
   let tree = (await api('GET', '/org/tree')).body;
   const nodeId = (title) => tree.nodes.find((node) => node.title === title)?.id;
-  let users = (await api('GET', '/admin/users')).body;
+  let users = (await api('GET', '/admin/users?limit=500')).body.users;
   const userId = (employeeNo) => users.find((user) => user.employeeNo === employeeNo)?.id;
 
   for (const title of ['技术部', '市场部', '后端组', 'CRM 项目', '研发规范', '技术方案', '接口规范', '市场部工作方式']) {
@@ -567,7 +646,7 @@ async function main() {
     for (const note of await restoreToolState()) console.log(`    · ${note}`);
     // 还原之后重新取一遍:下面的 nodeId / userId 闭包引用的是这两个变量
     tree = (await api('GET', '/org/tree')).body;
-    users = (await api('GET', '/admin/users')).body;
+    users = (await api('GET', '/admin/users?limit=500')).body.users;
   }
 
   const adminEditable = new Set(tree.editableNodeIds);
@@ -635,7 +714,7 @@ async function main() {
   check('孙浩(别部门部长)不能改 → 403', marketRename.status === 403);
 
   cookie = '';
-  await login('KC004', [INITIAL_PASSWORD, SEED_PASSWORD]);
+  await login('KC004', [INITIAL_PASSWORD, SEED_PASSWORD, ADMIN_PASSWORD]);
   const zhao = await whoami();
   const zhaoRenameTech = await tryRename('技术方案', '');
   check('赵敏(后端组组员)不能改技术部直属的文档 → 403', zhaoRenameTech.status === 403);
@@ -660,7 +739,7 @@ async function main() {
   console.log('\nD. 新建的边界');
 
   cookie = '';
-  await login('KC004', [SEED_PASSWORD, INITIAL_PASSWORD]);
+  await login('KC004', [SEED_PASSWORD, INITIAL_PASSWORD, ADMIN_PASSWORD]);
   const underOwnGroup = await api('POST', '/nodes', {
     parentId: nodeId('后端组'),
     kind: 'document',
@@ -747,7 +826,7 @@ async function main() {
   check('陈默给本部门的王思远授权 → 200', grantToInsider.status === 200);
 
   cookie = '';
-  await login('KC004', [SEED_PASSWORD, INITIAL_PASSWORD]);
+  await login('KC004', [SEED_PASSWORD, INITIAL_PASSWORD, ADMIN_PASSWORD]);
   const zhaoGrants = (await api('GET', `/nodes/${nodeId('接口规范')}/grants`)).body;
   check('被授权者读得到授权视图(读是开放的)', zhaoGrants !== null);
   check('但 canManage 为假 —— 被授权者不能转授', zhaoGrants?.canManage === false);
@@ -863,71 +942,145 @@ async function main() {
     body: '我来评论一句。',
   });
   cookie = '';
-  await login('KC004', [SEED_PASSWORD, INITIAL_PASSWORD]);
+  await login('KC004', [SEED_PASSWORD, INITIAL_PASSWORD, ADMIN_PASSWORD]);
   const deleteByOther = await api('DELETE', `/comments/${someoneElse.body.id}`);
   check('赵敏删别人的评论 → 403', deleteByOther.status === 403);
 
   // ============================================================
-  // I. 回收站:能改就能软删,能管才能彻底删
+  // I. 删除:整棵子树物理删除、不可恢复(v2.12)
   // ============================================================
-  console.log('\nI. 回收站与彻底删除');
+  console.log('\nI. 删除(物理删除整棵子树)');
 
-  cookie = '';
-  await login('KC003', [SEED_PASSWORD, INITIAL_PASSWORD]);
-  const deleted = await api('DELETE', `/nodes/${underOwnId}`);
-  check(
-    '组长能软删组员建的页面 → 200 且 removedCount 为 1',
-    deleted.status === 200 && deleted.body?.removedCount === 1,
-    `${String(deleted.status)} / ${JSON.stringify(deleted.body ?? null).slice(0, 100)}`,
-  );
-
-  cookie = '';
-  await login('KC005', [SEED_PASSWORD, INITIAL_PASSWORD]);
-  const marketTrash = await api('GET', '/trash');
-  check(
-    '别人的回收站条目不会出现在孙浩这里',
-    !arr(marketTrash.body).some((item) => item.id === underOwnId),
-  );
-
-  cookie = '';
-  await login('KC003', [SEED_PASSWORD, INITIAL_PASSWORD]);
-  const ownTrash = await api('GET', '/trash');
-  check('王思远的回收站里能看到它', arr(ownTrash.body).some((item) => item.id === underOwnId));
-  check(
-    '回收站条目带 deletedByName 与 parentAlive',
-    typeof arr(ownTrash.body)[0]?.deletedByName === 'string' &&
-      typeof arr(ownTrash.body)[0]?.parentAlive === 'boolean',
-  );
-
-  // 当前身份是王思远(后端组组长),他对「接口规范」有管理权 ——
-  // 所以这一个会走到"必须先软删除"那条校验,而不是被 403 挡在前面。
-  const purgeLive = await api('DELETE', `/nodes/${nodeId('接口规范')}/purge`);
-  check('对没进回收站的节点彻底删除 → 400', purgeLive.status === 400, `实际 ${String(purgeLive.status)}`);
-
-  // POST 的默认状态码是 201,不是 200 —— 这里两种都接受,
-  // 免得测试因为框架默认值而误报
-  const restored = await api('POST', `/nodes/${underOwnId}/restore`);
-  check('恢复 → 2xx', restored.status === 200 || restored.status === 201, `实际 ${String(restored.status)}`);
-  check('恢复后能重新读到', (await api('GET', `/nodes/${underOwnId}`)).status === 200);
-
-  // 彻底删除:门槛是 canManage(祖先链所有者),被授权者与被删页面自己没有权限。
-  // 用陈默(技术部部长)来验 —— 他是这棵树的所有者链顶端。
+  // ---- 门槛:能改 ≠ 能删 ----
+  //
+  // v2.12 之前删除是软删除(可恢复),所以门槛是 canEdit;现在删除不可逆,
+  // 门槛提到 canManage(该节点或祖先链上的所有者)。
+  //
+  // 用现成数据来验太脆 —— 前面 G/H 组的授权断言会把名单改掉。所以这里**自建**
+  // 一个样本:陈默(技术部部长)建页面 → 他把赵敏加进授权名单 →
+  // 赵敏因此 canEdit,但她不是所有者/祖先所有者,所以 canManage 为假。
   cookie = '';
   await login('KC002', [SEED_PASSWORD]);
-  const deletedAgain = await api('DELETE', `/nodes/${underOwnId}`);
-  check('再次软删 → 200', deletedAgain.status === 200);
-  const purged = await api('DELETE', `/nodes/${underOwnId}/purge`);
-  check('所有者彻底删除 → 204', purged.status === 204, `实际 ${String(purged.status)}`);
+  const thresholdPage = await api('POST', '/nodes', {
+    parentId: nodeId('技术部'),
+    kind: 'document',
+    title: 'I 组的门槛样本',
+  });
   check(
-    '彻底删除后真的读不到了 → 404',
-    (await api('GET', `/nodes/${underOwnId}`)).status === 404,
+    '陈默在技术部下建页面 → 201',
+    thresholdPage.status === 201,
+    `实际 ${String(thresholdPage.status)}`,
+  );
+  const thresholdId = thresholdPage.body?.id;
+
+  const thresholdGrants = (await api('GET', `/nodes/${thresholdId}/grants`)).body;
+  const grantZhao = await api('PUT', `/nodes/${thresholdId}/grants`, {
+    version: thresholdGrants?.version,
+    userIds: [userId('KC004')],
+  });
+  check(
+    '把赵敏加进它的授权名单 → 200',
+    grantZhao.status === 200,
+    `实际 ${String(grantZhao.status)}`,
   );
 
-  // 被授权者不能彻底销毁(能改不代表能销毁)
   cookie = '';
-  await login('KC004', [SEED_PASSWORD, INITIAL_PASSWORD]);
-  const purgedByGrantee = await api('DELETE', `/nodes/${nodeId('接口规范')}/purge`);
-  check('被授权者对活着的节点彻底删除 → 400 或 403(都不能销毁)', purgedByGrantee.status === 400 || purgedByGrantee.status === 403);
+  await login('KC004', [SEED_PASSWORD, INITIAL_PASSWORD, ADMIN_PASSWORD]);
+  const zhaoThreshold = (await api('GET', `/nodes/${thresholdId}`)).body;
+  check(
+    '★ 赵敏对该页 canEdit 为真、canManage 为假(这正是要看的那条边界)',
+    zhaoThreshold?.canEdit === true && zhaoThreshold?.canManage === false,
+    JSON.stringify({ canEdit: zhaoThreshold?.canEdit, canManage: zhaoThreshold?.canManage }),
+  );
+  const zhaoEditIt = await api('PATCH', `/nodes/${thresholdId}`, {
+    title: 'I 组的门槛样本(赵敏改过)',
+    version: zhaoThreshold?.version,
+  });
+  check(
+    '★ 被授权者**能改** → 200(先把 canEdit 为真证明掉,下面的 403 才有意义)',
+    zhaoEditIt.status === 200,
+    `实际 ${String(zhaoEditIt.status)}`,
+  );
+  const zhaoDeleteIt = await api('DELETE', `/nodes/${thresholdId}`);
+  check(
+    '★ 同一个被授权者**不能删** → 403(删除门槛是 canManage —— 这是 v2.12 唯一的权限收紧)',
+    zhaoDeleteIt.status === 403,
+    `实际 ${String(zhaoDeleteIt.status)}`,
+  );
+
+  // ---- 整棵子树的物理删除 ----
+  //
+  // 删父节点必须连带删掉子节点,而且**真的读不到了** —— 这是"没有回收站"的核心承诺。
+  cookie = '';
+  await login('KC002', [SEED_PASSWORD]);
+  const parentPage = await api('POST', '/nodes', {
+    parentId: nodeId('技术部'),
+    kind: 'document',
+    title: 'I 组的父页面',
+  });
+  check('建父页面 → 201', parentPage.status === 201, `实际 ${String(parentPage.status)}`);
+  const childPage = await api('POST', '/nodes', {
+    parentId: parentPage.body?.id,
+    kind: 'document',
+    title: 'I 组的子页面',
+  });
+  check('在它下面建子页面 → 201', childPage.status === 201, `实际 ${String(childPage.status)}`);
+
+  const hardDelete = await api('DELETE', `/nodes/${parentPage.body?.id}`);
+  check(
+    '★ 删除父节点 → 200,removedCount 是**整棵子树**的大小(=2)',
+    hardDelete.status === 200 && hardDelete.body?.removedCount === 2,
+    `${String(hardDelete.status)} / ${JSON.stringify(hardDelete.body ?? null)}`,
+  );
+  check(
+    '父页面真的读不到了 → 404',
+    (await api('GET', `/nodes/${parentPage.body?.id}`)).status === 404,
+  );
+  check(
+    '★ 子页面也一起没了 → 404(整棵子树被物理删除)',
+    (await api('GET', `/nodes/${childPage.body?.id}`)).status === 404,
+  );
+
+  // ---- 按根的树查询:根不存在 / 不是 uuid ----
+  check(
+    '按已被删除的节点查子树 → 404(它真的不存在了)',
+    (await api('GET', `/org/tree?root=${parentPage.body?.id}`)).status === 404,
+  );
+  check(
+    'root 不是 uuid → 400',
+    (await api('GET', '/org/tree?root=abc')).status === 400,
+  );
+
+  // ---- 不能删别人的东西 ----
+  cookie = '';
+  await login('KC005', [SEED_PASSWORD, INITIAL_PASSWORD]);
+  const marketDeleteTech = await api('DELETE', `/nodes/${nodeId('技术部')}`);
+  check(
+    '市场部部长删技术部的节点 → 403',
+    marketDeleteTech.status === 403,
+    `实际 ${String(marketDeleteTech.status)}`,
+  );
+
+  // ---- 收尾:把门槛样本删掉,免得污染后续断言与人工验收 ----
+  cookie = '';
+  await login('KC002', [SEED_PASSWORD]);
+  const cleanupThreshold = await api('DELETE', `/nodes/${thresholdId}`);
+  check(
+    '收尾:删掉门槛样本 → 200',
+    cleanupThreshold.status === 200,
+    `实际 ${String(cleanupThreshold.status)}`,
+  );
+
+  // 被授权者不能销毁(能改不代表能销毁)。v2.12 起"删除"本身就是销毁,
+  // 所以直接验 DELETE —— 旧版这里验的是 /purge 上的 400/403。
+  cookie = '';
+  await login('KC004', [SEED_PASSWORD, INITIAL_PASSWORD, ADMIN_PASSWORD]);
+  const deletedByGrantee = await api('DELETE', `/nodes/${nodeId('接口规范')}`);
+  check(
+    '被授权者删「接口规范」→ 403(他在授权名单里,但不在祖先链上)',
+    deletedByGrantee.status === 403,
+    `实际 ${String(deletedByGrantee.status)}`,
+  );
 
   // ============================================================
   // J. 上传白名单
@@ -1049,12 +1202,16 @@ async function main() {
   const logs = await api('GET', '/audit-logs?limit=200');
   const actions = new Set((logs.body?.items ?? []).map((item) => item.action));
   check('超管能看到审计记录', logs.status === 200 && arr(logs.body?.items).length > 0);
-  for (const action of ['auth.login', 'org.import', 'node.create', 'node.content.update', 'grant.replace', 'node.owner.update', 'comment.create', 'node.delete', 'node.restore']) {
+  // ⚠️ v2.14:列表里原本还有 node.restore —— 回收站移除之后那个动作
+  // **再也不会发生**,所以这条断言永远失败(跑一次就能看到)。
+  // 它不该被「改成另一个还能发生的动作」来凑数,而是直接删掉;
+  // 接替它的 visibility.replace 在下面那段保密场景里单独验(那时它才真的发生)。
+  for (const action of ['auth.login', 'org.import', 'node.create', 'node.content.update', 'grant.replace', 'node.owner.update', 'comment.create', 'node.delete']) {
     check(`审计里有 ${action}`, actions.has(action));
   }
 
   cookie = '';
-  await login('KC004', [SEED_PASSWORD, INITIAL_PASSWORD]);
+  await login('KC004', [SEED_PASSWORD, INITIAL_PASSWORD, ADMIN_PASSWORD]);
   const zhaoMe = await whoami();
   const zhaoLogs = await api('GET', '/audit-logs?limit=200');
   const zhaoItems = arr(zhaoLogs.body?.items);
@@ -1125,7 +1282,7 @@ async function main() {
 
   // ---- 读全员开放,写有门槛 ----
   cookie = '';
-  await login('KC004', [SEED_PASSWORD, INITIAL_PASSWORD]);
+  await login('KC004', [SEED_PASSWORD, INITIAL_PASSWORD, ADMIN_PASSWORD]);
   const zhaoReadMembers = await api('GET', `/nodes/${nodeId('后端组')}/members`);
   check('组员也能读成员列表(读全员开放,与整棵树一致)', zhaoReadMembers.status === 200);
   check('但她的 canManage 为假 —— 界面据此隐藏按钮', zhaoReadMembers.body?.canManage === false);
@@ -1149,135 +1306,51 @@ async function main() {
   });
   check('部长把市场部的孙浩加进技术部 → 403(超出组织范围)', addOutsider.status === 403);
 
-  const addInsider = await api('POST', `/nodes/${nodeId('CRM 项目')}/members`, {
-    userId: userId('KC004'),
-  });
-  check('部长把本部门的赵敏加进「CRM 项目」→ 200', addInsider.status === 200, `实际 ${String(addInsider.status)}`);
-  check(
-    '加完之后她出现在「CRM 项目」的直接成员里',
-    addInsider.body?.direct?.some((member) => member.employeeNo === 'KC004') === true,
-  );
-
-  const addAgain = await api('POST', `/nodes/${nodeId('CRM 项目')}/members`, {
-    userId: userId('KC004'),
-  });
-  check(
-    '重复加同一个人是幂等的(不报错、也不会产生第二条)',
-    addAgain.status === 200 &&
-      addAgain.body?.direct?.filter((member) => member.employeeNo === 'KC004').length === 1,
-    `实际 ${String(addAgain.status)}`,
-  );
-
-  const removeWrong = await api('DELETE', `/nodes/${nodeId('CRM 项目')}/members/${userId('KC002')}`);
-  check('移出一个并不归属在这里的人 → 400', removeWrong.status === 400, `实际 ${String(removeWrong.status)}`);
-
-  const removeZhao = await api('DELETE', `/nodes/${nodeId('CRM 项目')}/members/${userId('KC004')}`);
-  check('把赵敏从「CRM 项目」移出 → 200(这就是调岗的第二步)', removeZhao.status === 200);
-  check(
-    '移出后她不再出现在直接成员里',
-    removeZhao.body?.direct?.some((member) => member.employeeNo === 'KC004') !== true,
-  );
-
-  // ---- 组长管自己组;管不到上级 ----
-  cookie = '';
-  await login('KC003', [SEED_PASSWORD, INITIAL_PASSWORD]);
-  const wangOwnGroup = await api('GET', `/nodes/${nodeId('后端组')}/members`);
-  check('组长能管自己组的成员', wangOwnGroup.body?.canManage === true);
-  check(
-    '王思远在「后端组」被标为所有者(移出归属**不会**改变这一点)',
-    wangOwnGroup.body?.direct?.find((member) => member.employeeNo === 'KC003')?.isOwnerHere === true,
-  );
-  const wangDept = await api('GET', `/nodes/${nodeId('技术部')}/members`);
-  check('组长对上级部门没有管理权', wangDept.body?.canManage === false);
-
-  // ---- 候选人:成员与授权是两条接口,门槛不同 ----
-  const wangCandidates = await api('GET', `/nodes/${nodeId('后端组')}/member-candidates`);
-  check(
-    '组长的候选人只含自己组织范围内的人(不含市场部)',
-    wangCandidates.status === 200 &&
-      wangCandidates.body.some((candidate) => candidate.employeeNo === 'KC004') &&
-      !wangCandidates.body.some((candidate) => candidate.employeeNo === 'KC005'),
-  );
-
-  cookie = '';
-  await login('KC001', [ADMIN_PASSWORD]);
-  const adminCandidates = await api('GET', `/nodes/${nodeId('技术部')}/member-candidates`);
-  check(
-    '超管的候选人不做组织范围限制(组织架构本来就是他的职责)',
-    adminCandidates.status === 200 &&
-      adminCandidates.body.some((candidate) => candidate.employeeNo === 'KC005'),
-  );
-
+  // ⚠️ 这条断言原来**永远不可能通过**,而它看起来一直在测"离职的人不能被加进组织"。
+  //
+  // 两个错叠在一起:
+  //   1. 改状态(`PATCH /admin/users/:id`)只有**超管**能做,而这里用的是 KC002(部长),
+  //      于是那次 PATCH 是 403,KC005 根本没变成离职;
+  //   2. 就算她真变成离职了,服务端**先**查组织范围、**后**查在职状态 ——
+  //      KC005 属于市场部,不在 KC002 的范围内,所以先撞上 403(超出组织范围),
+  //      永远走不到那条 400(不能把权限交给已离职的账号)。
+  //
+  // 正确做法:① 用超管改状态;② 目标必须**在部长自己的组织范围内**,
+  // 否则测的就不是"离职"这条规则。赵敏(KC004)就在技术部/后端组下,拿她当目标。
   const addDeparted = await (async () => {
-    await api('PATCH', `/admin/users/${userId('KC005')}`, { status: 'departed' });
+    cookie = '';
+    await login('KC001', [ADMIN_PASSWORD]);
+    await api('PATCH', `/admin/users/${userId('KC004')}`, { status: 'departed' });
+
+    cookie = '';
+    await login('KC002', [SEED_PASSWORD]);
     const attempt = await api('POST', `/nodes/${nodeId('技术部')}/members`, {
-      userId: userId('KC005'),
+      userId: userId('KC004'),
     });
-    await api('PATCH', `/admin/users/${userId('KC005')}`, { status: 'active' });
+
+    cookie = '';
+    await login('KC001', [ADMIN_PASSWORD]);
+    await api('PATCH', `/admin/users/${userId('KC004')}`, { status: 'active' });
+
+    // 还原成后续断言需要的身份(部长)
+    cookie = '';
+    await login('KC002', [SEED_PASSWORD]);
     return attempt;
   })();
   check('把已离职的人加进组织 → 400', addDeparted.status === 400, `实际 ${String(addDeparted.status)}`);
 
   // ============================================================
-  // M. 回收站保留策略 + 树的按根查询
+  // M. 树的按根查询(?root=)
   // ============================================================
-  console.log('\nM. 回收站保留策略与树的按根查询');
-
-  const policy = await api('GET', '/trash/policy');
-  check(
-    '保留策略可读,天数是个数字(界面文案靠它,不能前端硬编码)',
-    policy.status === 200 && typeof policy.body?.retentionDays === 'number',
-    JSON.stringify(policy.body),
-  );
-  check(
-    '默认保留 30 天',
-    policy.body?.retentionDays === 30 || policy.body?.retentionDays > 0,
-    `实际 ${String(policy.body?.retentionDays)}`,
-  );
-
-  // ---- 软删一个节点:它必须**不**被保留策略清掉 ----
-  // 这一条防的是"保留策略配错了,一跑就把整个回收站清空"。
-  // 对象用**顶层文档**:超管只能在顶层建(他不是任何部门的内容所有者),这正是设计如此。
-  const victim = await api('POST', '/nodes', {
-    parentId: null,
-    kind: 'document',
-    title: 'M 组的临时页面',
-  });
-  check('超管能在顶层新建文档 → 201', victim.status === 201, `实际 ${String(victim.status)}`);
-  check('超管是它的所有者(能改能删)', victim.body?.canEdit === true);
-  await api('DELETE', `/nodes/${victim.body.id}`);
-
-  const dryRun = await api('POST', '/admin/maintenance/trash-purge?dryRun=true');
-  check('超管空跑一次保留策略清理 → 200', dryRun.status === 200, `实际 ${String(dryRun.status)}`);
-  check('空跑不删任何东西', dryRun.body?.purgedNodes === 0);
-  check(
-    '刚删的节点**不**在待清理列表里(保留期内不会被清掉)',
-    !(dryRun.body?.roots ?? []).some((root) => root.id === victim.body.id),
-    `待清理 ${String(dryRun.body?.roots?.length ?? 0)} 棵`,
-  );
-
-  const purgeRun = await api('POST', '/admin/maintenance/trash-purge');
-  check('真跑一次 → 200', purgeRun.status === 200);
-  check(
-    '没有到期条目时清掉 0 个节点',
-    purgeRun.body?.purgedNodes === 0,
-    `实际 ${String(purgeRun.body?.purgedNodes)}`,
-  );
-  const trashAfter = await api('GET', '/trash');
-  check(
-    '刚删的节点仍然躺在回收站里,可以恢复',
-    trashAfter.body.some((item) => item.id === victim.body.id),
-  );
-
-  // 收尾:把它彻底删掉,免得污染后续断言与人工验收
-  const cleanup = await api('DELETE', `/nodes/${victim.body.id}/purge`);
-  check('收尾:超管彻底删除它 → 204', cleanup.status === 204, `实际 ${String(cleanup.status)}`);
-
-  cookie = '';
-  await login('KC004', [SEED_PASSWORD, INITIAL_PASSWORD]);
-  const zhaoPurgeByPolicy = await api('POST', '/admin/maintenance/trash-purge');
-  check('非超管手动清理回收站 → 403', zhaoPurgeByPolicy.status === 403);
-
+  console.log('\nM. 树的按根查询');
+  //
+  // ⚠️ v2.12 之前这一组还带着"回收站保留策略"的断言(GET /trash/policy、
+  // POST /admin/maintenance/trash-purge 的 dryRun 与"刚删的不会被清掉")。
+  // 那三个接口随回收站一起删掉了,那些断言一并去掉。
+  //
+  // **`?root=` 这部分刻意保留** —— 它跟回收站毫无关系,是接口形状的一部分,
+  // §11.3 明确要求"不要把接口做成只能返回全部"。
+  //
   // ---- 树的按根查询 ----
   cookie = '';
   await login('KC001', [ADMIN_PASSWORD]);
@@ -1359,10 +1432,35 @@ async function main() {
 
   cookie = '';
   await login('KC001', [ADMIN_PASSWORD]);
-  const roster = await api('GET', '/admin/users');
-  check('超管能拿到人员名册', roster.status === 200 && Array.isArray(roster.body));
+  const roster = await api('GET', '/admin/users?limit=500');
 
-  const byNo = new Map((roster.body ?? []).map((item) => [item.employeeNo, item]));
+  check('超管能拿到人员名册', roster.status === 200 && Array.isArray(roster.body?.users));
+  // v2.13 之前这里只要 Array.isArray(body)。现在是包装对象,**必须验 total** ——
+  // 没有 total 的话"我只看到了一部分"这件事在界面上是无法判断的
+  // (而这正是它此前静默截断 200 条却没人发现的原因)。
+  check(
+    '名册带 total 与 nextCursor(截断可见)',
+    typeof roster.body?.total === 'number' && roster.body.total >= roster.body.users.length,
+    `total=${String(roster.body?.total)} users=${String(roster.body?.users?.length)}`,
+  );
+
+  // 真去翻一页:limit=2 时必须只回 2 条、且给出游标;而 total 不受 limit 影响。
+  const paged = await api('GET', '/admin/users?limit=2');
+  const pageTwo = await api('GET', `/admin/users?limit=2&cursor=${encodeURIComponent(paged.body?.nextCursor ?? '')}`);
+  check(
+    'limit 生效,且游标能翻到下一页且不重复',
+    paged.body?.users?.length === 2 &&
+      typeof paged.body?.nextCursor === 'string' &&
+      pageTwo.body?.users?.length >= 1 &&
+      !pageTwo.body.users.some((u) => u.employeeNo === paged.body.users[0]?.employeeNo),
+    `p1=${String(paged.body?.users?.length)} cursor=${String(paged.body?.nextCursor)} p2=${String(pageTwo.body?.users?.length)}`,
+  );
+  check(
+    'total 不受 limit 影响',
+    paged.body?.total === roster.body?.total,
+    `limit2=${String(paged.body?.total)} full=${String(roster.body?.total)}`,
+  );
+  const byNo = new Map((roster.body?.users ?? []).map((item) => [item.employeeNo, item]));
   const kc001 = byNo.get('KC001');
   const kc003 = byNo.get('KC003');
   const kc004 = byNo.get('KC004');
@@ -1386,7 +1484,7 @@ async function main() {
   // 那个字段等于一份"谁的密码还是 123456"的目标清单。
   cookie = '';
   await login('KC005', [SEED_PASSWORD, INITIAL_PASSWORD]);
-  check('非超管读人员名册 → 403', (await api('GET', '/admin/users')).status === 403);
+  check('非超管读人员名册 → 403', (await api('GET', '/admin/users?limit=500')).status === 403);
   const outsiderReset = await api(
     'POST',
     `/admin/users/${String(kc004?.id)}/reset-password`,
@@ -1412,7 +1510,7 @@ async function main() {
   // 这是这个动作最容易漏掉、也最容易让人误解的一半:管理员说"我把他密码重置了",
   // 心里想的是"我把他踢出去了"。不删会话行的话,他那个标签页还能继续用。
   cookie = '';
-  const kc004Alive = await login('KC004', [SEED_PASSWORD, INITIAL_PASSWORD]);
+  const kc004Alive = await tryLogin('KC004', [SEED_PASSWORD, INITIAL_PASSWORD, ADMIN_PASSWORD]);
   const kc004Cookie = cookie;
   check('KC004 重置前能正常登录(后面要验这个会话会被吊销)', kc004Alive && kc004Cookie !== '');
   check(
@@ -1492,12 +1590,204 @@ async function main() {
   );
   // 复原。**必须复原** —— 否则演示数据里会多一个离职的市场部部长。
   await api('PATCH', `/admin/users/${String(kc005?.id)}`, { status: 'active' });
-  const kc005Back = await api('GET', '/admin/users');
+  const kc005Back = await api('GET', '/admin/users?limit=500');
   check(
     '复原 KC005 为在职(验收不能留下改动)',
-    (kc005Back.body ?? []).find((item) => item.employeeNo === 'KC005')?.status === 'active',
+    (kc005Back.body?.users ?? []).find((item) => item.employeeNo === 'KC005')?.status === 'active',
   );
 
+
+  // ============================================================
+  // 保密能力(v2.13)—— 受限节点与读者名单
+  // ============================================================
+  //
+  // 这一段必须自己复原(把 市场部 改回公开),否则后面的收尾与下一轮运行的
+  // 断言都会看到一个受限的市场部 —— 那是"验收脚本把演示数据弄脏"的老毛病。
+  {
+    const MARKET = nodeId("市场部");
+    const kc004Id = userId("KC004");
+
+    await login("KC001", [ADMIN_PASSWORD]);
+    const before = await api("GET", "/nodes/" + String(MARKET) + "/readers");
+    check(
+      "默认可见性是 public(存量数据行为不变)",
+      before.status === 200 && before.body?.visibility === "public",
+      String(before.status) + " " + String(before.body?.visibility),
+    );
+
+    // 1) 改成受限,名单为空
+    const setRestricted = await api("PUT", "/nodes/" + String(MARKET) + "/readers", {
+      version: before.body?.version,
+      visibility: "restricted",
+      userIds: [],
+    });
+    check("超管能把节点改成受限 → 200", setRestricted.status === 200, String(setRestricted.status));
+
+    // 2) 无关的人(赵敏,技术部)看不见了 —— 树 / 详情 / 正文 / 导出 / 检索全都要挡住
+    await login("KC004", [SEED_PASSWORD, INITIAL_PASSWORD, ADMIN_PASSWORD]);
+    const treeHidden = await api("GET", "/org/tree");
+    const visibleTitles = (treeHidden.body?.nodes ?? []).map((n) => n.title);
+    check(
+      "★ 受限节点的整棵子树从树里消失(连子节点标题一起)",
+      treeHidden.status === 200 &&
+        !visibleTitles.includes("市场部") &&
+        !visibleTitles.includes("市场部工作方式"),
+      "市场部=" + String(visibleTitles.includes("市场部")) +
+        " 子节点=" + String(visibleTitles.includes("市场部工作方式")),
+    );
+
+    const detailHidden = await api("GET", "/nodes/" + String(MARKET));
+    check(
+      "★ 读不到时回 404 而不是 403(403 等于承认这里有个你看不见的东西)",
+      detailHidden.status === 404,
+      String(detailHidden.status),
+    );
+
+    const contentHidden = await api("GET", "/nodes/" + String(MARKET) + "/content");
+    check("★ 正文也读不到 → 404", contentHidden.status === 404, String(contentHidden.status));
+
+    const exportHidden = await api("GET", "/nodes/" + String(MARKET) + "/export?format=md");
+    check(
+      "★ 导出也读不到 → 404(漏了就能整篇下载走)",
+      exportHidden.status === 404,
+      String(exportHidden.status),
+    );
+
+    const searchHidden = await api("GET", "/search?q=" + encodeURIComponent("市场部工作方式"));
+    check(
+      "★ 检索里也搜不到(最容易漏的一条读取路径)",
+      searchHidden.status === 200 &&
+        !(searchHidden.body?.hits ?? []).some((h) => h.nodeId === MARKET),
+      "hits=" + String((searchHidden.body?.hits ?? []).length),
+    );
+
+    // 3) 所有者链仍然看得见 —— 受限不是"谁都看不见"
+    await login("KC005", [SEED_PASSWORD, ADMIN_PASSWORD]);
+    const ownerSees = await api("GET", "/nodes/" + String(MARKET));
+    check(
+      "★ 市场部部长的所有者链仍然看得见(受限不等于谁都看不见)",
+      ownerSees.status === 200,
+      String(ownerSees.status),
+    );
+
+    // 4) 非创建者、非所有者改不了可见范围
+    //
+    // ⚠️ 先作为作者读一下当前 version,再拿它去改 —— 否则会撞上乐观锁。
+    // 第一版这里写的是 `version: 1`(拍脑袋的数字),于是版本检查**先于**权限检查
+    // 触发,拿到 409 而不是 403/404。
+    // 那看起来像"权限没挡住",实际上是这条断言**根本没测到权限** ——
+    // 一条测错了对象的断言比没有断言更坏,因为它给人已经验证过的错觉。
+    await login("KC004", [SEED_PASSWORD, INITIAL_PASSWORD, ADMIN_PASSWORD]);
+    const asZhao = await api("GET", "/nodes/" + String(MARKET) + "/readers");
+    const forbidden = await api("PUT", "/nodes/" + String(MARKET) + "/readers", {
+      version: asZhao.body?.version ?? 1,
+      visibility: "public",
+      userIds: [],
+    });
+    check(
+      "★ 无关的人改可见范围 → 403 或 404(两者都算挡住)",
+      forbidden.status === 403 || forbidden.status === 404,
+      String(forbidden.status),
+    );
+
+    // 5) 把赵敏加进读者名单 → 她又能看到了
+    await login("KC001", [ADMIN_PASSWORD]);
+    const nowRestricted = await api("GET", "/nodes/" + String(MARKET) + "/readers");
+    const addReader = await api("PUT", "/nodes/" + String(MARKET) + "/readers", {
+      version: nowRestricted.body?.version,
+      visibility: "restricted",
+      userIds: [kc004Id],
+    });
+    check(
+      "加进读者名单 → 200 且名单里有她",
+      addReader.status === 200 &&
+        (addReader.body?.readers ?? []).some((r) => r.userId === kc004Id),
+      JSON.stringify((addReader.body?.readers ?? []).map((r) => r.userId)),
+    );
+
+    await login("KC004", [SEED_PASSWORD, INITIAL_PASSWORD, ADMIN_PASSWORD]);
+    const readerSees = await api("GET", "/nodes/" + String(MARKET));
+    check("★ 名单里的人读得到 → 200", readerSees.status === 200, String(readerSees.status));
+
+    const readerTree = await api("GET", "/org/tree");
+    check(
+      "★ 树里也回来了",
+      (readerTree.body?.nodes ?? []).some((n) => n.title === "市场部"),
+      "nodes=" + String((readerTree.body?.nodes ?? []).length),
+    );
+
+    // 6) 复原成公开 —— 必须复原,否则演示数据里市场部会一直是受限的
+    await login("KC001", [ADMIN_PASSWORD]);
+    const back = await api("GET", "/nodes/" + String(MARKET) + "/readers");
+    const restored = await api("PUT", "/nodes/" + String(MARKET) + "/readers", {
+      version: back.body?.version,
+      visibility: "public",
+      userIds: [],
+    });
+    check(
+      "复原为公开(验收不能留下改动)",
+      restored.status === 200 && restored.body?.visibility === "public",
+      String(restored.body?.visibility),
+    );
+
+    await login("KC004", [SEED_PASSWORD, INITIAL_PASSWORD, ADMIN_PASSWORD]);
+    const openAgain = await api("GET", "/nodes/" + String(MARKET));
+    check(
+      "改回公开之后名单外的人也读得到(名单不再是门槛)",
+      openAgain.status === 200,
+      String(openAgain.status),
+    );
+
+    // 可见性变更必须留痕,顺便验 action 筛选真的能筛(服务端筛,不是客户端)
+    await login("KC001", [ADMIN_PASSWORD]);
+    const visLogs = await api("GET", "/audit-logs?limit=200&action=visibility.replace");
+    const visItems = visLogs.body?.items ?? [];
+    check(
+      "★ 可见性变更进了审计,且 action 筛选生效",
+      visLogs.status === 200 &&
+        visItems.length > 0 &&
+        visItems.every((item) => item.action === "visibility.replace"),
+      "status=" + String(visLogs.status) + " items=" + String(visItems.length),
+    );
+
+    // 导出必须与列表**同一个可见范围** —— 导出若绕开范围就是一次越权读取,
+    // 而"页面上看不到、导出文件里全有"这种事没有任何地方会报错。
+    // ⚠️ 必须读 `.text`(原始响应体),不能读 `.body`:
+    // `body` 是 JSON.parse 之后的结果,对 text/csv 永远是 null ——
+    // 于是"带 BOM 吗"这条断言**必然为假**。这是脚本自己的 bug,
+    // 而它看起来像是导出功能坏了(真机部署时就是这么误报的)。
+    const csvSuper = await api("GET", "/audit-logs/export");
+    const csvScoped = await api("GET", "/audit-logs/export?action=visibility.replace");
+    // (BOM 不再作为常量比较 —— 见下面:直接查字节 0xEF 0xBB 0xBF,因为 text 解码可能吃掉它)
+    check(
+      "★ 审计导出为 CSV,且带 BOM(Excel 打开不乱码)",
+      csvSuper.status === 200 &&
+        // BOM 必须查**字节**:text 经过解码可能已经被规范吃掉
+        csvSuper.bytes[0] === 0xef &&
+        csvSuper.bytes[1] === 0xbb &&
+        csvSuper.bytes[2] === 0xbf &&
+        csvSuper.text.includes("时间,操作者"),
+      "status=" + String(csvSuper.status) +
+        " bom=" + String(csvSuper.bytes[0] === 0xef && csvSuper.bytes[1] === 0xbb && csvSuper.bytes[2] === 0xbf),
+    );
+    check(
+      "★ 导出带上筛选条件时只剩那一类动作",
+      csvScoped.status === 200 &&
+        csvScoped.text.includes("修改可见范围") &&
+        !csvScoped.text.includes("登录"),
+      "status=" + String(csvScoped.status),
+    );
+
+    // ★ 换一个范围小得多的人:他导出的文件里**不该出现**超管那条 visibility.replace
+    await login("KC004", [SEED_PASSWORD, INITIAL_PASSWORD, ADMIN_PASSWORD]);
+    const csvZhao = await api("GET", "/audit-logs/export");
+    check(
+      "★★ 导出遵守可见范围(赵敏导不出市场部那条记录)",
+      csvZhao.status === 200 &&
+        !csvZhao.text.includes("修改可见范围"),
+      "status=" + String(csvZhao.status),
+    );
+  }
   // ---- 收尾:把脚本动过的**全部**东西放回去 ----
   //
   // v2.6 这里只还原了**密码**,结果服务器上还是越跑越脏:脚本建出来的测试节点
@@ -1535,3 +1825,5 @@ try {
     for (const note of await restoreToolState()) console.log(`  · ${note}`);
   }
 }
+
+// zz probe marker

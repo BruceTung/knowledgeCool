@@ -17,6 +17,7 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import type { ChangePasswordDto } from './dto/change-password.dto.js';
 import type { LoginDto } from './dto/login.dto.js';
 import type { SetupDto } from './dto/setup.dto.js';
+import { LoginThrottleService, lockMessage } from './login-throttle.js';
 import { PasswordService } from './password.service.js';
 import { SessionService, type SessionMeta } from './session.service.js';
 import { signSetupToken, verifySetupToken } from './setup-token.js';
@@ -97,6 +98,7 @@ export class AuthService {
     private readonly passwords: PasswordService,
     private readonly sessions: SessionService,
     private readonly config: ConfigService,
+    private readonly throttle: LoginThrottleService,
   ) {}
 
   /** 库中是否已有用户。`/auth/setup` 与前端引导页都靠它判断。 */
@@ -172,6 +174,21 @@ export class AuthService {
    * (见 `AuthGuard` —— 不再存在"已登录但未改密"这种状态)。
    */
   async login(input: LoginDto, meta: SessionMeta): Promise<LoginOutcome> {
+    const ip = meta.ip ?? null;
+
+    // 限流闸放在**最前面**,而且锁定期间**根本不校验密码** ——
+    // 放在 bcrypt 之后的话,锁定期仍然会跑一次哈希,等于锁定只挡了结果没挡开销;
+    // 而且"被锁"与"密码错"的耗时差异又能被用来枚举账号。
+    //
+    // ⚠️ 计数键用工号,不管它存不存在 —— 所以"被锁定"这个响应本身
+    // 不构成账号枚举(见 login-throttle.ts 的设计说明第 1 条)。
+    const verdict = await this.throttle.check(input.employeeNo, ip);
+    if (verdict.locked) {
+      throw new AppError('RATE_LIMITED', lockMessage(verdict.retryAfterSeconds), {
+        retryAfterSeconds: verdict.retryAfterSeconds,
+      });
+    }
+
     const user = await this.prisma.user.findUnique({
       where: { employeeNo: input.employeeNo },
       select: USER_AUTH_SELECT,
@@ -182,9 +199,27 @@ export class AuthService {
     const passwordOk = await this.passwords.verify(input.password, hashToCheck).catch(() => false);
 
     if (user === null || !passwordOk || user.status !== 'active') {
+      const outcome = await this.throttle.recordFailure(input.employeeNo, ip);
+
+      // 只在**账号真实存在**时留痕。否则任何未登录的人都可以用捏造的工号
+      // 往审计表里灌数据 —— 审计是"只写不删"的,污染它比缺一条记录更糟。
+      if (outcome.locked && user !== null) {
+        await recordAudit(this.prisma, {
+          actorId: null,
+          action: 'auth.login.locked',
+          targetType: 'user',
+          targetId: user.id,
+          detail: { employeeNo: user.employeeNo, retryAfterSeconds: outcome.retryAfterSeconds },
+          ip,
+        });
+      }
+
       // 同一句话、同一个状态码,不给枚举者任何区分依据。
       throw new AppError('UNAUTHORIZED', '工号或密码不正确');
     }
+
+    // 成功了就把这个账号的失败计数与锁清掉,免得零星几次打错累积成"某天突然被锁"。
+    await this.throttle.recordSuccess(input.employeeNo);
 
     if (user.mustChangePassword) {
       const { token, expiresAt } = signSetupToken(user.id, this.requireSessionSecret());

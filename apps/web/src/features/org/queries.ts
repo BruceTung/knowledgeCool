@@ -6,7 +6,6 @@
  *   `['node', id]`        单节点详情
  *   `['node', id,'content']` 正文
  *   `['node', id,'...']`  评论 / 授权
- *   `['trash']`           回收站
  *
  * 变更后一律 invalidate 树 + 该节点 —— **不手改缓存**。
  * 树的 `editableNodeIds` 是服务端算的,本地推不出来;手改必然漂移,
@@ -14,15 +13,14 @@
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
+  BulkMoveNodesInput,
+  BulkMoveResult,
   CreateNodeInput,
   MoveNodeInput,
   NodeContentResponse,
   NodeDetail,
   NodeTreeResponse,
   SaveContentInput,
-  TrashItem,
-  TrashPolicy,
-  TrashPurgeResult,
   UpdateNodeInput,
 } from '@knowledgecool/shared';
 
@@ -58,58 +56,11 @@ export function useNodeContent(nodeId: string | undefined) {
   });
 }
 
-export function useTrash() {
-  return useQuery({
-    queryKey: ['trash'],
-    queryFn: () => apiFetch<TrashItem[]>('/trash'),
-  });
-}
-
-/**
- * 回收站保留策略(v2.4)。
- *
- * 天数来自服务端而**不是写死在前端** —— 运维把环境变量改掉之后,
- * 界面上的提示必须跟着改。见 `RetentionService.policy()` 的注释。
- */
-export function useTrashPolicy() {
-  return useQuery({
-    queryKey: ['trash', 'policy'],
-    queryFn: () => apiFetch<TrashPolicy>('/trash/policy'),
-    // 这是配置,不是数据 —— 几分钟内不会变
-    staleTime: 5 * 60_000,
-    refetchOnWindowFocus: false,
-  });
-}
-
-/**
- * 按保留策略清理回收站(超管)。
- *
- * `dryRun` 与真删走的是**同一个接口的两个模式** —— 与 Excel 导入同一套思路:
- * 拆成两条路径的话,预览与实际删除迟早算出不同结果,而超管是照着预览点确认的。
- */
-export function useRunTrashPurge() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (dryRun: boolean) =>
-      apiSend<TrashPurgeResult>(
-        'POST',
-        `/admin/maintenance/trash-purge?dryRun=${String(dryRun)}`,
-      ),
-    onSuccess: (result) => {
-      if (result.purgedNodes > 0) {
-        void queryClient.invalidateQueries({ queryKey: ['trash'] });
-        void queryClient.invalidateQueries({ queryKey: ['org', 'tree'] });
-      }
-    },
-  });
-}
-
 /** 变更成功后要刷新哪些东西。 */
 function useInvalidateTree() {
   const queryClient = useQueryClient();
   return (nodeId?: string) => {
     void queryClient.invalidateQueries({ queryKey: ['org', 'tree'] });
-    void queryClient.invalidateQueries({ queryKey: ['trash'] });
     if (nodeId !== undefined) {
       void queryClient.invalidateQueries({ queryKey: ['node', nodeId] });
     }
@@ -156,31 +107,31 @@ export function useMoveNode() {
   });
 }
 
+/**
+ * 批量移动(v2.14)。
+ *
+ * ⚠️ 成功后要失效**每一个**被移动节点 —— 手改缓存不行:
+ * 树的 `editableNodeIds` 是服务端算的,而路径变了会连带影响祖先链判定,
+ * 本地推不出来(与 useInvalidateTree 顶部那条注释同一个理由)。
+ */
+export function useBulkMoveNodes() {
+  const invalidate = useInvalidateTree();
+  return useMutation({
+    mutationFn: (input: BulkMoveNodesInput) =>
+      apiSend<BulkMoveResult>('POST', '/nodes/bulk/move', input),
+    onSuccess: (_result, input) => {
+      for (const nodeId of input.nodeIds) invalidate(nodeId);
+      // 目标本身也要失效:它的子节点列表变了
+      invalidate(input.newParentId);
+    },
+  });
+}
+
 export function useDeleteNode() {
   const invalidate = useInvalidateTree();
   return useMutation({
     mutationFn: (nodeId: string) =>
       apiSend<{ removedCount: number }>('DELETE', `/nodes/${nodeId}`),
-    onSuccess: (_result, nodeId) => {
-      invalidate(nodeId);
-    },
-  });
-}
-
-export function useRestoreNode() {
-  const invalidate = useInvalidateTree();
-  return useMutation({
-    mutationFn: (nodeId: string) => apiSend<NodeDetail>('POST', `/nodes/${nodeId}/restore`),
-    onSuccess: (_detail, nodeId) => {
-      invalidate(nodeId);
-    },
-  });
-}
-
-export function usePurgeNode() {
-  const invalidate = useInvalidateTree();
-  return useMutation({
-    mutationFn: (nodeId: string) => apiSend<void>('DELETE', `/nodes/${nodeId}/purge`),
     onSuccess: (_result, nodeId) => {
       invalidate(nodeId);
     },

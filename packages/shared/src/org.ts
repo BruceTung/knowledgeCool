@@ -76,6 +76,23 @@ export interface OrgUserView {
   lastLoginAt: string | null;
 }
 
+
+/**
+ * 一页人员。
+ *
+ * ⚠️ 这个包装类型是**为了修一个静默截断**而加的:此前接口直接返回数组,
+ * 服务端 `take: 200` 一截了事 —— 全公司有 320 人时,管理员只看到 200 个,
+ * 而**界面上没有任何迹象**。表现是「某某人的账号不见了」,
+ * 而他会去翻工号、以为自己记错了。没有 total,前端根本无从判断
+ * 自己拿到的是不是全部。
+ */
+export interface OrgUserListResponse {
+  users: OrgUserView[];
+  /** 符合条件的总人数(**不受本页 limit 影响**) */
+  total: number;
+  /** 下一页的游标(工号)。null = 已经是最后一页 */
+  nextCursor: string | null;
+}
 export interface CreateUserInput {
   employeeNo: string;
   name: string;

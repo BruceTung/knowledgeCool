@@ -64,11 +64,18 @@ services:
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
       SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-720}
       UPLOAD_DIR: /data/uploads
-      # 回收站保留策略(v2.4)。**保留天数 <=0 表示关闭自动清理** ——
-      # 回收站里的东西不会自己消失,只能手动彻底删除。
-      # 这是刻意的:自动删除用户数据必须能被明确关掉,而不是靠"把天数设得很大"来绕。
-      TRASH_RETENTION_DAYS: ${TRASH_RETENTION_DAYS:-30}
-      TRASH_PURGE_INTERVAL_HOURS: ${TRASH_PURGE_INTERVAL_HOURS:-6}
+      # ⚠️ v2.12 起这里**不再有 TRASH_RETENTION_DAYS / TRASH_PURGE_INTERVAL_HOURS** ——
+      # 回收站被整体移除,代码也不再读这两个变量。留在这里就是"死开关":
+      # 填了不生效比没有这个开关更坏(有人会以为调它有用)。
+      # 这一条漂移是**真的部署到 Docker 时**才发现的 —— `audit:docs` 那时
+      # 只比对 `process.env.X` 与 `.env.example`,没管 compose。现在管了(§4.7)。
+
+      # 登录限流(v2.12)。默认值就是安全的那一档,这里显式写出来是为了**可调**:
+      # 内网若有人输错多次,管理员能不改代码就把锁定时间调短。
+      LOGIN_MAX_ATTEMPTS: ${LOGIN_MAX_ATTEMPTS:-5}
+      LOGIN_LOCK_MINUTES: ${LOGIN_LOCK_MINUTES:-15}
+      LOGIN_IP_MAX_FAILURES: ${LOGIN_IP_MAX_FAILURES:-100}
+      LOGIN_IP_WINDOW_MINUTES: ${LOGIN_IP_WINDOW_MINUTES:-15}
     volumes:
       # 附件走本地卷(DESIGN.md §2.1),预留 MinIO 接口
       - uploads:/data/uploads

@@ -5,12 +5,15 @@ import { Button } from '../components/ui';
 import { useLogout, useMe } from '../features/auth/queries';
 import { GrantDialog } from '../features/grants/GrantDialog';
 import { useGrantDialog } from '../features/grants/dialog-store';
+import { VisibilityDialog } from '../features/visibility/VisibilityDialog';
+import { useVisibilityDialog } from '../features/visibility/dialog-store';
 import { MembersDialog } from '../features/members/MembersDialog';
 import { useMembersDialog } from '../features/members/dialog-store';
 import { OrgTreePanel } from '../features/org/OrgTreePanel';
 import { useOrgTree } from '../features/org/queries';
 import { CommandPalette } from '../features/search/CommandPalette';
 import { hasOpenModal } from '../lib/modal-store';
+import { useDocumentTitle } from '../lib/use-document-title';
 import { T_LABEL, T_META } from '../lib/typography';
 
 /** 从路径里取出当前节点 id(`/n/:nodeId`)。 */
@@ -44,6 +47,8 @@ export function AppLayout() {
   const grantTarget = useGrantDialog((state) => state.target);
   const openGrants = useGrantDialog((state) => state.open);
   const closeGrants = useGrantDialog((state) => state.close);
+  const visibilityTarget = useVisibilityDialog((state) => state.target);
+  const closeVisibility = useVisibilityDialog((state) => state.close);
   const membersTarget = useMembersDialog((state) => state.target);
   const openMembers = useMembersDialog((state) => state.open);
   const closeMembers = useMembersDialog((state) => state.close);
@@ -70,6 +75,27 @@ export function AppLayout() {
   const user = me.data?.user;
   const activeNodeId = activeNodeIdOf(pathname);
 
+  /**
+   * 标签页标题(v2.12)。此前所有页面都叫「知源 KnowledgeCool」,
+   * 同时开几篇文档时标签栏上分不出谁是谁。
+   *
+   * ⚠️ 文档页(/n/*)**刻意不在这里设**:它要用文档自己的标题,而子组件的
+   * effect 先于父组件跑 —— 这里再设一次会把子组件刚设好的标题盖掉。
+   */
+  const routeTitle =
+    pathname === '/'
+      ? '工作台'
+      : pathname.startsWith('/search')
+        ? '检索'
+        : pathname.startsWith('/audit')
+          ? '审计日志'
+          : pathname.startsWith('/admin/org')
+            ? '组织架构'
+            : pathname.startsWith('/admin/users')
+              ? '人员管理'
+              : undefined;
+  useDocumentTitle(routeTitle);
+
   return (
     <div className="flex h-full flex-col bg-white">
       <header className="flex flex-none items-center gap-4 border-b border-slate-200 px-4 py-2.5">
@@ -92,11 +118,11 @@ export function AppLayout() {
         <button
           type="button"
           onClick={() => setPaletteOpen(true)}
-          className="flex w-80 items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-left text-slate-400 transition-colors hover:border-slate-300 hover:bg-white"
+          className="flex w-80 items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-left text-slate-500 transition-colors hover:border-slate-300 hover:bg-white"
         >
           <span className="flex-1 text-sm">搜索全公司内容…</span>
           <kbd
-            className={`rounded border border-slate-200 bg-white px-1.5 py-0.5 font-sans text-slate-400 ${T_META}`}
+            className={`rounded border border-slate-200 bg-white px-1.5 py-0.5 font-sans text-slate-500 ${T_META}`}
           >
             Ctrl K
           </kbd>
@@ -106,10 +132,20 @@ export function AppLayout() {
 
         {user?.isSuperAdmin === true && (
           <>
-            <Button variant="secondary" onClick={() => void navigate('/admin/org')}>
+            {/*
+              当前所在页要有**明确的高亮**。此前这两个按钮永远一个样子 ——
+              点进「组织架构」之后,顶栏上看不出自己在哪里(只有标签页标题变了)。
+            */}
+            <Button
+              variant={pathname.startsWith('/admin/org') ? 'primary' : 'secondary'}
+              onClick={() => void navigate('/admin/org')}
+            >
               组织架构
             </Button>
-            <Button variant="secondary" onClick={() => void navigate('/admin/users')}>
+            <Button
+              variant={pathname.startsWith('/admin/users') ? 'primary' : 'secondary'}
+              onClick={() => void navigate('/admin/users')}
+            >
               人员
             </Button>
           </>
@@ -119,7 +155,7 @@ export function AppLayout() {
           <div className="flex items-center gap-3 border-l border-slate-200 pl-4">
             <div className="text-right leading-tight">
               <div className={`text-slate-800 ${T_LABEL}`}>{user.name}</div>
-              <div className={`font-mono text-slate-400 ${T_META}`}>{user.employeeNo}</div>
+              <div className={`font-mono text-slate-500 ${T_META}`}>{user.employeeNo}</div>
             </div>
             <div className="flex gap-0.5">
               <button
@@ -157,8 +193,8 @@ export function AppLayout() {
             onOpenMembers={openMembers}
           />
         ) : (
-          <div className="flex h-full w-80 flex-none items-center justify-center border-r border-slate-200 bg-slate-50">
-            <span className="text-sm text-slate-400">
+          <div className="hidden h-full w-72 flex-none items-center justify-center border-r border-slate-200 bg-slate-50 md:flex xl:w-80">
+            <span className="text-sm text-slate-500">
               {tree.isError ? '组织结构加载失败' : '加载中…'}
             </span>
           </div>
@@ -182,6 +218,14 @@ export function AppLayout() {
           nodeId={grantTarget.nodeId}
           title={grantTarget.title}
           onClose={closeGrants}
+        />
+      )}
+
+      {visibilityTarget !== null && (
+        <VisibilityDialog
+          nodeId={visibilityTarget.nodeId}
+          title={visibilityTarget.title}
+          onClose={closeVisibility}
         />
       )}
 

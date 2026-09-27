@@ -129,6 +129,32 @@ export async function apiUpload<T>(path: string, file: File, field = 'file'): Pr
 }
 
 /**
+ * 离开页面时的**最后一次**写入 —— 给自动保存兜底。
+ *
+ * 自动保存有防抖窗口(1.2 秒),用户在这段时间里关标签页或刷新就会丢字。
+ * 这里必须用 `navigator.sendBeacon` 而不是 `fetch`:`fetch` 在页面卸载过程中
+ * 会被浏览器取消,而 beacon 由浏览器接管,卸载后仍会继续发出。
+ *
+ * ⚠️ 必须用 `Blob` 并显式指定 `application/json`,不能直接发字符串 ——
+ * 直接发字符串时 Content-Type 是 `text/plain`,Express 的 body-parser
+ * 不会解析它,后端 `@Body()` 拿到 undefined。那个坑的表现是
+ * **"请求发出去了、也返回 200 了,但内容没保存"**,极难排查。
+ *
+ * 返回 `false` 表示浏览器拒收(例如投递队列已满)。
+ */
+export function sendBeaconJson(path: string, payload: unknown): boolean {
+  if (typeof navigator === 'undefined' || typeof navigator.sendBeacon !== 'function') {
+    return false;
+  }
+  try {
+    const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
+    return navigator.sendBeacon(`${API_BASE}${path}`, blob);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * 触发一次浏览器下载。
  *
  * 导出接口返回的是 `text/markdown` 而不是 JSON,所以不能走 `apiFetch`

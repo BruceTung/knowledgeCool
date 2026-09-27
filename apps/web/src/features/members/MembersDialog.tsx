@@ -26,6 +26,7 @@
 import { USER_STATUS_LABELS, type NodeMemberView } from '@knowledgecool/shared';
 import { useState } from 'react';
 
+import { Modal } from '../../components/Modal';
 import { Button, ErrorNote, SelectField } from '../../components/ui';
 import { useModalOpen } from '../../lib/modal-store';
 import { T_META } from '../../lib/typography';
@@ -79,13 +80,13 @@ function MemberRow({
           )}
         </div>
 
-        <div className="truncate text-xs text-slate-400">
+        <div className="truncate text-xs text-slate-500">
           {member.employeeNo}
           {showPaths.length > 0 && ` · ${showPaths.join('、')}`}
         </div>
 
         {member.otherPaths.length > 0 && (
-          <div className="truncate text-xs text-slate-400">
+          <div className="truncate text-xs text-slate-500">
             另有归属:{member.otherPaths.join('、')}
           </div>
         )}
@@ -128,22 +129,22 @@ export function MembersDialog({
   );
 
   return (
-    <div className="fixed inset-0 z-40 flex items-start justify-center overflow-auto bg-slate-900/20 p-6 pt-16">
-      <div className="absolute inset-0" onClick={onClose} role="presentation" />
-
-      <section className="relative w-full max-w-2xl rounded-xl border border-slate-200 bg-white shadow-2xl">
-        <header className="flex items-center gap-2 border-b border-slate-200 px-5 py-3">
-          <h2 className="min-w-0 flex-1 truncate text-sm font-medium text-slate-900">
-            成员 · {title}
-          </h2>
+    <Modal
+      title={`成员 · ${title}`}
+      onClose={onClose}
+      footer={
+        <>
+          <p className="flex-1 text-xs leading-relaxed text-slate-500">
+            调岗 = 在这里把人加进新节点 → 再到原节点把他移出。两步都要做。
+          </p>
           <Button variant="secondary" className="flex-none" onClick={onClose}>
             关闭
           </Button>
-        </header>
-
-        <div className="max-h-[70vh] space-y-5 overflow-auto px-5 py-4">
+        </>
+      }
+    >
           {members.isError && <ErrorNote error={members.error} />}
-          {members.isPending && <p className="text-sm text-slate-400">加载中…</p>}
+          {members.isPending && <p className="text-sm text-slate-500">加载中…</p>}
 
           {members.data !== undefined && (
             <>
@@ -152,13 +153,13 @@ export function MembersDialog({
                 <div className="mb-1 text-sm font-medium text-slate-700">
                   直接成员 · {direct.length}
                 </div>
-                <p className="mb-2 text-xs leading-relaxed text-slate-400">
+                <p className="mb-2 text-xs leading-relaxed text-slate-500">
                   他们的<b>组织归属</b>直接挂在这个节点上。这里管的是归属,
                   不是权限 —— 归属决定"他能授权给谁",权限在另一个弹窗里。
                 </p>
 
                 {direct.length === 0 ? (
-                  <p className="text-xs text-slate-400">
+                  <p className="text-xs text-slate-500">
                     还没有人归属在这个节点上。
                   </p>
                 ) : (
@@ -216,7 +217,7 @@ export function MembersDialog({
                 )}
 
                 {canManage && candidates.isSuccess && addable.length === 0 && (
-                  <p className="mt-1 text-xs text-slate-400">
+                  <p className="mt-1 text-xs text-slate-500">
                     没有可加入的人 —— 只能加你组织范围内、且尚未归属在这里的在职同事。
                   </p>
                 )}
@@ -228,12 +229,12 @@ export function MembersDialog({
                 <div className="mb-1 text-sm font-medium text-slate-700">
                   下属成员 · {inherited.length}
                 </div>
-                <p className="mb-2 text-xs leading-relaxed text-slate-400">
+                <p className="mb-2 text-xs leading-relaxed text-slate-500">
                   他们归属在这个节点<b>下面的</b>节点上(这个部门的各个组)。
                   <b>不能在这里移出</b> —— 请到他们所属的那个节点上去操作。
                 </p>
                 {inherited.length === 0 ? (
-                  <p className="text-xs text-slate-400">下属节点里还没有人。</p>
+                  <p className="text-xs text-slate-500">下属节点里还没有人。</p>
                 ) : (
                   inherited.map((member) => (
                     <MemberRow
@@ -247,17 +248,6 @@ export function MembersDialog({
               </div>
             </>
           )}
-        </div>
-
-        <footer className="flex items-center gap-2 border-t border-slate-200 px-5 py-3">
-          <p className="flex-1 text-xs leading-relaxed text-slate-400">
-            调岗 = 在这里把人加进新节点 → 再到原节点把他移出。两步都要做。
-          </p>
-          <Button variant="secondary" className="flex-none" onClick={onClose}>
-            关闭
-          </Button>
-        </footer>
-      </section>
-    </div>
+    </Modal>
   );
 }

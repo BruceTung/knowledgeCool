@@ -22,14 +22,17 @@
 import { Injectable } from '@nestjs/common';
 import {
   EMPTY_DOC,
+  MAX_IMAGES_PER_NODE,
   type Actor,
   type NodeContentResponse,
   type ProseMirrorDoc,
   type SaveContentInput,
+  countImages,
   isProseMirrorDoc,
 } from '@knowledgecool/shared';
 
 import { recordAudit } from '../audit/record.js';
+import { runSerializable } from '../common/db/serializable.js';
 import { AppError } from '../common/errors/app-error.js';
 import { toMarkdown } from '../content/markdown.js';
 import { extractPlainText } from '../content/text-extract.js';
@@ -71,12 +74,16 @@ export class ContentService {
    * 返回空文档即可。刻意不在读路径上 upsert:GET 不该产生写操作,
    * 否则一次爬虫式的遍历会给每个节点都插一行空内容。
    */
-  async get(nodeId: string): Promise<NodeContentResponse> {
+  async get(operator: Actor, nodeId: string): Promise<NodeContentResponse> {
+    // v2.12:读也要过判定。受限节点对未授权的人是 404(不是 403)。
+    const access = await this.permissions.requireRead(operator, nodeId);
+
     const node = await this.prisma.node.findUnique({
       where: { id: nodeId },
-      select: { deletedAt: true, updatedAt: true },
+      select: { updatedAt: true },
     });
-    if (node === null || node.deletedAt !== null) throw AppError.notFound();
+    if (node === null) throw AppError.notFound();
+    void access;
 
     const row = await this.prisma.nodeContent.findUnique({
       where: { nodeId },
@@ -111,6 +118,15 @@ export class ContentService {
       throw AppError.validation('正文格式不合法:根节点必须是 type=doc 的文档树');
     }
 
+    // 每页图片上限。放在**服务端**才是真的闸 —— 前端那道只是即时反馈。
+    // 数的是文档树里的 image 节点(递归),所以嵌在表格/引用块里的也算。
+    const images = countImages(input.content);
+    if (images > MAX_IMAGES_PER_NODE) {
+      throw AppError.validation(
+        `一个页面最多放 ${String(MAX_IMAGES_PER_NODE)} 张图片,当前有 ${String(images)} 张`,
+      );
+    }
+
     const bytes = Buffer.byteLength(JSON.stringify(input.content), 'utf8');
     if (bytes > CONTENT_JSON_MAX_BYTES) {
       throw AppError.validation(
@@ -118,35 +134,46 @@ export class ContentService {
       );
     }
 
-    // 冲突检测:只在调用方给了 baseUpdatedAt 时才做。
-    // 不给即"强制覆盖",用于导入、脚本修复这类场景。
-    if (input.baseUpdatedAt !== undefined) {
-      const current = await this.prisma.nodeContent.findUnique({
-        where: { nodeId },
-        select: { updatedAt: true },
-      });
-      if (current !== null) {
-        const base = Date.parse(input.baseUpdatedAt);
-        if (Number.isFinite(base) && current.updatedAt.getTime() > base) {
-          throw AppError.versionConflict();
-        }
-      }
-    }
-
     const textForSearch = extractPlainText(input.content);
 
-    const row = await this.prisma.nodeContent.upsert({
-      where: { nodeId },
-      create: {
-        nodeId,
-        contentJson: input.content as unknown as Prisma.InputJsonValue,
-        textForSearch,
-      },
-      update: {
-        contentJson: input.content as unknown as Prisma.InputJsonValue,
-        textForSearch,
-      },
-      select: { updatedAt: true },
+    // ⚠️ 冲突检测与写入必须在**同一个 Serializable 事务**里。
+    //
+    // 原实现是"先查 updatedAt,再单独 upsert":两步之间没有任何保护,
+    // 两个并发的保存可以各自通过检查、然后先后写入 —— 后写的那一次**静默吃掉**
+    // 前一次。而这恰恰是整个 baseUpdatedAt 机制存在的目的(见文件头 §7.4 那段),
+    // 换句话说:原来的写法让它要防的那件事照样能发生。
+    const row = await runSerializable(this.prisma, async (tx) => {
+      // 冲突检测:只在调用方给了 baseUpdatedAt 时才做。
+      // 不给即"强制覆盖",用于导入、脚本修复这类场景。
+      if (input.baseUpdatedAt !== undefined) {
+        const current = await tx.nodeContent.findUnique({
+          where: { nodeId },
+          select: { updatedAt: true },
+        });
+        if (current !== null) {
+          const base = Date.parse(input.baseUpdatedAt);
+          // ⚠️ 解析不了**不能**当成"没有冲突"。那等于把一次格式错误静默降级成
+          // 强制覆盖 —— 而客户端传这个字段的本意恰恰是"我基于这一版改的"。
+          if (!Number.isFinite(base)) {
+            throw AppError.validation('baseUpdatedAt 不是合法的时间');
+          }
+          if (current.updatedAt.getTime() > base) throw AppError.versionConflict();
+        }
+      }
+
+      return tx.nodeContent.upsert({
+        where: { nodeId },
+        create: {
+          nodeId,
+          contentJson: input.content as unknown as Prisma.InputJsonValue,
+          textForSearch,
+        },
+        update: {
+          contentJson: input.content as unknown as Prisma.InputJsonValue,
+          textForSearch,
+        },
+        select: { updatedAt: true },
+      });
     });
 
     // 正文变动**不碰 nodes.version** —— 那个号被结构操作共用,
@@ -163,12 +190,15 @@ export class ContentService {
   }
 
   /** 导出为 Markdown(M6)。标题作为一级标题写在最前面。 */
-  async exportMarkdown(nodeId: string): Promise<NodeExport> {
+  async exportMarkdown(operator: Actor, nodeId: string): Promise<NodeExport> {
+    // ⚠️ 导出是最容易漏的一条读取路径:少了它,受限文档可以整篇被下载走。
+    await this.permissions.requireRead(operator, nodeId);
+
     const node = await this.prisma.node.findUnique({
       where: { id: nodeId },
-      select: { title: true, deletedAt: true },
+      select: { title: true },
     });
-    if (node === null || node.deletedAt !== null) throw AppError.notFound();
+    if (node === null) throw AppError.notFound();
 
     const row = await this.prisma.nodeContent.findUnique({
       where: { nodeId },

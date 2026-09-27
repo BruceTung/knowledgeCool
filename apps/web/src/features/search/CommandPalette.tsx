@@ -16,6 +16,8 @@ import type { SearchHit } from '@knowledgecool/shared';
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
+import { Modal } from '../../components/Modal';
+import { useDebounced } from '../../lib/use-debounced';
 import { useModalOpen } from '../../lib/modal-store';
 import { T_META } from '../../lib/typography';
 import { useSearch } from './queries';
@@ -29,7 +31,8 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
   // 登记为"有一个模态开着"—— 全局的 Ctrl/Cmd + K 靠它避免重复叠加。
   useModalOpen();
 
-  const search = useSearch(query);
+  // 防抖:每敲一个键就检索一次太浪费,中文输入法下还会在组合期间连发。
+  const search = useSearch(useDebounced(query, 220));
   const hits: SearchHit[] = search.data?.hits ?? [];
 
   // 挂载后聚焦。必须等一帧:面板还在渲染中,立刻 focus 会被丢掉。
@@ -49,10 +52,28 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-slate-900/20 p-6 pt-24">
-      <div className="absolute inset-0" onClick={onClose} role="presentation" />
-
-      <section className="relative flex max-h-[70vh] w-full max-w-xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl">
+    <Modal
+      // 命令面板**不要**默认表头:它的第一行就是搜索框,上面再压一条
+      // "关闭"标题栏既多余、又把输入框从第一眼的位置挤下去。
+      // 关掉表头就必须给 ariaLabel —— 否则这个对话框没有可访问名。
+      hideHeader
+      ariaLabel="全局检索"
+      onClose={onClose}
+      maxWidthClass="max-w-xl"
+      bodyClassName="flex max-h-[70vh] min-h-0 flex-col overflow-hidden p-0"
+      footer={
+        <>
+          <span>↑↓ 选择</span>
+          <span>Enter 打开</span>
+          <span>Esc 关闭</span>
+          {search.data !== undefined && (
+            <span className="ml-auto">
+              命中 {hits.length} 条 · {search.data.tookMs}ms
+            </span>
+          )}
+        </>
+      }
+    >
         <input
           ref={inputRef}
           value={query}
@@ -62,10 +83,8 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
             setActiveIndex(0);
           }}
           onKeyDown={(event) => {
-            if (event.key === 'Escape') {
-              onClose();
-              return;
-            }
+            // Esc 由 Modal 统一处理(它在 document 的捕获阶段监听),
+            // 这里不再自己处理一遍 —— 两处都关会各跑一次 onClose。
             if (event.key === 'ArrowDown') {
               event.preventDefault();
               setActiveIndex(hits.length === 0 ? 0 : (safeIndex + 1) % hits.length);
@@ -82,20 +101,20 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
             }
           }}
           placeholder="搜索页面标题与正文…(中文可直接搜)"
-          className="w-full border-b border-slate-200 px-4 py-3 text-sm outline-none placeholder:text-slate-400"
+          className="w-full flex-none border-b border-slate-200 px-4 py-3 text-sm outline-none placeholder:text-slate-500"
         />
 
         <div className="min-h-0 flex-1 overflow-auto py-1">
           {query.trim() === '' ? (
-            <p className="px-4 py-6 text-center text-sm text-slate-400">
+            <p className="px-4 py-6 text-center text-sm text-slate-500">
               输入关键词开始搜索。
               <br />
               全公司可读的内容都会出现在这里 —— 系统不区分"能搜到"与"能打开"。
             </p>
           ) : search.isPending ? (
-            <p className="px-4 py-6 text-center text-sm text-slate-400">搜索中…</p>
+            <p className="px-4 py-6 text-center text-sm text-slate-500">搜索中…</p>
           ) : hits.length === 0 ? (
-            <p className="px-4 py-6 text-center text-sm text-slate-400">没有匹配的内容</p>
+            <p className="px-4 py-6 text-center text-sm text-slate-500">没有匹配的内容</p>
           ) : (
             <ul>
               {hits.map((hit, index) => (
@@ -122,7 +141,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
                         </span>
                       )}
                     </span>
-                    <span className="w-full truncate text-xs text-slate-400">
+                    <span className="w-full truncate text-xs text-slate-500">
                       {hit.breadcrumb.length > 0 && hit.breadcrumb.join(' / ')}
                     </span>
                     {hit.snippet !== '' && (
@@ -137,17 +156,6 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
           )}
         </div>
 
-        <footer className="flex flex-none items-center gap-3 border-t border-slate-200 px-4 py-2 text-xs text-slate-400">
-          <span>↑↓ 选择</span>
-          <span>Enter 打开</span>
-          <span>Esc 关闭</span>
-          {search.data !== undefined && (
-            <span className="ml-auto">
-              命中 {hits.length} 条 · {search.data.tookMs}ms
-            </span>
-          )}
-        </footer>
-      </section>
-    </div>
+    </Modal>
   );
 }
