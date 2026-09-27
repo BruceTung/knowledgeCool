@@ -127,7 +127,85 @@ body {
   background: transparent;
   color: inherit;
   padding: 0;
-  font-size: 0.85em;
+  /* 14px = `T_BODY`。代码块是**要被读的内容**,不是"细字印刷" ——
+     原来是 0.85em(≈13.6px),改成 0.875em 后正好落在刻度表的第二档上。 */
+  font-size: 0.875em;
+}
+
+/* ============================================================
+   代码高亮的配色(v2.10)
+   ============================================================
+   lowlight / highlight.js 只产出 `hljs-*` 类名,颜色要自己给 ——
+   不引它的主题 CSS,理由与正文一样:那是给浅色底设计的,
+   而我们的代码块是深底(#0f172a)。
+
+   色板取自深色主题的常用搭配,与背景的深蓝灰同一系:
+   紫=关键字、绿=字符串、橙=数字/内置、蓝=函数、黄=变量/属性。 */
+.kc-prose pre .hljs-comment,
+.kc-prose pre .hljs-quote {
+  color: #8b9bb4;
+  font-style: italic;
+}
+
+.kc-prose pre .hljs-keyword,
+.kc-prose pre .hljs-literal,
+.kc-prose pre .hljs-selector-tag,
+.kc-prose pre .hljs-section,
+.kc-prose pre .hljs-name,
+.kc-prose pre .hljs-tag,
+.kc-prose pre .hljs-doctag {
+  color: #c792ea;
+}
+
+.kc-prose pre .hljs-string,
+.kc-prose pre .hljs-regexp,
+.kc-prose pre .hljs-addition,
+.kc-prose pre .hljs-meta-string {
+  color: #c3e88d;
+}
+
+.kc-prose pre .hljs-number,
+.kc-prose pre .hljs-built_in,
+.kc-prose pre .hljs-symbol,
+.kc-prose pre .hljs-bullet,
+.kc-prose pre .hljs-meta {
+  color: #f78c6c;
+}
+
+.kc-prose pre .hljs-function .hljs-title,
+.kc-prose pre .hljs-title.function_,
+.kc-prose pre .hljs-title.function {
+  color: #82aaff;
+}
+
+.kc-prose pre .hljs-title,
+.kc-prose pre .hljs-title.class_,
+.kc-prose pre .hljs-type,
+.kc-prose pre .hljs-class .hljs-title,
+.kc-prose pre .hljs-selector-class,
+.kc-prose pre .hljs-selector-id {
+  color: #ffcb6b;
+}
+
+.kc-prose pre .hljs-attr,
+.kc-prose pre .hljs-attribute,
+.kc-prose pre .hljs-variable,
+.kc-prose pre .hljs-template-variable,
+.kc-prose pre .hljs-selector-attr,
+.kc-prose pre .hljs-selector-pseudo {
+  color: #ffcb6b;
+}
+
+.kc-prose pre .hljs-deletion {
+  color: #ef5350;
+}
+
+.kc-prose pre .hljs-emphasis {
+  font-style: italic;
+}
+
+.kc-prose pre .hljs-strong {
+  font-weight: 600;
 }
 
 .kc-prose hr {
@@ -158,6 +236,11 @@ body {
   border: 1px solid #e2e8f0;
   padding: 0.4em 0.6em;
   vertical-align: top;
+  /* ⚠️ 必须有 `position: relative`,下面 `.selectedCell::after` 的
+     `absolute; inset: 0` 才会以**这个单元格**为基准。
+     少了它,拖选多格时那层半透明蓝会按最近的定位祖先去铺 —— 位置全错,
+     而且因为它是 `pointer-events: none`,你甚至意识不到它在别处。 */
+  position: relative;
 }
 
 .kc-prose th {

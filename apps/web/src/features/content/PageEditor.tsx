@@ -19,12 +19,20 @@
  * 阶段二挂 `y-prosemirror` 时不需要改存储层。届时还要**关掉 Tiptap 自带的撤销栈**
  * 改用 `Y.UndoManager`(§10.1),否则两套撤销栈会打架。
  */
+import { CodeBlockLowlight } from '@tiptap/extension-code-block-lowlight';
 import { Image } from '@tiptap/extension-image';
 import { Table, TableCell, TableHeader, TableRow } from '@tiptap/extension-table';
 import { Placeholder } from '@tiptap/extensions';
 import { EditorContent, useEditor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+} from 'react';
 
 import type { Editor, EditorEvents } from '@tiptap/core';
 import type { NodeContentResponse, ProseMirrorNode } from '@knowledgecool/shared';
@@ -32,7 +40,20 @@ import type { NodeContentResponse, ProseMirrorNode } from '@knowledgecool/shared
 import { ApiError } from '../../lib/api';
 import { Button } from '../../components/ui';
 import { useSaveContent } from '../org/queries';
+import { DEFAULT_CODE_LANGUAGE, createLowlighter } from './code-languages';
+import { EditorToolbar } from './editor/Toolbar';
 import { useImageUpload } from './queries';
+
+/**
+ * 语法高亮器。**模块级单例** —— 它会注册十几个语言的语法(每个都是独立的
+ * 解析函数),每次渲染都建一个既浪费内存也浪费时间。
+ *
+ * ⚠️ 这里用的是 `createLowlighter()` 而不是 `createLowlight()`:
+ * 后者一个语言都没注册,`highlight()` 会对任何语言抛 `Unknown language`
+ * (实测确认,不是推测)。注册表由 `CODE_LANGUAGES` 推导出来,并有单测钉住
+ * "清单里的每个 id 都真的注册过"。
+ */
+const lowlight = createLowlighter();
 
 /** 自动保存的防抖间隔。太短会在输入法组合期间频繁写库,太长会丢更多内容。 */
 const AUTOSAVE_DELAY_MS = 1200;
@@ -92,6 +113,15 @@ export function PageEditor({
   const upload = useImageUpload();
 
   const [state, setState] = useState<SaveState>('idle');
+  /**
+   * 只为了在**光标移动时**重渲染一次。
+   *
+   * ⚠️ 不这么做,工具栏的激活态会滞后:`isActive('bold')` / `isActive('table')` /
+   * `isActive('codeBlock')` 都是"此刻光标在哪"的函数,而 `onUpdate` 只在**内容**
+   * 变化时触发。表现是:点进代码块看不到语言下拉、光标移到加粗文字上 B 不亮 ——
+   * 得再敲一个字才对。这类"看起来偶发"的问题基本都是少订阅了一个事件。
+   */
+  const [, bumpSelectionVersion] = useReducer((version: number) => version + 1, 0);
   /** 我读到的那一版。每次保存成功后推进 —— 这就是正文的乐观锁基线。 */
   const baseRef = useRef(initial.updatedAt);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -112,7 +142,17 @@ export function PageEditor({
       StarterKit.configure({
         // v3 的 StarterKit 已内置 Link 与 Underline
         link: { openOnClick: false, autolink: true },
-        codeBlock: { HTMLAttributes: { class: 'kc-code-block' } },
+        // ⚠️ 必须**关掉** StarterKit 自带的 codeBlock —— 它和下面的
+        // `CodeBlockLowlight` 是同一个节点的两份实现,两个都注册会冲突
+        // (表现是语言属性存不住、语法类名时有时无)。
+        codeBlock: false,
+      }),
+      CodeBlockLowlight.configure({
+        lowlight,
+        // 不选语言时用纯文本。设了默认值之后 `language` 属性**从创建那一刻就有值**,
+        // 后面读属性不用到处判 undefined。
+        defaultLanguage: DEFAULT_CODE_LANGUAGE,
+        HTMLAttributes: { class: 'kc-code-block' },
       }),
       Image.configure({ inline: false, allowBase64: false }),
       Table.configure({ resizable: false }),
@@ -147,6 +187,9 @@ export function PageEditor({
     },
     onCreate: ({ editor: instance }: EditorEvents['create']) => {
       onOutline(extractOutline(instance.getJSON() as ProseMirrorNode));
+    },
+    onSelectionUpdate: () => {
+      bumpSelectionVersion();
     },
   });
 
@@ -213,7 +256,7 @@ export function PageEditor({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {canEdit && (
-        <Toolbar
+        <EditorToolbar
           editor={editor}
           onPickImage={() => fileInputRef.current?.click()}
           imageUploading={upload.isPending}
@@ -275,134 +318,4 @@ export function SaveStateLabel({ state }: { state: SaveState }) {
   };
   if (state === 'idle') return null;
   return <span className={`text-xs ${color[state]}`}>{text[state]}</span>;
-}
-
-/**
- * 工具栏按钮的统一规格。
- *
- * ⚠️ 原来文字按钮(链接 / 图片 / 表格)没写 `min-w`,而符号按钮写了 ——
- * 于是一行里按钮宽度参差。再加上按钮高度是"内边距撑出来的",
- * 分隔线(`h-4`)与按钮的视觉中线也对不齐。
- * 用户反馈的「图标、字体大小、字样都不对称」,这一排是主要来源之一。
- *
- * 收敛成常量:固定高度 + 最小宽度 + 居中对齐,新增按钮不会再各写一份。
- */
-const TOOL_BUTTON_CLASS =
-  'flex h-7 min-w-[32px] items-center justify-center rounded-md px-2 text-sm leading-none transition-colors';
-const TOOL_BUTTON_IDLE_CLASS = 'text-slate-600 hover:bg-slate-100 hover:text-slate-900';
-const TOOL_BUTTON_ACTIVE_CLASS = 'bg-slate-900 text-white';
-const TOOL_DIVIDER_CLASS = 'mx-1.5 h-4 w-px bg-slate-200';
-
-function Toolbar({
-  editor,
-  onPickImage,
-  imageUploading,
-}: {
-  editor: Editor;
-  onPickImage: () => void;
-  imageUploading: boolean;
-}) {
-  /**
-   * ⚠️ 用 `onMouseDown` 而不是 `onClick`,并且 `preventDefault()`。
-   * 点按钮会先把焦点从编辑器抢走,选区随之丢失 ——
-   * 于是"选中一段文字再点加粗"会变成"什么都没加粗"。
-   * 在 mousedown 阶段阻止默认行为就能保住选区。
-   */
-  const guard = (action: () => void) => (event: MouseEvent) => {
-    event.preventDefault();
-    action();
-  };
-
-  const button = (label: string, active: boolean, action: () => void, title: string) => (
-    <button
-      type="button"
-      title={title}
-      onMouseDown={guard(action)}
-      className={`${TOOL_BUTTON_CLASS} ${active ? TOOL_BUTTON_ACTIVE_CLASS : TOOL_BUTTON_IDLE_CLASS}`}
-    >
-      {label}
-    </button>
-  );
-
-  return (
-    <div className="flex flex-wrap items-center gap-0.5 border-b border-slate-200 px-8 py-2">
-      {button('B', editor.isActive('bold'), () => editor.chain().focus().toggleBold().run(), '粗体')}
-      {button('I', editor.isActive('italic'), () => editor.chain().focus().toggleItalic().run(), '斜体')}
-      {button('U', editor.isActive('underline'), () => editor.chain().focus().toggleUnderline().run(), '下划线')}
-      {button('S', editor.isActive('strike'), () => editor.chain().focus().toggleStrike().run(), '删除线')}
-
-      <span className={TOOL_DIVIDER_CLASS} />
-
-      {([1, 2, 3] as const).map((level) =>
-        button(
-          `H${String(level)}`,
-          editor.isActive('heading', { level }),
-          () => editor.chain().focus().toggleHeading({ level }).run(),
-          `${String(level)} 级标题`,
-        ),
-      )}
-
-      <span className={TOOL_DIVIDER_CLASS} />
-
-      {button('•', editor.isActive('bulletList'), () => editor.chain().focus().toggleBulletList().run(), '无序列表')}
-      {button('1.', editor.isActive('orderedList'), () => editor.chain().focus().toggleOrderedList().run(), '有序列表')}
-      {button('"', editor.isActive('blockquote'), () => editor.chain().focus().toggleBlockquote().run(), '引用')}
-      {button('</>', editor.isActive('codeBlock'), () => editor.chain().focus().toggleCodeBlock().run(), '代码块')}
-      {button('⌀', editor.isActive('code'), () => editor.chain().focus().toggleCode().run(), '行内代码')}
-
-      <span className={TOOL_DIVIDER_CLASS} />
-
-      <button
-        type="button"
-        title="插入 / 编辑链接"
-        onMouseDown={guard(() => {
-          const previous = (editor.getAttributes('link')['href'] as string | undefined) ?? '';
-          const href = window.prompt('链接地址', previous);
-          if (href === null) return;
-          if (href === '') {
-            editor.chain().focus().unsetLink().run();
-            return;
-          }
-          // 空选区时 setLink 不会生效,提示用户先选文字
-          if (editor.state.selection.empty) {
-            editor.chain().focus().insertContent(`<a href="${href}">${href}</a>`).run();
-            return;
-          }
-          editor.chain().focus().extendMarkRange('link').setLink({ href }).run();
-        })}
-        className={`${TOOL_BUTTON_CLASS} ${
-          editor.isActive('link') ? TOOL_BUTTON_ACTIVE_CLASS : TOOL_BUTTON_IDLE_CLASS
-        }`}
-      >
-        链接
-      </button>
-
-      <button
-        type="button"
-        title="插入图片"
-        disabled={imageUploading}
-        onMouseDown={guard(onPickImage)}
-        className={`${TOOL_BUTTON_CLASS} ${TOOL_BUTTON_IDLE_CLASS} disabled:opacity-50`}
-      >
-        {imageUploading ? '上传中…' : '图片'}
-      </button>
-
-      {button(
-        '表格',
-        editor.isActive('table'),
-        () =>
-          editor
-            .chain()
-            .focus()
-            .insertTable({ rows: 3, cols: 3, withHeaderRow: true })
-            .run(),
-        '插入 3×3 表格',
-      )}
-
-      <span className={TOOL_DIVIDER_CLASS} />
-
-      {button('↶', false, () => editor.chain().focus().undo().run(), '撤销')}
-      {button('↷', false, () => editor.chain().focus().redo().run(), '重做')}
-    </div>
-  );
 }
