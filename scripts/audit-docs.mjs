@@ -142,12 +142,22 @@ notes.push(`环境变量:代码读 ${String(codeVars.size)} 个 / .env.example �
  * 或形如 `目录/文件.ext`)。不这么做的话,"h1/h2/h3"、"try/finally"
  * 这类字面量会被误判 —— 第一版就栽在这里。
  */
+/**
+ * 有意为之的引用,不必存在。**每一条都必须写理由** ——
+ * 没有理由的名单迟早会变成"把报错塞进去就完事"的地方,那时这个检查就死了。
+ */
 const HISTORICAL = new Map([
   ['apps/api/scripts/verify-m4m5.mjs', '§9.1 是历史记录,文中已明确写了"v2.0 改造时已删除"'],
   ['packages/shared/src/roles.ts', '只出现在 v1.5 的变更记录里,那是对当时状态的存档'],
   ['features/pages', 'DEPLOY.md 说明"某个版本删掉的前端模块会原样留着"'],
   ['docker-compose.override.yml', '部署侧文件,不进仓库'],
   ['backups/', '运行期目录,不进仓库'],
+  [
+    'apps/api/src/generated',
+    'Prisma 客户端,**由 `prisma generate` 生成**:本地有(装依赖时跑过)、' +
+      '服务器上那份源码包里没有(它被 tar 排除、改在镜像构建时生成)。' +
+      '文档引用它是正确的 —— 它是 import 路径的一部分。',
+  ],
 ]);
 
 /**
@@ -170,13 +180,19 @@ const ROOTS = [
 const EXTS = /\.(ts|tsx|mjs|js|json|prisma|sql|css|md|yml|yaml|sh|html)$/;
 /** 占位符写法(如 `apps/web/node_modules/<包>`)不是真的路径引用。 */
 const PLACEHOLDER = /[<>…]|xxx|\*/;
+/**
+ * `node_modules/` 下的引用一律跳过:那是**安装产物**,永远不在仓库里,
+ * 而且在不在取决于"这台机器装没装依赖" —— 拿它当漂移报是错的。
+ * (这条不是"例外名单",是一条规则:`node_modules` 天生不属于仓库内容。)
+ */
+const INSTALLED = /(^|\/)node_modules\//;
 
 const pathRefs = new Set();
 for (const doc of ['DESIGN.md', 'DEPLOY.md', 'README.md']) {
   if (!fs.existsSync(path.join(ROOT, doc))) continue;
   for (const m of read(doc).matchAll(/`([^`\n]+)`/g)) {
     const ref = m[1].trim();
-    if (PLACEHOLDER.test(ref)) continue;
+    if (PLACEHOLDER.test(ref) || INSTALLED.test(ref)) continue;
     const looksRepoPath =
       /^(apps|packages|scripts|docker)\//.test(ref) ||
       (/^[\w-]+\/[\w./-]+$/.test(ref) && EXTS.test(ref));
@@ -184,8 +200,16 @@ for (const doc of ['DESIGN.md', 'DEPLOY.md', 'README.md']) {
   }
 }
 
+/** 例外名单里既有具体文件也有目录 —— 目录用前缀匹配(如 `apps/api/src/generated`)。 */
+function isExcepted(ref) {
+  for (const key of HISTORICAL.keys()) {
+    if (ref === key || ref.startsWith(key.endsWith('/') ? key : `${key}/`)) return true;
+  }
+  return false;
+}
+
 for (const ref of pathRefs) {
-  if (HISTORICAL.has(ref)) continue;
+  if (isExcepted(ref)) continue;
   // 去掉可能带的 `:` 行号后缀
   const clean = ref.split(':')[0];
   const found = ROOTS.some((root) => fs.existsSync(path.join(ROOT, root, clean)));
