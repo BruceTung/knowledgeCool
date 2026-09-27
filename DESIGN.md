@@ -2,70 +2,78 @@
 
 | 项 | 值 |
 |---|---|
-| 文档版本 | v2.16 |
-| 最后更新 | 2026-09-27 |
-| 状态 | **全部落地、已在 Docker 上真机部署并通过全量验收;文档与代码的一致性由机器检查(§0.5)。**  §9.2 四个批次(数据模型 / 权限服务 / 组织架构管理 / 前端导航)全部完成; v2.4 补齐「节点成员管理入口」;v2.5 重做首登链路与评论语义(去掉"已解决"); v2.6 补上**管理员重置密码**并让验收脚本自还原;v2.7 让收尾覆盖「密码 + 残留节点 + 被改的所有者」; v2.8 按 Atlassian Design System 与 Ant Design 的公开规范重做字号与排版刻度(§7.5); v2.9 补上**点击目标尺寸**下限;v2.10 补齐编辑器三处能力缺口(§7.4); v2.11 做了一次**文档与代码的对账**并固化成 `pnpm audit:docs`(§0.5); **v2.12 移除回收站(删除改为物理删除)+ 登录限流与 5 次锁定(§6.1.3)+ 人员列表分页**; **v2.13 新增保密能力**(`visibility` + 独立读者名单,§5.6;**v2.16 实测发现当时有两条约读取路径没收口,已补**); **v2.14 补齐低成本缺失功能**(批量移动 §8.6、审计筛选与 CSV 导出、最近浏览 / 收藏、检索历史与高亮、骨架与重试、打印 / PDF,§7.6); **v2.15 第一次真机部署**(13 轮改动全部上容器验证)并据此修掉六个"只有真跑才暴露"的问题(§9.10);**v2.16 文档对账时又实测出两条**漏掉的读取路径**并补上(§5.6)。**  验收口径(2026-09-27 实测):端到端 **168 项断言**(`pnpm verify:org`,0 失败); 单测 **438 项**(shared 86 / web 108 / api 244);`verify-db` 8/8 表、7/7 索引、3/3 CHECK; `pnpm audit:docs` **七项**机器检查(接口双向比对 / 环境变量 / 文件路径 / 版本号 / 前端调用↔后端路由 / compose 环境变量 / 弃用结构扫描)。 "只有真跑才会暴露"的问题记在 §9.3 / §9.5 / §9.6 / §9.7 / §9.8 / §9.9 / **§9.10** |
-| 定位 | 内网自托管 · **按公司组织架构组织**的企业知识库 |
+| 文档版本 | v3.0 |
+| 状态 | 依据**实际代码**重写。事实性表格由脚本生成并被门禁校验,手写内容逐条经真机核验 |
+| 定位 | 内网自托管 · 按公司组织架构组织的企业知识库 |
 
 ---
 
-## 0. 文档说明
+## 0. 这份文档凭什么可信
 
-### 0.1 本文是什么
+旧版本烂掉的根因不是"写得不用心",而是**它的事实来自记忆**:接口列表、字段列表、
+环境变量列表都是手抄的,抄完没有任何东西会发现它与代码不符。于是漂移不断积累,
+直到有人撞上 —— 而文档看起来始终是"完整的"。
 
-本文是阶段一的**唯一施工依据**。包含:技术栈定稿、系统架构、完整数据模型(含建表 DDL)、权限判定逻辑、接口清单、前端架构、关键流程、里程碑任务拆解,以及为阶段二预留的硬约束。
+这一版换了做法,分三层:
 
-编码时任何与本文冲突的实现,以本文为准;若本文确实有错,先改本文再改代码。
+### 0.1 事实由代码生成(四张表)
 
-### 0.2 本文不是什么
-
-- 不是阶段二 / 阶段三的设计。协同编辑、行内锚定评论、通知推送、SSO 都只在第 10 节留了约束,没有详细设计。
-- 不是部署手册。部署文档在 M6 产出。
-
-### 0.3 已锁定的四个决策
-
-以下四项已确认,后续不再讨论:
-
-1. **全 TypeScript 技术栈** —— 后端 Node + NestJS,前端 React + TS。Java 方案已排除(理由见 §2.2)。
-2. **实时多人协同排在阶段二** —— 阶段一只打地基,不接协同。
-3. **阶段一包含"页面级评论"** —— 不锚定到具体文字,不含通知推送。
-4. **内容按公司组织架构组织(v2.0 锁定)** —— 空间是**组织层级**而非自由容器;人员与归属**预置**;
-权限靠"所有者 + 祖先链 + 显式授权"三个概念;**读默认开放,可按节点收紧(v2.13)**。决策过程与影响面见 §1.5、§5.6。
-
-### 0.4 关键区分(务必理解)
-
-> **"阶段一不做协同"指的是不做"多人同时在线的产品能力",不是"不按协同的地基来写代码"。**
-
-这是全文最重要的一句话。混淆这两个概念,会导致阶段二推倒重来。具体来说:阶段一不用 Yjs,但**正文必须存成 ProseMirror 的文档树 JSON,绝不允许存 Markdown 字符串**。
-
-### 0.5 本文与代码的一致性由**机器**检查(v2.11)
-
-这份文档是施工依据,但它**手写的** —— 手写的清单一定会漂:接口加了没写进来、
-表改名了文档没跟着改、环境变量写了但代码根本不读。这类漂移**不报任何错**,
-只会在某天有人照着文档去做一件事、却发现文档是错的。
-
-所以有 `pnpm audit:docs`(`scripts/audit-docs.mjs`),它检查四件事:
-
-| 检查 | 比对的两侧 | 能抓到的漂移 |
+| 生成块 | 来源 | 生成器 |
 |---|---|---|
-| **接口** | §6.2 的表格 ↔ 控制器里 `@Get/@Post/...` 实际注册的路由 | 接口加了没写、文档写了但代码没有 |
-| **环境变量** | `process.env.X` ↔ `.env.example` 的键 | 代码读了没声明;**声明了但没人读**(填了不生效的假开关) |
-| **文件路径** | 文档里提到的仓库路径 ↔ 文件系统 | 删掉的文件还挂在文档里 |
-| **版本号** | 文档头的 `文档版本` ↔ 变更记录最新一行 | 改了内容忘了推进版本 |
+| 接口清单(§6.2) | 各 `*.controller.ts` 的 `@Controller` 与 `@Get/@Post/…` | `scripts/gen-doc.mjs` |
+| 数据模型(§4.2) | `apps/api/prisma/schema.prisma` | 同上 |
+| 环境变量(§9.1) | `apps/api/src/config/configuration.ts` | 同上 |
+| 前端路由(§7.1) | `apps/web/src/App.tsx` | 同上 |
 
-两个刻意的设计:
+这些表格被包在 `<!-- BEGIN GENERATED:… -->` 与 `<!-- END GENERATED:… -->` 之间。
+**手动编辑它们没有意义** —— `pnpm audit:docs` 会重新生成一遍并逐字比对,不一致就让门禁失败。
 
-- **双向比对,不是单向**。"文档少写了"和"文档多写了"都要报 ——
-  只查一侧的话,另一侧会慢慢烂掉。
-- **例外必须写理由。** 有意为之的(历史存档、部署侧文件、由别的程序读的变量)
-  进脚本里的例外名单,**每一条都带一句话理由**。没有理由的名单迟早会变成
-  "把报错塞进去就完事"的地方,那时这个检查就死了。
+> **所以:这四张表不可能与代码脱节。** 不是"我保证它是对的",是"它错了就构建不过"。
 
-> 它已经接过 `pnpm check`(和 typecheck / lint / test 一起跑)。
-> 真抓到过东西:§9.1 一边写"`pnpm verify:m4m5` 已删除"、一边写"脚本在仓库里可以自己复现";
-> §10 的"硬约束"里还留着 v1.x 的表名 `page_id` / `page_contents`;
-> `.env.example` 里有两个从没被读过的开关(`POSTGRES_PORT` / `VITE_API_BASE`);
-> `/health` 与 `/health/ready` 两个接口根本没进接口清单。
+### 0.2 约束由机器检查
+
+`pnpm audit:docs`(`scripts/audit-docs.mjs`)共八项:
+
+1. **接口**:§6.2 与控制器注册的路由**双向**比对(文档少的、多的都报)
+2. **环境变量**:代码读的 ↔ `.env.example` 声明的,双向比对
+3. **文件路径**:文档里提到的仓库路径必须真的存在
+4. **版本号**:文档头版本 = 变更记录最新一行
+5. **前端调用 ↔ 后端路由**:前端写的字符串路径必须都能在后端找到
+6. **docker-compose ↔ 代码**:compose 传给 api 的环境变量必须是代码真读的(死开关要报)
+7. **弃用结构**:已删除的数据库列/索引不许再出现在源码里
+8. **生成块**:§0.1 的四张表与代码一致
+
+### 0.2.1 行为断言怎么办
+
+上一条检的是**结构性事实**(有哪些接口、哪些字段)。但文档里还有一类话是
+**从代码读出来、再写成人话**的,比如:
+
+- 「导出传错 `format` 回 400,**而且参数校验先于权限校验**」
+- 「审计游标传 `abc` 回 400,不是 500」
+- 「人员列表返回 `{ users, total, nextCursor }`」
+
+这类句子机器比对不了 —— 它们是**对行为的断言**。唯一能验的办法是**真的打一次接口**。
+
+`pnpm verify:doc`(`apps/api/scripts/verify-doc-claims.mjs`)就是干这个的:
+它对着一套跑起来的实例逐条打请求,把文档里的行为断言核一遍。
+⚠️ 它**只读**,不改任何数据。
+
+> 所以这份文档里的每一句"会发生什么",要么指得到代码,要么被这个脚本打过。
+
+### 0.3 其余内容是判断,不是事实
+
+权限模型、关键流程、取舍理由这些是**判断**,没法生成。对它们的要求是:
+
+- **每条判断都要能指到代码**。指不到代码的判断,这里不写。
+- 涉及"实际会发生什么"的,用**真机接口核验**过(在后文就地标注)。
+- **不写变更记录**,不写"某版本曾经怎样"。历史在 git 里,不在这份文档里。
+  这是刻意的:旧文档 2500 行里大半是历史层,而**历史与现状混在一起正是它不可信的第二个原因**。
+
+### 0.4 读这份文档时的约定
+
+- 章节号(§5.6 这类)是**稳定标识**,代码注释里引用了它们,不要重排。
+- 带 `⚠️` 的是**踩过的坑**,不是风格建议。
+- 表格上方的"由 … 生成"不是装饰,是**这份内容的来源声明**。
 
 ---
 
@@ -73,652 +81,371 @@
 
 ### 1.1 定位
 
-一个部署在公司内网的多人知识库,**按公司真实的组织架构组织内容**。解决的核心问题:**知识散落在个人电脑、聊天记录和邮件里,找不到、留不住、新人上手慢。**
+内网自托管的**企业知识库**。与通用 SaaS 知识库的差别在于组织方式:
+内容直接挂在**公司既有的组织结构**(部门 / 组 / 项目)下,而不是让用户自由创建"空间"。
 
-与"通用知识库"的区别是本项目最重要的一条定位,写在这里以免再走偏:
-
-| | 通用知识库 | 本项目 |
+| | 通用 SaaS 知识库 | 本项目 |
 |---|---|---|
-| 空间从哪来 | 用户自由创建,可无限多 | **公司既有的部门与组/项目**,预置 |
-| 人从哪来 | 注册 / 被邀请进空间 | **全员预置**,且自带组织归属 |
-| 权限靠什么 | 空间内的角色等级 | **节点所有者 + 祖先链 + 显式授权** |
-| 读的开放度 | 常需逐空间授权 | **默认全员开放**;v2.13 起支持**按节点保密**(受限节点 + 读者名单,§5.6) |
-| 登录后落点 | 空间列表页 | **直接进工作台**,左侧即完整组织树 |
+| 组织结构 | 用户自建空间,与公司架构无关联 | **就是公司的组织架构**(部门 / 组 / 项目) |
+| 谁建空间 | 任何用户 | 只有组织内有权的人;空间对应真实的组织单元 |
+| 默认可见性 | 常需逐空间授权 | **默认全员可读**;可按节点显式收紧(§5.6) |
+| 部署 | 公网 SaaS | 内网自托管,Docker Compose 四容器 |
 
-不做的事:不做对外帮助中心(不需要 SEO、不需要公开站点样式)、不做多租户 SaaS(不需要租户隔离)。
+### 1.2 已实现的能力(当前状态)
 
-### 1.2 阶段一交付清单
-
-验收标准只有一条:**一个同事在内网里能完整用起来。**
-
-| # | 交付项 | 验收口径 |
+| # | 能力 | 说明 |
 |---|---|---|
-| 1 | Docker Compose 一键起 | PG · Redis · API · Web 四个容器,一条命令起来 |
-| 2 | 账号登录与管理员初始化 | 库为空时引导创建首个管理员;管理员可导入组织架构与人员 |
-| 3 | **组织架构(部门 / 组 / 项目)与人员归属** | 部门与二级节点可建、可指定所有者;人员归属可维护,**支持多归属** |
-| 4 | 节点树 CRUD 与拖拽排序 | 空间与页面是**同一种节点**;删除即**物理删除整棵子树**(v2.12 起不再有软删除) |
-| 5 | Tiptap 编辑器 | 标题 / 列表 / 代码块 / 图片 / 表格 / 引用 |
-| 6 | **权限判定 + 服务端强制拦截** | 所有者 + 祖先链 + 显式授权;**授权受组织范围约束**。读取默认对全员开放,但 v2.13 起支持**按节点保密**(`visibility=restricted` + 读者名单,§5.6);读不到时回 404 |
-| 7 | 全文检索(中文可用) | 全员可搜,但 **v2.13 起按可见性过滤** —— 受限节点的标题与正文片段不出现在别人的结果里(§8.3)。中文靠 `ILIKE` + `pg_trgm`(PG 自带分词器不支持中文,§2.3) |
-| 8 | ~~软删除与回收站~~ | **已移除(v2.12)** —— 用户明确要求"不该有回收站这个概念,删除就应该直接删除" |
-| 9 | 页面级评论 | 页面底部讨论串,支持一层回复;**不含**行内锚定与通知推送。全员可发。⚠️ v2.5 起**没有"已解决"状态** —— 评论就是评论,不是问题单(§8.4) |
+| 1 | 账号与登录 | 工号 + 密码;首次登录强制改密(§6.1.2);失败限流与锁定(§6.1.3) |
+| 2 | 组织架构 | 部门 / 组 / 项目三级(技术上不限层数);Excel 增量导入;人员可多归属 |
+| 3 | 内容树 | 空间与页面是**同一种节点**;新建 / 改名 / 移动 / 拖拽排序;**删除即物理删除** |
+| 4 | 编辑器 | Tiptap;标题 / 列表 / 代码块 / 图片 / 表格 / 引用;链接气泡;乐观锁 |
+| 5 | 权限 | 所有者 + 祖先链 + 显式授权;判权在服务端;缓存可降级(§5) |
+| 6 | 保密 | 节点级 `visibility` + 独立读者名单;七条读取路径逐条收口(§5.6) |
+| 7 | 检索 | 中文可用(`ILIKE` + `pg_trgm`);按可见性过滤;命中高亮 |
+| 8 | 评论 | 页面级讨论串,支持一层回复;**没有"已解决"状态** |
+| 9 | 批量移动 | 最多 50 个;拒绝互为祖先的选法;全做或全不做(§8.6) |
+| 10 | 审计 | 全量记录;按动作筛选;导出 CSV(与列表同一可见范围) |
+| 11 | 导出 | Markdown 导出;打印 / 存 PDF 走浏览器(§7.6) |
+| 12 | 个人视图 | 最近浏览 / 收藏 / 检索历史(**只存浏览器本地**) |
 
-### 1.3 阶段一明确不做
+### 1.3 明确不做
 
-实时多人协同 · 行内锚定评论 · 通知推送 · SSO / 企业微信登录 · 版本历史与差异对比 · 语义问答 RAG · 模板中心 · 移动端适配 · 开放 API。
+实时多人协同 · 行内锚定评论 · 通知推送 · SSO / 企业微信登录 · 版本历史与差异对比 ·
+语义问答 RAG · 模板中心 · 移动端适配 · 开放 API · 服务端生成 PDF · 回收站(删除不可逆)。
 
-**把这些写进文档,是为了防止开发中途被不断加需求。** 任何人想加需求,先改这一节。
-
-> 注:v1.x 的清单里还有「自定义用户组」。v2.0 起**不再列为不做项** —— 组织架构本身就是分组的载体,
-> 「用户组」这个概念已经被 `org_assignments`(组织归属)取代,不需要单独做一套。
-
-### 1.4 三阶段路线图
-
-| 阶段 | 目标 | 关键内容 |
-|---|---|---|
-| 一 | 一个同事能完整用起来 | 身份 · **组织架构** · 节点树 · 编辑器 · 权限 · 检索 · 页面级评论 |
-| 二 | 团队真正协作起来 | Yjs 协同 · 行内锚定评论 · 通知中心 · 版本历史 · Meilisearch 全文检索 |
-| 三 | 企业化与规模化 | SSO · 审计看板 · 导入导出 · 开放 API · 移动端 |
-
-### 1.5 为什么改成"组织架构驱动"(v2.0 · 2026-09-26)
-
-初版把空间设计成**用户自由创建的容器**(带成员与五档角色)。这个方向被否掉了 —— 它不是本项目要的东西:
-
-1. **空间不是"容器",是"层级"。** "技术部 → 后端组 → CRM 项目"这种结构**先于知识库存在**,不该由用户在知识库里重新建一遍。用户原话:"我说的空间指的是层级,没有专属空间的说法,只不过空间所属人员权限更高而已。"
-2. **人不是"被邀请进空间",而是"本来就在组织里"。** 邀请制意味着大量重复操作,而且会产生"同一个人被邀请进八个空间"这种在真实公司里不成立的状态。
-3. **角色等级制与实际管理链条不符。** 真实规则是"**谁建的东西,他的上级链都能改**",不是"某人在这个空间里是什么级别"。
-4. **读需要默认开放。** 旧设计的「最小可见」与公司内部知识共享的目标冲突 ——
-   故 v2.0 废除该铁律;**v2.13 起以"逐节点显式受限 + 读者名单"的形式部分恢复**(§5.6),但默认仍是开放。
-
-**结论:空间与页面合并为一棵节点树,权限退回到三个概念 —— 所有者、祖先链、显式授权。**
-
-**这次变更的影响范围(诚实记录):**
-
-| 影响 | 内容 |
-|---|---|
-| **作废** | `spaces` / `space_members` / `page_permissions` 三张表;五档角色枚举;能力矩阵查表;`deny` 语义;「最小可见」铁律 |
-| **改名** | `pages` → `nodes`,`page_contents` → `node_contents`(结构未变) |
-| **新增** | `org_assignments`(组织归属,多对多)、`node_grants`(授权名单)、组织架构维护功能 |
-| **不受影响** | 正文(ProseMirror / Tiptap)、中文检索、评论、审计日志、物化路径机制、软删除与恢复、乐观锁 |
-
-原 M2 的「空间与成员」与 M5 的「权限与评论」中权限部分**需要重做**,其余里程碑成果保留。新增任务清单见 §9。
+> **写在这里是为了防止开发中途被不断加需求。** 任何人想加需求,先改这一节。
 
 ---
+## 2. 技术栈
 
-## 2. 技术栈定稿
+### 2.1 选型
 
-### 2.1 选型表
-
-| 层 | 选型 | 理由 |
+| 层 | 选型 | 说明 |
 |---|---|---|
-| 前端 | React 18 + TypeScript + Vite + TailwindCSS | 生态最全,Tiptap 一等支持 |
-| 编辑器 | Tiptap(ProseMirror) | 协同扩展 `y-prosemirror` 现成,阶段二只需挂上 |
-| 后端 | **Node 22 LTS** + **NestJS 12(ESM-only)** + **Prisma 7** | 与前端同语言;Prisma 迁移清晰、类型安全。版本与模块制式的**实测依据见 §2.5** |
-| 测试 | **Vitest**(shared / api / web 三处统一)+ 后端配 `unplugin-swc` + `@swc/core` | 见 §2.5 —— 这不是偏好,是依赖注入能否工作的硬要求 |
-| 主库 | PostgreSQL 16 | 递归查询、JSONB、模糊检索索引一个库全解决 |
-| 缓存 | Redis 7 | 权限判定缓存 + 任务队列(阶段二加在线态) |
-| 全文检索 | **阶段一 pg_trgm 子串匹配 → 阶段二 Meilisearch** | 见 §2.3 —— 中文是这里的关键约束 |
-| 文件存储 | 本地卷(预留 MinIO 接口) | 内网单机部署,本地目录最省事 |
-| 反向代理 | Nginx + certbot | 见 §2.4 |
-| 部署 | Docker Compose | 四个容器,单机起步 |
-| 包管理 | pnpm workspaces(monorepo) | `packages/shared` 让前后端共享类型 —— 这正是选 TS 的收益 |
+| 语言 | TypeScript 6 | 前后端同语言,共享类型 |
+| 后端 | NestJS 12 | 模块化 + 装饰器路由 + 依赖注入 |
+| ORM | Prisma 7 | 生成物在 `apps/api/src/generated/prisma` |
+| 数据库 | PostgreSQL 16(`pg_trgm`) | 中文检索靠三元组,不靠分词器(§2.3) |
+| 缓存 | Redis 7 | 权限判定缓存;**可降级依赖**(§5.4) |
+| 前端 | React 18 + Vite | TanStack Query(服务端状态)+ Zustand(客户端状态) |
+| 编辑器 | Tiptap 3 | ProseMirror JSON 存储 |
+| 样式 | Tailwind v4 | OKLCH 色;字号刻度见 §7.3 |
+| 测试 | Vitest | 纯函数优先;无 jsdom(组件测试因此受限,见 §11.2) |
+| 部署 | Docker Compose | 四容器:postgres / redis / api / web |
 
-### 2.2 为什么排除 Java(结论与证据)
+### 2.2 版本约束(实测,不是"看起来新就行")
 
-选全 TypeScript 不是偏好,是被协同引擎的生态决定的:
+- **Node ≥ 22.12**。Prisma 7 要求 `^20.19 || ^22.12 || >=24`,Vite/Vitest 要求 `^20.19 || >=22.12`。
+  镜像用 `node:22-alpine` 同时满足两者。
+- **pnpm 由 `corepack` 按 `packageManager` 字段拉取**。
+- **构建顺序有依赖**:`packages/shared` 必须先 `build`,因为 api 与 web 通过 workspace 链接引用它的 `dist/*.d.ts`。
+  直接跑 `tsc` 会找不到类型 —— 这不是配置问题,是 monorepo 的固有顺序。
 
-- Yjs 的跨语言实现在 **y-crdt(Rust)** 项目下,官方绑定覆盖 Python(pycrdt)、Ruby、.NET、Swift、**Kotlin(ykt)**、Elixir、R、WASM —— **没有 Java 绑定**。
-- 纯 Java 只能走 `yffi`(社区维护的 C FFI)自己写 JNI / JNA 封装,交付要带 native `.so`,内网私有化部署多一层麻烦。
-- **一个必须避开的坑**:服务端"只做无状态转发、不持有权威 Y.Doc"是**不够的**。不持有权威文档就无法完成 Yjs 同步协议的 `sync step 1/2` 握手;极端情况下新客户端发完 step 1,唯一的对端刚好断线,它会永远等不到响应。结果就是客户端互相覆盖、重连期间的变更丢失。(参考:yjs 社区讨论;XWiki 论坛中一个纯 Java Wiki 接入 Yjs 的同类案例,结论一致。)
+### 2.3 ⚠️ 中文检索:PostgreSQL 自带分词器不可用
 
-若将来因组织原因必须用 Java,务实方案是**双运行时**:Java 负责业务 REST 与权限,协同网关单独部署一个进程(`y-sweet` 是 Rust 单二进制,可以不引入 Node)。阶段一不采用此方案。
+实测结论:**`tsvector` 对中文命中率为 0**。`to_tsvector` 会把中文当作一个不可切分的词,
+搜「空间」匹配不到「空间成员按职责划分」。`verify-db` 每次都会实测这一点并打印结果。
 
-### 2.3 中文检索:一个容易踩的坑
+所以中文检索走 **`ILIKE` 子串 + `pg_trgm` 相似度**:
 
-**PostgreSQL 自带的 `tsvector` 分词器对中文基本不可用。** 它按空格与标点切词,而中文句子没有空格 —— `to_tsvector('simple','空间成员按职责划分')` 会把整串当成**一个 token**,搜"空间"命中不了。这不是配置问题,是分词器本身不支持。
+- 主排序键是**命中位置**(标题命中 2 分、正文命中 1 分),`similarity()` 只做同档内的次级排序。
+- 为什么不用 `similarity()` 当主键:`trgm` 需要至少 3 个字符才有意义,
+  中文搜两个字(「权限」「部署」)普遍得 0,排序会退化成不确定顺序。
+- `LIKE` 的通配符必须转义。不转的话搜 `100%` 会命中全部内容。
 
-三条出路:
-
-| 方案 | 代价 | 中文效果 |
-|---|---|---|
-| **pg_trgm + ILIKE**(阶段一采用) | 零额外容器。`pg_trgm` 是 postgres contrib 标准模块,官方镜像自带,只需 `create extension` | 三元组索引支持 `LIKE '%关键词%'`,中文子串命中够用 |
-| zhparser / pg_jieba 扩展 | 需要在镜像里编译扩展,自建镜像 | 效果最好,但要维护 Dockerfile |
-| Meilisearch(阶段二采用) | 多一个容器 | 原生支持中文分词,还有拼写容错和相关度排序 |
-
-**阶段一决定用 pg_trgm**,理由是它不增加运维负担,而阶段一的检索需求就是"按关键词找页面"。**阶段二换 Meilisearch** —— 当文档量上千、用户开始抱怨"搜不准"时,这个容器就值得加了。
-
-> 注意:这与早期原型里写的 "PG tsvector" 不同,是写本文时发现的修正。
+> 这是**方案级**的结论:想上中文全文检索,得换搜索引擎(§11.2),不是在 PG 里调参能解决的。
 
 ### 2.4 内网也必须上 HTTPS
 
-不是安全洁癖,是功能依赖:浏览器的**非安全上下文**会限制剪贴板 API、部分 WebSocket 升级行为、Service Worker。而"粘贴图片直接上传"和阶段二的协同恰好都要用到这些。
-
-内网用自签证书或公司内部 CA 都可以,但不要图省事走 `http://`。
-
-### 2.5 模块制式与测试栈:三个实测结论(2026-09-26 开工时发现)
-
-> 本节 v1.2 新增。v1.1 只写「Node 20 + NestJS」,没锁版本、没定模块制式。开工实测后发现三个直接决定代码怎么写的事实,必须先固化,否则 M3 之后返工。
-
-**结论一:NestJS 12 是 ESM-only。**
-
-`@nestjs/common` / `@nestjs/core` / `@nestjs/config` 的 12.x 全部是 `"type": "module"`,且 `exports` 里**没有 `require` 条件**;CJS 只能靠 Node 22.12+ 的 `require(esm)` 互操作去加载它。
-
-官方对两条路都给了模板(`@nestjs/schematics` 自带 `ts` 与 `ts-esm`),但**新项目默认是 ESM**。官方 SWC 文档原文:
-
-> "New NestJS projects that use ES modules (**the default**) are already set up with Vitest."
-> "The SWC builder emits the same module format as the TypeScript compiler would: ES modules when your `package.json` sets `"type": "module"` (the default for new projects), and CommonJS otherwise."
-
-**本项目选 ESM**:官方默认路径,且不必依赖 `--experimental-vm-modules` 与 `require(esm)` 互操作(那是给存量 CJS 项目过渡用的)。
-
-**结论二:esbuild 不产出装饰器元数据 —— 所以 Vitest 必须配 SWC。**
-
-NestJS 的依赖注入靠 `emitDecoratorMetadata` 产出的 `design:paramtypes`。实测 esbuild 0.28.2:
-
-```
-tsconfigRaw { experimentalDecorators: true, emitDecoratorMetadata: true }
-→ 输出中 has 'design:paramtypes' === false,且零警告(参数被静默忽略)
-```
-
-Vite / Vitest 默认用 esbuild 转译 TS,因此**裸用 Vitest 会让「按构造函数类型注入」在测试里直接解析失败**。官方 Vitest 文档明确要求:
-
-> `npm i --save-dev vitest unplugin-swc @swc/core`
-> `plugins: [ // **This is required** to build the test files with SWC   swc.vite({ ... }) ]`
-
-故后端测试栈 = Vitest + `unplugin-swc`,并在配置里显式写 `legacyDecorator: true`、`decoratorMetadata: true`,不依赖默认值。
-
-**结论三:Prisma 7 有三处破坏性变化。**
-
-| 变化 | 影响 |
-|---|---|
-| 生成器改为 `prisma-client`,`output` **必填**,产出 **TypeScript 源码** | 生成物落 `apps/api/src/generated/prisma`,由本项目 tsc 一起编译;**必须同时进 .gitignore 与 eslint ignores** |
-| `datasource` 不再写 `url`,连接串移到 **`prisma7.config.ts`** | 该文件须 `import 'dotenv/config'` —— Prisma 7 不再自动加载 .env |
-| 连接**必须**经 driver adapter(`@prisma/adapter-pg`) | 内置引擎直连已移除,`PrismaService` 需显式传 adapter |
-
-还有一个 ESM 专属的坑:生成器默认产出 `from "./enums"`(**无扩展名**),经 tsc 编译后在 ESM 下会直接 `ERR_MODULE_NOT_FOUND`。必须显式打开:
-
-```prisma
-generator client {
-  provider            = "prisma-client"
-  moduleFormat        = "esm"
-  importFileExtension = "js"
-}
-```
-
-**连带影响:Node 20 不够用。** 三个依赖的下限是 Prisma 7 `^20.19 || ^22.12 || >=24`、Vite/Vitest `^20.19 || >=22.12`、NestJS 12 `>=20`。取交集并避开 `node:20-alpine` 的具体小版本,**本地与容器统一用 Node 22 LTS**。TypeScript 同理取 **6.0.x**(NestJS 12 官方模板锁 `^6.0.2`)。
+会话 Cookie 是 `HttpOnly` 的,而内网同样存在同网段嗅探。
+有域名就上 Let us Encrypt;没有域名、用 IP + http 访问时**必须显式设 `SESSION_COOKIE_SECURE=false`**,
+否则浏览器不回传 Cookie —— 表现是「登录成功但刷新后回到登录页」。
 
 ---
 
 ## 3. 系统架构
 
-### 3.1 阶段一部署形态(4 个容器)
+### 3.1 部署形态(四容器)
 
 ```
-                    ┌──────────────────────────┐
-   浏览器  ───────► │  web   Nginx + 静态资源   │
-                    │        + 反向代理         │
-                    └────────────┬─────────────┘
-                                 │ /api  (HTTP)
-                    ┌────────────▼─────────────┐
-                    │  api   NestJS            │
-                    │  REST · 鉴权 · 权限判定    │
-                    │  页面树 · 评论 · 检索      │
-                    └──────┬────────────┬──────┘
-                           │            │
-                 ┌─────────▼──┐   ┌─────▼────────┐
-                 │ postgres   │   │  redis       │
-                 │ 主数据     │   │ 权限缓存/队列 │
-                 └────────────┘   └──────────────┘
+浏览器 ──▶ web(nginx, 80)── /api/* 反向代理 ──▶ api(NestJS, 3000)──▶ postgres
+                │                                        └──▶ redis
+                └── /data/uploads(只读挂载,nginx 直接出图,不经过 Node)
 ```
 
-阶段一只需这 4 个容器。**阶段二会新增第 5 个:协同网关**(Hocuspocus 或 y-sweet),它与 api 共用同一个 PostgreSQL 和同一套 JWT。
+| 容器 | 镜像 | 职责 |
+|---|---|---|
+| `postgres` | `postgres:16-alpine` | 主库;`pg_trgm` 扩展 |
+| `redis` | `redis:7-alpine` | 权限缓存、登录限流计数;开了 appendonly |
+| `api` | 自行构建 | NestJS;**启动时先 `prisma migrate deploy` 再起服务** |
+| `web` | 自行构建 | 构建前端产物 + nginx 反代 |
+
+几个要点:
+
+- **附件目录 `uploads` 由 api 与 web 共享**(web 只读)。上传与读取看到的是同一批文件。
+- **迁移随容器启动自动应用**,幂等;不用手工跑 `migrate deploy`。
+- 运行阶段**不装 pnpm**:启动路径上不需要包管理器。
+  历史上在这里写过 `pnpm exec prisma migrate deploy`,后果是每次启动都让 corepack 去外网拉 pnpm ——
+  既是几十秒延迟,也让「启动」依赖外网可达。现在直接调 `./node_modules/.bin/prisma`。
 
 ### 3.2 分层职责
 
-| 层 | 职责 | 明确不负责 |
+| 层 | 职责 | 不该做的事 |
 |---|---|---|
-| web | 渲染、路由、编辑交互 | 不做任何权限判断(只藏 UI) |
-| api | 鉴权、权限判定、业务逻辑、数据读写 | 不直接服务静态资源 |
-| postgres | 主数据 + 权限规则 + 检索索引 | 不存文件二进制 |
-| redis | 权限判定缓存、异步任务队列 | 不作为唯一数据源 |
+| 控制器 | 取参数、调服务、定 HTTP 形状 | 不写业务判断 |
+| 服务 | 业务规则与判权 | 不碰 `req`/`res` |
+| 纯函数(`packages/shared`) | **权限判定**、可见性过滤、CSV、路径计算 | 不碰数据库 |
+| Prisma | 数据访问 | 不写业务规则 |
 
-**铁律:权限判断只在服务端做。前端藏 UI 是体验,不是安全。**
+> **权限判定刻意做成纯函数**。它是「错了不会报错」的逻辑(表现为某人多看到一点东西),
+> 必须能被单测直接覆盖。写在服务里面要连着 Prisma 一起 mock 才测得到,而那种测试没人会写。
+
+**Redis 的位置:缓存,不是数据源。** 连接失败或取不到世代号时一律回源数据库,
+判定的正确性不依赖它。
 
 ---
-
 ## 4. 数据模型
-
-> **v2.0 重大变更(2026-09-26)。** 本章整体重写。原设计把「空间」当成用户自由创建的容器(带成员与角色),现改为:**空间是公司既有组织在库里的投影**,且与页面合并为同一棵树。原 `spaces` / `space_members` / `page_permissions` 三张表作废。原因与决策过程见 §1.5。
 
 ### 4.1 设计要点
 
-1. **组织架构就是数据结构本身。** 部门是一级节点,组/项目挂在部门下。**人先于内容存在** —— 全员及其组织归属都是预置的,不是注册来的,也不需要"邀请进空间"这个动作。
-2. **空间与页面合并成一棵节点树。** 二者没有本质区别:都是"树上一个带标题、可挂子节点、可带正文的东西"。区别只在展示(`kind`)。合并的直接收益:**二级节点下面再套子空间、子页面天然成立**,不必写两套父子逻辑,也不必为"空间套空间"单独设计。
-3. **权限不存"角色",只存三种关系。** 没有 owner/admin/editor/viewer 这套等级。判定只问三件事:你是不是这个节点的所有者、你在不在它的祖先链上拥有所有权、你在不在它的显式授权名单里。
-4. **读默认是全员开放的。** 因此不再有「最小可见」这条铁律,也不再有 `deny` —— 权限模型里没有"拒绝读"这个表达。
-   ⚠️ **v2.13 补注:这条在 v2.13 有了例外。** 用户要求「保密手段可以加上」,于是新增了
-   `visibility=restricted` + 独立读者名单(§5.6)。它不是 `deny`,而是一个**显式的白名单**:
-   默认开放不变,只有被显式设成受限的节点才收敛到名单。原话"系统不具备任何保密能力"**已不成立**。
-5. **正文与检索分离。** 正文是 ProseMirror 文档树(JSONB),给检索用的纯文本单独一列。JSONB 没法直接做模糊匹配。
-6. **物化路径(`materialized_path`)。** 把祖先链存成一个字符串(如 `/p1/p2/p3`),查"某节点的所有祖先"从递归 CTE 变成一次前缀索引扫描。**权限判定完全依赖它** —— 判定要拿整条祖先链上的所有者,这是整棵树里唯一的性能敏感路径。
-7. **删除 = 物理删除整棵子树(v2.12)。** 曾经是"软删除 + 级联标记 `deleted_at`、可恢复",回收站移除后改成按深度从叶子往根真删。
-8. **评论表不含 anchor 字段。** 阶段一是页面级评论,加锚点是阶段二的事 —— 现在不加,免得有人顺手用上。
-9. **乐观锁 `version`。** 结构操作(改名、移动、删除、改所有者)走 REST 并校验 version,冲突返回 409。
+- **空间与页面是同一种东西**(`nodes` 一张表)。`kind` 只影响展示(图标 / 默认展开),
+  **不影响任何权限判定** —— 不要在权限代码里对 `kind` 做分支。
+- **树用物化路径**(`materialized_path`),不用递归 CTE。
+  一次 `UPDATE … WHERE materialized_path LIKE '前缀%'` 就能移动整棵子树,而且**不可能漏掉某个后代**。
+  代价:改父级要重写路径,所以移动是"写放大"的操作(§8.5)。
+- **`depth` 冗余存了一份**。可以从路径算出来,但树渲染要用它排序,存下来省一次计算。
+- **乐观锁用 `version`**。所有改内容的接口都带 `version`,不匹配回 409 ——
+  两个人同时编辑同一篇,后到的那个会明确失败,而不是静默覆盖。
+- **没有软删除**。删除是物理删除,整棵子树一次删掉(§8.2)。
 
-### 4.2 建表 DDL
+### 4.2 表结构
 
-```sql
-create extension if not exists pg_trgm;   -- 中文子串检索
--- v2.2 起**不再需要 citext** —— 登录标识由邮箱改为「工号」(纯 ASCII 数字/字母,不存在大小写歧义)
+<!-- BEGIN GENERATED:models -->
+##### AuditLog  →  `audit_logs`
 
--- ---------------- 用户 ----------------
-create table users (
-  id             uuid primary key default gen_random_uuid(),
-  -- 工号(v2.2)。**登录标识就是它**,不是邮箱 —— 用户明确要求「不要用邮箱,用工号」。
-  -- 用 text 而非数字:工号常带前缀字母或前导零(如 KC2026001),当成数字会丢信息。
-  employee_no    text not null unique,
-  name           text not null,
-  password_hash  text not null,
-  -- 首次登录必须改密(v2.2)。新账号统一初始密码 123456(内置常量,**不进 Excel 模板**),
-  -- 所以必须有这个强制开关,否则等于全员同密码上线。
-  -- 判定与拦截方式见 §6.1.2 —— 注意**必须服务端拦**,只做前端跳转是无效的。
-  must_change_password boolean not null default true,
-  avatar_color   text not null default 'gray',
-  -- active=在职 · disabled=账号被停用(临时) · departed=**已离职**(v2.1 新增)
-  -- 「离职」单独一档而不复用 disabled:两者含义不同,而且前端要在作者名旁显示「已离职」
-  status         text not null default 'active'
-                 check (status in ('active','disabled','departed')),
-  -- 只用于初始化与组织架构维护(建部门 / 导人员 / 任命所有者)。
-  -- 它**不参与**日常内容权限判定 —— 新模型里没有"超管能改一切"的旁路,
-  -- 超管要看某篇文档,也走和其他人一样的 canRead/canEdit(见 §5.2)。
-  is_super_admin boolean not null default false,
-  last_login_at  timestamptz,
-  created_at     timestamptz not null default now(),
-  updated_at     timestamptz not null default now()
-);
--- ⚠️ 原 users.department 列已删除:单值部门无法表达"一个人同属多个组/项目"。
---    组织归属改由 org_assignments 表承载。
-
--- ---------------- 节点树(空间与页面合并,核心表) ----------------
-create table nodes (
-  id                uuid primary key default gen_random_uuid(),
-  parent_id         uuid references nodes(id) on delete restrict,
-  -- 纯展示用途。**权限判定不区分 kind** —— 一个 space 节点也可以有正文,
-  -- 一个 document 节点也可以有子节点。这是刻意的,见 §4.1 第 2 条。
-  kind              text not null default 'document'
-                    check (kind in ('space','document')),
-  title             text not null default '未命名',
-  position          integer not null default 0,      -- 同级排序
-  materialized_path text not null default '',        -- '/<祖先id>/.../<自身id>'
-  depth             integer not null default 0,
-  -- 所有者。部门节点 = 部长(预置);二级节点 = 由部长任命;更深节点 = 创建者。
-  -- 每一位"上级"对这个节点都拥有编辑权与授权权,判定方式见 §5.2。
-  owner_id          uuid not null references users(id),
-  status            text not null default 'published'
-                    check (status in ('draft','published','archived')),
-  version           integer not null default 1,      -- 乐观锁
-  created_by        uuid not null references users(id),
-  updated_by        uuid references users(id),
-  deleted_by        uuid references users(id),
-  created_at        timestamptz not null default now(),
-  updated_at        timestamptz not null default now()
-);
-
-create index nodes_tree_idx  on nodes (parent_id, position);
-create index nodes_path_idx  on nodes (materialized_path text_pattern_ops);
-create index nodes_owner_idx on nodes (owner_id);
-
--- ---------------- 组织归属(多归属) ----------------
--- 一个人可以同属多个部门 / 组 / 项目。这既是"他的位置",也是**授权范围**的依据(§5.3 规则三)。
-create table org_assignments (
-  user_id    uuid not null references users(id) on delete cascade,
-  node_id    uuid not null references nodes(id) on delete cascade,
-  created_at timestamptz not null default now(),
-  primary key (user_id, node_id)
-);
-
-create index org_assignments_node_idx on org_assignments (node_id);
-
--- ---------------- 显式授权名单 ----------------
--- 对应「组长想再加一个人改」。**只有加法,没有 deny** —— 收回权限 = 删掉这里的行。
-create table node_grants (
-  node_id    uuid not null references nodes(id) on delete cascade,
-  user_id    uuid not null references users(id) on delete cascade,
-  granted_by uuid not null references users(id),
-  created_at timestamptz not null default now(),
-  primary key (node_id, user_id)
-);
-
--- ---------------- 正文 ----------------
-create table node_contents (
-  node_id         uuid primary key references nodes(id) on delete cascade,
-  content_json    jsonb not null default '{"type":"doc","content":[]}'::jsonb,
-  ydoc_snapshot   bytea,                    -- 阶段二启用,阶段一保持 null
-  text_for_search text not null default '', -- 由 content_json 抽出的纯文本
-  updated_at      timestamptz not null default now()
-);
-
-create index node_contents_trgm_idx
-  on node_contents using gin (text_for_search gin_trgm_ops);
-
--- ---------------- 评论(全员可发,见 §5.4) ----------------
-create table comments (
-  id         uuid primary key default gen_random_uuid(),
-  node_id    uuid not null references nodes(id) on delete cascade,
-  parent_id  uuid references comments(id) on delete cascade,  -- 一层回复
-  user_id    uuid not null references users(id),
-  body       text not null,
-  status     text not null default 'open'
-             check (status in ('open','resolved')),
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
-  -- 阶段二会新增 anchor_type / anchor_text / anchor_pos 三列
-);
-
-create index comments_node_idx on comments (node_id, created_at);
-
--- ---------------- 审计日志 ----------------
-create table audit_logs (
-  id          bigserial primary key,
-  actor_id    uuid references users(id),
-  action      text not null,          -- node.create / node.move / grant.add ...
-  target_type text not null,
-  target_id   text not null,
-  detail      jsonb not null default '{}'::jsonb,
-  ip          text,
-  created_at  timestamptz not null default now()
-);
-
-create index audit_created_idx on audit_logs (created_at desc);
-```
-
-**作废的三张表**(老库里删掉):`spaces`、`space_members`、`page_permissions`。
-`pages` / `page_contents` 分别改名为 `nodes` / `node_contents`,**结构本身沿用**(物化路径、version 乐观锁、软删除三套机制一行没改)。
-
-### 4.3 字段级说明(几处反直觉的地方)
-
-| 位置 | 说明 |
+| 字段 | 类型 |
 |---|---|
-| `nodes.materialized_path` | 移动节点时必须**递归重建整棵子树**的路径。只改自己的路径,所有子孙都会失效 —— 而权限判定(§5.2)完全依赖这条路径,所以失败是**静默越权或静默失权**,不会立刻报错。 |
-| `nodes.parent_id` 用 `on delete restrict` | 不允许在有子节点时直接删它。v2.12 前这条是为了"强制走软删除";现在删除本来就是物理删除,它的作用是**逼删除逻辑按深度从叶子往根走**(`NodeService.deleteSubtree`)。 |
-| `nodes.owner_id` 是 `not null` | 每个节点**必须**有所有者。一级节点(部门)由组织架构预置;用户新建节点时默认为创建者本人。没有"无主节点"这种状态。 |
-| `nodes.kind` 不参与权限判定 | 它只决定图标与默认展开行为。任何一个 space 节点都可以有正文,任何一个 document 节点都可以有子节点。**不要**在权限代码里对 kind 做分支。 |
-| `node_contents.ydoc_snapshot` | 阶段一保持 `null`,但**字段先建好**。这就是"按协同的地基写代码"。 |
-| `node_grants` 没有 deny 列 | 刻意如此。新模型里"拒绝"这个动作不存在:能改的人天然能改(祖先链所有者),被授权的人靠删行收回。**不要**为了"对称"补一个 deny 列 —— 它会让判定逻辑重新长出分支。 |
-| `org_assignments` 是多对多 | 一个人同属多个组是常态。它同时承担两个职责:①展示"这个人在组织里的位置";②界定**授权范围**(§5.3 规则三)。 |
-| `comments` 无 anchor 列 | 刻意如此,见 §4.1 第 8 条。 |
-| `node_contents.content_json` 是 `jsonb` | ⚠️ **jsonb 不保留键的书写顺序**(按内部规范序存储)。实测:同一个文档写进去再读回来,`JSON.stringify` 的结果与原文不同,但语义完全一致。所以**任何判断正文是否变了的逻辑都必须按语义比,不能比字符串** —— 我们的冲突检测用 `updated_at` 而不是内容哈希,恰好绕开了这个坑;将来若加「内容没变就不写库」的优化,必须用规范化后的比较。 |
-| `users.employee_no` 是**登录标识** | v2.2 起取代邮箱。用 `text` 而非数字类型:工号常带字母前缀或前导零(`KC2026007`),当成数字存会丢信息。唯一性由数据库约束保证,不在应用层判重。 |
-| `users.must_change_password` | 新账号一律 `true`。它不只是"提示用户去改密码"—— **它是服务端拦截的依据**(见 §6.1.2)。**不要把它做成纯前端状态**,那等于没有。 |
-| `users.status` 有三档 | `active` 在职 / `disabled` 账号被停用 / `departed` **已离职**。**离职与停用不是一回事**:离职是人事状态(人不在公司了),停用是账号状态(还在公司但账号被封)。用户明确要求离职人员在**他自己创建的页面**上也要标出来 —— 前端在节点与评论的作者名旁显示「已离职」,历史记录不抹掉。 |
-| `users.is_super_admin` 不参与内容权限 | 它只是"能维护组织架构"的开关。**新模型里没有超管旁路** —— 一个超管要编辑某篇文档,同样得是它的所有者/祖先所有者/被授权者。这条与旧设计不同(旧设计里超管直通),务必注意。 |
-| 两个"手写"索引 | `nodes_path_idx` 用 `ops: raw("text_pattern_ops")`、`node_contents_trgm_idx` 用 `type: Gin` + `ops: raw("gin_trgm_ops")` —— 都可以表达进 schema,**这一点很要紧**:凡 schema 里没声明的索引,`prisma migrate dev` 会生成 `DROP INDEX` 把它删掉 —— 若删掉三元组索引,中文检索会静默退化成全表扫描。v2.12 之前还有第三个 `nodes_alive_idx`(部分索引),它随软删除一起去掉了。另:`nodes_path_idx` 的 ops 与 Prisma 内省结果无法完全对齐,漂移检测会输出一对无害的 drop+create(定义相同),不要误判为故障。 |
+| `id` | `BigInt` |
+| `actorId` | `String?` |
+| `action` | `String` |
+| `targetType` | `String` |
+| `targetId` | `String` |
+| `detail` | `Json` |
+| `ip` | `String?` |
+| `createdAt` | `DateTime` |
+| `actor` | `User?` |
+
+##### Comment  →  `comments`
+
+| 字段 | 类型 |
+|---|---|
+| `id` | `String` |
+| `nodeId` | `String` |
+| `parentId` | `String?` |
+| `userId` | `String` |
+| `body` | `String` |
+| `createdAt` | `DateTime` |
+| `updatedAt` | `DateTime` |
+| `node` | `Node` |
+| `parent` | `Comment?` |
+| `replies` | `Comment[]` |
+| `user` | `User` |
+
+##### Node  →  `nodes`
+
+| 字段 | 类型 |
+|---|---|
+| `id` | `String` |
+| `parentId` | `String?` |
+| `kind` | `String` |
+| `title` | `String` |
+| `position` | `Int` |
+| `materializedPath` | `String` |
+| `depth` | `Int` |
+| `ownerId` | `String` |
+| `status` | `String` |
+| `visibility` | `String` |
+| `version` | `Int` |
+| `createdBy` | `String` |
+| `updatedBy` | `String?` |
+| `createdAt` | `DateTime` |
+| `updatedAt` | `DateTime` |
+| `parent` | `Node?` |
+| `children` | `Node[]` |
+| `owner` | `User` |
+| `creator` | `User` |
+| `updater` | `User?` |
+| `content` | `NodeContent?` |
+| `grants` | `NodeGrant[]` |
+| `readers` | `NodeReader[]` |
+| `assignments` | `OrgAssignment[]` |
+| `comments` | `Comment[]` |
+
+##### NodeContent  →  `node_contents`
+
+| 字段 | 类型 |
+|---|---|
+| `nodeId` | `String` |
+| `contentJson` | `Json` |
+| `ydocSnapshot` | `Bytes?` |
+| `textForSearch` | `String` |
+| `updatedAt` | `DateTime` |
+| `node` | `Node` |
+
+##### NodeGrant  →  `node_grants`
+
+| 字段 | 类型 |
+|---|---|
+| `nodeId` | `String` |
+| `userId` | `String` |
+| `grantedBy` | `String` |
+| `createdAt` | `DateTime` |
+| `node` | `Node` |
+| `user` | `User` |
+| `granter` | `User` |
+
+##### NodeReader  →  `node_readers`
+
+| 字段 | 类型 |
+|---|---|
+| `nodeId` | `String` |
+| `userId` | `String` |
+| `grantedBy` | `String` |
+| `createdAt` | `DateTime` |
+| `node` | `Node` |
+| `user` | `User` |
+| `granter` | `User` |
+
+##### OrgAssignment  →  `org_assignments`
+
+| 字段 | 类型 |
+|---|---|
+| `userId` | `String` |
+| `nodeId` | `String` |
+| `createdAt` | `DateTime` |
+| `user` | `User` |
+| `node` | `Node` |
+
+##### Session  →  `sessions`
+
+| 字段 | 类型 |
+|---|---|
+| `id` | `String` |
+| `userId` | `String` |
+| `expiresAt` | `DateTime` |
+| `lastSeenAt` | `DateTime` |
+| `userAgent` | `String?` |
+| `ip` | `String?` |
+| `createdAt` | `DateTime` |
+| `user` | `User` |
+
+##### User  →  `users`
+
+| 字段 | 类型 |
+|---|---|
+| `id` | `String` |
+| `employeeNo` | `String` |
+| `name` | `String` |
+| `passwordHash` | `String` |
+| `mustChangePassword` | `Boolean` |
+| `avatarColor` | `String` |
+| `status` | `String` |
+| `isSuperAdmin` | `Boolean` |
+| `lastLoginAt` | `DateTime?` |
+| `createdAt` | `DateTime` |
+| `updatedAt` | `DateTime` |
+| `ownedNodes` | `Node[]` |
+| `createdNodes` | `Node[]` |
+| `updatedNodes` | `Node[]` |
+| `assignments` | `OrgAssignment[]` |
+| `grantedGrants` | `NodeGrant[]` |
+| `receivedGrants` | `NodeGrant[]` |
+| `readableNodes` | `NodeReader[]` |
+| `grantedReads` | `NodeReader[]` |
+| `comments` | `Comment[]` |
+| `auditLogs` | `AuditLog[]` |
+| `sessions` | `Session[]` |
+
+共 **9** 张表。由 `scripts/gen-doc.mjs` 从 `schema.prisma` 生成,`pnpm audit:docs` 校验一致性。
+<!-- END GENERATED:models -->
+
+### 4.3 几处反直觉的地方
+
+- **`node_readers` 与 `node_grants` 是两张表**,不是一个"权限"表的两种取值。
+  前者回答「谁能**读**」(保密),后者回答「谁能**改**」(授权)。它们判定口径不同、管理权限也不同(§5.6)。
+- **`org_assignments` 允许一个人挂在多个节点上**(多归属)。
+  「移出归属」不等于「收回权限」:被移出的组长仍然是组长(§8.4)。
+- **`audit_logs.id` 是 `BigInt`**,JSON 装不下 64 位整数,所以对外一律按**字符串**往返。
+  游标分页因此要显式校验(§6.4)。
+- **`nodes.visibility` 是 `TEXT` + CHECK 约束**,不是 PG 枚举类型。
+  用 `TEXT` 是为了加取值时不用 `ALTER TYPE`(那在旧版本 PG 上要建索引重建)。
+- **`node_contents.content_json` 是 JSONB**,同时存一份 `text_for_search` 纯文本。
+  后者由纯函数从 ProseMirror 文档抽取,专供检索 —— 免得每次搜索都解析 JSON。
 
 ---
 
 ## 5. 权限模型
 
-> **v2.0 整体重写。** 旧模型是"五档角色 + 逐层继承 + deny 优先"。新模型里**没有角色等级**,只有三种关系与三个判定问题。原「四条铁律」保留其中两条的精神,删掉两条。
-
 ### 5.1 三个概念
 
-这是全部。理解这三个,就理解了权限模型。
-
-| 概念 | 是什么 | 从哪来 |
+| 概念 | 含义 | 存在哪 |
 |---|---|---|
-| **所有者**(owner) | 一个节点的负责人。**每个节点必有且仅有一个。** | 部门节点 = 部长(组织架构预置);二级节点 = 由部长任命;更深节点 = 创建者本人 |
-| **组织归属** | 某人"在组织里的位置"。**多归属**,一个人可同时属于多个部门 / 组 / 项目 | 全员预置,随组织架构导入 |
-| **显式授权** | 某人被单独允许改某个节点 | 由有授权权的人手动授予 |
+| **所有者** | 节点的责任人。一级节点是"部长",二级是"组长" | `nodes.owner_id` |
+| **授权** | 额外允许某人改这个节点 | `node_grants` |
+| **组织归属** | 谁属于哪个组织单元(决定他能给谁授权) | `org_assignments` |
 
-**层级形态:**
+判定写成 `packages/shared/src/permission.ts` 里的**纯函数**,有单测。
 
-```
-部门(一级节点 · 所有者 = 部长)
- ├─ 组 / 项目(二级节点 · 所有者 = 部长任命)
- │   └─ 子空间 / 子页面(所有者 = 创建者)
- │       └─ …(深度不限)
- └─ 文档(部门直属页面 —— 与二级节点并存)
-```
-
-**组织形态到二级为止**(公司 → 部门 → 组/项目),这是公司的实际结构。但**技术上不限制深度**:二级节点下面再建子空间还是子页面,由使用者自己决定,系统一视同仁。
-
-### 5.2 判定逻辑
-
-整个权限模型只有三个函数,按顺序回答三个问题:
-
-```ts
-// packages/shared/src/permission.ts
-
-/** 能读吗? —— 默认已登录即可;唯一例外是「受限」节点,见 canRead(§5.6)。 */
-function canRead(user: Actor, node: NodeView): boolean {
-  return true;
-}
-
-/** 能改吗? —— 满足任一即可。 */
-function canEdit(user: Actor, chain: Chain, grantUserIds: Set<string>): boolean {
-  // 1) 我是这个节点的所有者(部门直属页面 → 部长;A 建的 → A 自己)
-  if (user.id === chain.self.ownerId) return true;
-
-  // 2) 我在祖先链的**任一**节点上是所有者
-  //    —— 这就是「A 建的东西,A 的领导、上层领导都能改」
-  if (chain.ancestors.some((n) => n.ownerId === user.id)) return true;
-
-  // 3) 我被显式授权
-  return grantUserIds.has(user.id);
-}
-
-/** 能管吗(决定这个节点还有谁能改)? —— 1 或 2,但授权动作另受组织范围约束(§5.3 规则三)。 */
-function canManage(user: Actor, chain: Chain): boolean {
-  return user.id === chain.self.ownerId || chain.ancestors.some((n) => n.ownerId === user.id);
-}
-```
-
-`chain` 由物化路径一次查出(根 → 自身),不需要递归查询:
-
-```sql
--- 一条查询拿到整条祖先链及其所有者
-select id, parent_id, owner_id, depth, title
-  from nodes
- where materialized_path like (
-   select materialized_path || '%' from nodes where id = $1
- )
- order by depth;
-```
-
-### 5.3 三条定稿规则
+### 5.2 三条定稿规则
 
 | 规则 | 含义 | 为什么 |
 |---|---|---|
-| **读默认开放,可按节点收紧(v2.13)** | 默认所有节点对所有登录用户可读;**显式设成「受限」的节点只有读者名单里能看到**,且整棵子树继承 | 知识库的价值在于共享,公司内部文档默认不该藏。但总有例外(人事、薪酬、未定稿方案),所以给一条**逐节点、显式、可审计**的口子 —— 而不是把默认改成封闭 |
-| **编辑权沿祖先链继承,且不可被拒绝** | 上层所有者天然能改下层的一切;没有 deny,没有"某人不许改" | 管理链条上的每一级都要能介入下属的内容。收回权限的唯一手段是**从授权名单里删行** |
+| **读默认开放** | 默认所有节点对所有登录用户可读;**显式设成「受限」的节点只有读者名单能看到**,整棵子树继承 | 知识库的价值在于共享。但总有例外(人事、薪酬、未定稿方案),所以给一条逐节点、显式、可审计的口子 |
+| **编辑权沿祖先链继承,且不可被拒绝** | 上层所有者天然能改下层的一切;没有 deny | 管理链条上每一级都要能介入下属的内容。收回权限的唯一手段是**从授权名单里删行** |
 | **授权受组织范围约束** | 操作者只能授权给**落在自己组织范围内**的人 | 防止横向越权:组长不该能把权限给到别的部门的人 |
 
-> ⚠️ **规则一在 v2.13 变了口径,这段要连着 §5.6 读。**
->
-> v2.0 的原话是「读无条件开放」,并且**据此删掉了「最小可见」铁律**,理由是"内部文档本就不该藏"。
-> 那个前提是产品决策,不是技术约束 —— 用户在 v2.13 明确要求「保密手段可以加上」,
-> 于是这条从"无条件"变成"默认开放 + 逐节点可收紧"。
->
-> **变的是"能不能藏",没变的是"默认不藏"**:`visibility` 默认 `public`,
-> 存量节点行为完全不变,没有人会突然看不见东西。这是刻意的 ——
-> 保密能力上线时最危险的事,是让所有人同时发现"我好像少了点什么"。
-
-**规则三的"组织范围"定义:**
+「组织范围」的定义:
 
 ```
 orgScope(user) = 该用户所有 org_assignments 指向的节点及其全部后代
 ```
 
-判定一个候选被授权者 `target` 是否可被授予:
-
-```
-target ∈ orgScope(操作者)
-  ⟺ 存在一条 org_assignments(target, N),使得 N == 操作者的某个归属节点 N0
-     或 N 在 N0 的子树里
-```
-
-**这条规则为什么必要 —— 用一个具体例子说明:**
-
-组员 A 属于「后端组」。A 在组下建了子空间 S,A 是 S 的所有者,因此 A **能**给 S 授权。
-但 A 的 `orgScope` 只有「后端组」这一支,所以他**只能把 S 的编辑权给后端组里的人** ——
-他无法把权限给市场部的人,也无法给同部门的「前端组」的人。
-
+举例:组员 A 属于「后端组」。A 在组下建了子空间 S 且是 S 的所有者,因此 A 能给 S 授权;
+但他的 `orgScope` 只有「后端组」这一支,所以**只能授权给后端组里的人**。
 部长的 `orgScope` 是整个技术部,所以部长能往技术部任何位置授权。
-**范围自下而上自然放大,不需要单独维护"谁的权限更大"。**
+**范围自下而上自然放大,不需要单独维护「谁的权限更大」。**
 
-#### 与旧模型的两条"删除"
-
-原 §5.3 的四条铁律里,以下两条**在新模型中不成立**,实现时不要照搬:
-
-| 旧铁律 | 现状 |
-|---|---|
-| 「拒绝优先」(deny 短路) | **删除。** 新模型没有 deny,编辑权不可被拒绝 |
-| 「最小可见」(无权限的页面根本不出现) | **v2.0 删除,v2.13 以另一种形式回来。** v2.0 删它是因为"读全员开放、列表与检索不做权限过滤";v2.13 引入保密后,**受限节点及其子树确实要从树、检索、详情里消失** —— 但判定依据不是"没有权限",而是**明确的读者名单**(§5.6) |
-
-保留的两条:继承(编辑权沿祖先链向上取)、就近覆盖的**反向**表达 ——
-新模型里"越靠上权限越大",与旧模型"越靠下越具体"正好相反。这是一个容易写反的地方。
-
-### 5.4 能力对照
+### 5.3 能力对照
 
 | 动作 | 谁能做 |
 |---|---|
-| 浏览任意节点 | **所有登录用户** |
-| 发表 / 回复评论 | **所有登录用户**(全员可评论) |
-| 标记评论已解决 | 评论作者本人,或该节点的任一祖先所有者 |
+| 浏览任意节点 | 所有登录用户(受限节点除外,见 §5.6) |
+| 发表 / 回复评论 | 所有登录用户 |
 | 删除评论 | 评论作者本人,或该节点的任一祖先所有者 |
-| 在二级节点下新建页面 | 在该节点上 `canEdit` 的人;**组员只能在自己所属的节点下新建** |
-| 新建子空间 | 同上(技术上不区分 kind) |
+| **改**别人的评论 | **没人能改** —— 只有作者本人 |
+| 在二级节点下新建页面 | 在该节点上 `canEdit` 的人;**组员可在自己所属的节点下新建** |
 | 编辑正文 / 改标题 | `canEdit` |
 | 移动 / 同级排序 | `canEdit` |
-| **删除节点**(物理删除整棵子树,不可恢复) | **祖先链所有者** —— v2.12 起删除不可逆,门槛由 `canEdit` 提到 `canManage`:被授权者能改,但不能销毁 |
+| **删除节点**(物理删除整棵子树,不可恢复) | **祖先链所有者**(`canManage`)—— 被授权者能改,但不能销毁 |
 | 授权 / 收回(增删名单) | `canManage`,且被授权者须在操作者组织范围内 |
-| 任命 / 变更二级节点的所有者 | 该节点的**祖先所有者**(即部长) |
+| 管理可见范围(读者名单) | **该节点的创建者或所有者**(上级所有者**不能**代为管理) |
+| 任命 / 变更二级节点的所有者 | 该节点的祖先所有者(即部长) |
 | 维护组织架构(建部门 / 导人员 / 设归属) | `is_super_admin` |
 | 查看审计日志 | 祖先链所有者,或 `is_super_admin` |
 
-**两处值得单独说明:**
+> ⚠️ **删除的门槛高于编辑。** 被授权者能改、能建,但不能**销毁**;
+> 删除已经是不可逆操作,所以它归所有者,不归被授权者。
 
-1. **"组员只能在自己所属的节点下新建"** 这条与 `canEdit` 是两件事:一个组员对「后端组」节点本身没有 `canEdit`(他不是所有者、也不在祖先链上),但他**有权在它下面新建** —— 新建出来的节点归他所有。判定新建时用的不是 `canEdit(父节点)`,而是一条单独的规则:
-   `canCreateUnder(user, parent)` = `canEdit(user, parent)` **或** `parent ∈ orgScope(user)`。
-2. **删除的门槛高于编辑(v2.12 起)。** 被授权者能改、能建,但不能**销毁** —— 删除已经是不可逆操作,所以它归所有者,不归被授权者。这条边界在旧模型里就有(`purge` 走 `canManage`),回收站移除后它成了唯一的删除路径。
-
-### 5.5 缓存与失效
-
-- 判定结果写入 Redis,key 形如 `kc:perm:{generation}:{userId}:{nodeId}`,**TTL 30 秒**。
-- **`generation` 按一级节点(部门)分片**:`kc:perm:gen:{rootNodeId}`。
-  组织变更天然以部门为边界,变更范围与失效范围一致。
-- 触发 `INCR` 的事件:**所有者变更、授权名单增删、组织归属变更**。
-- 「变更最迟 30 秒生效」是**上限**,不是常态。
-- **Redis 是可降级依赖**:连接失败或取不到世代号时一律回源数据库,
-  判定的**正确性不依赖缓存可用性**(与 §3.2「Redis 不作为唯一数据源」一致)。
-
-**为什么不做细粒度失效**(与旧设计同一判断,理由更充分了):
-
-新模型里一次判定要读**整条祖先链的所有者**,链上任一节点的所有者变更都会影响结果。
-用 `materialized_path` 前缀 `SCAN` 批量删 key 的老办法,在这里需要"向上"失效(祖先变了,所有后代都受影响),
-范围比旧模型更大、更容易漏。**漏的表现是"权限已经改了,但某个人还能改" —— 静默越权。**
-按部门分片的世代号只有一处状态、一次 `INCR`,不存在漏删。
-
-### 5.6 可见性与保密(v2.13 新增)
-
-> **背景。** v2.0~v2.12 期间「读」对**所有登录用户**开放,系统不提供任何保密手段。
-> 用户要求「保密手段可以加上」,于是有了这一节。它是**加法**:`visibility` 默认 `public`,
-> 存量节点行为完全不变,没人会突然看不见东西。
-
-#### 三个概念
-
-| 概念 | 含义 | 存在哪 |
-|---|---|---|
-| `visibility` | `public` / `restricted`。**整棵子树继承** | `nodes.visibility` |
-| 读者名单 | 「谁能读」的显式名单 | `node_readers`(**独立于 `node_grants`**) |
-| 授权名单 | 「谁能改」的显式名单 | `node_grants`(见 §5.4) |
-
-#### 判定:能读吗
-
-```
-canRead(actor, chain, listsByNode)
-  链上(自身 + 全部祖先)没有 restricted        → 可读
-  有 restricted → 那些受限节点**每一个**都放行,整条链才可读
-      对某个受限节点 X 放行的四条路(任一):
-        a. 我是 X 的所有者
-        b. 我是 X 某个**祖先**的所有者(越靠上权限越大,与 canEdit 同方向)
-        c. **我是 X 的创建者**(v2.16 补;身份**不向上继承**)
-        d. 我在 X 的读者名单里,或者本来就是 X 的编辑被授权者
-```
-
-**五处刻意的决定,每一条都对应一种具体的出错方式:**
-
-1. **必须逐个受限节点都放行,不能只看最近的那个。** 只看最近的话,
-   「外层受限节点里再套一个更内层的受限节点」时,只在**外层**名单里的人会读到内层 ——
-   那是泄露。单测里有专门一条钉它(`链上有两个受限节点时,必须每一个都放行`)。
-2. **编辑被授权者也放行(c 的后半句)。** 否则会出现「能改但不能看」:
-   他打开文档是空白,只会被当成 bug 报上来。
-3. **读不到时回 404,不是 403。** 403 等于确认「这里确实有个东西,只是你看不见」,
-   而保密的意义正在于不确认它的存在。
-   ⚠️ 这与 §6.1 那句「v2.0 起不再用 NOT_FOUND 掩盖无权访问」**方向相反** ——
-   当时那个决定的前提是"读对全员开放,不存在存在但读不到的资源"。
-   受限节点让那个前提不再成立,所以"掩盖"在**读**这条路径上回来了。
-   写操作仍然是 403(你看得见它,只是改不了)。
-4. **子树继承,后代无法放开。** 允许放开某个子节点,会让「这棵树到底谁能看」
-5. **创建者放行,而且身份不向上继承(v2.16 补)。** 两条理由:
-   ① 它与 `canManageReaders`(认创建者)**口径必须一致**,否则就是"能管一个自己看不见的东西的名单";
-   ② 少了它,创建者把自己设成"受限 + 名单为空"之后**既读不到、也再也调不动那个管理入口** ——
-   真机上复现过:`replaceReaders` 写完要用 `readersOverview` 组装响应,那一步 404,
-   表现是**改动已生效但界面报错**,而修复只能进数据库。
-   之所以**不向上继承**:所有者是"管理链条"(上级天然管下级),创建者是"谁建的这一篇",
-   向上继承的话,任何建过一次外层节点的人就能读到内层所有受限节点 —— 那是泄露。
-   变成需要逐节点推理的事,而漏判一次就是一次泄露。
-
-#### 谁有权管理读者名单
-
-`canManageReaders` = **创建者** 或 **所有者链**。用户的要求是「创建者单独授权」,
-所以认创建者;同时认所有者链,是因为少了这一条,**创建者一旦离职,
-那个节点的名单就永久冻结**(再也加不进人、也移不出人)。
-
-#### 必须在**每一条**读取路径上收口
-
-这是这次改动最容易做错的地方:漏掉任何一条,保密就只做了一半,
-而**表面上一切正常**。逐条列在这里,方便日后新增读取路径时对照:
-
-| 路径 | 收口点 |
-|---|---|
-| 整棵树 `GET /org/tree` | `NodeService.tree` —— 受限节点**连同整棵子树**从响应里摘掉(只摘自己会让子节点标题泄露) |
-| 节点详情 `GET /nodes/:id` | `NodeService.detail` → `canRead` 不过则 404 |
-| 正文 `GET /nodes/:id/content` | `ContentService.get` → `requireRead` |
-| 导出 `GET /nodes/:id/export` | `ContentService.exportMarkdown` → `requireRead`(**最容易漏:漏了就能整篇下载走**) |
-| 检索 `GET /search` | `SearchService.search` —— 逐条按 `canRead` 过滤(命中已 LIMIT 20,成本可控) |
-| 评论 `GET/POST /nodes/:id/comments` | `CommentService` → `requireRead` |
-| 授权视图 / 候选人 | `PermissionController` → `requireRead` |
-| 成员列表 `GET /nodes/:id/members` | **v2.16 补** —— 原来直接调 `chainOf`(它不判可见性),返回 200;**泄露成员名单并确认节点存在** |
-| 可见范围 `GET /nodes/:id/readers` | **v2.16 补** —— 原来直接查名单,返回 200,**把保密名单本身读走**。它看起来像"管理界面用的接口",但接口是公开的 |
-| 成员/所有者候选人 | `requireManage`(顺带覆盖读) —— 实测对无关的人回 403,不是 200 |
-| 审计日志 | 本来就按"我拥有所有权的子树"过滤(§6.2),受限节点天然落在所有者一侧 |
-
-
-> ⚠️ **v2.16:这张表原来只有 8 行,而实测发现它漏了 2 条。**
->
-> 上面两个"v2.16 补"的条目就是漏掉的那两条 —— 而**表里写着"必须在每一条读取路径上收口"**,
-> 于是后来的人(包括我)会以为已经收完了。
->
-> **不要相信这张表,去信实测:** `verify-org` 里有一组断言会在受限节点上
-> **逐条打**所有读接口,要求全部回 404。新增读取路径时,把它加进那组断言里 ——
-> 加进这张表不算完成。
->
-> 一条不一致的读取路径就是一条**侧信道**:它确认节点存在,严重的还会把内容或名单带出去。
-#### 缓存
-
-判定结果进 Redis 缓存(§5.5),缓存里现在多了一个 `canRead` 字段。
-⚠️ 读取时会检查**三个字段都是布尔**,少了这一条,升级前写进去的旧缓存
-(只有 canEdit/canManage)会被当成有效,于是**受限节点被当成可读** ——
-一次静默的泄露。加上之后旧缓存自然失效。
+> ⚠️ **改评论与删评论是两件事。** 所有者能删别人的评论(版务),但**不能改**(篡改他人言论)。
+> 两者曾经共用一个标志位,表现是「所有者看得到编辑按钮、点了却 403」。
 
 ---
-
-## 6. 接口设计
+## 6. 接口
 
 ### 6.1 通用约定
 
 - 前缀 `/api/v1`,全部返回 JSON。
-- 认证:HttpOnly Cookie 承载**不透明会话 id**,不用 localStorage 存 token。会话的存储位置与理由见 §6.1.1。
+- 认证:HttpOnly Cookie 承载**不透明会话 id**,不用 localStorage 存 token。
 - 错误体统一:
 
 ```json
@@ -728,1853 +455,601 @@ canRead(actor, chain, listsByNode)
 | 错误码 | HTTP | 含义 |
 |---|---|---|
 | `UNAUTHORIZED` | 401 | 未登录或会话过期 |
-| `FORBIDDEN` | 403 | 已登录,但对这个节点没有该操作的权限 |
-| `NOT_FOUND` | 404 | 资源**确实不存在** |
+| `FORBIDDEN` | 403 | 已登录,但对这个资源没有该操作的权限 |
+| `NOT_FOUND` | 404 | 资源不存在,**或读不到**(见下) |
 | `VALIDATION_FAILED` | 400 | 参数校验失败 |
 | `VERSION_CONFLICT` | 409 | 乐观锁冲突,客户端需重新拉取 |
-| `RATE_LIMITED` | 429 | 触发限流 |
+| `RATE_LIMITED` | 429 | 触发限流(§6.1.3) |
 
-> ⚠️ **`NOT_FOUND` 的含义在 v2.13 变了,两条要一起读。**
->
-> **v2.0–v2.12:** 读是全员开放的,系统里**不存在「存在但读不到」的资源**,所以 404 就是
-> "真的没有",不需要用它掩盖任何东西;写操作被拒回 403,因为"东西在那儿,只是你不能改"更有用。
->
-> **v2.13 起引入保密能力**(§5.6),前提没了:受限节点对不在名单里的人**确实存在但读不到**。
-> 这时 `requireRead` 一律回 **404**(不是 403)—— 403 等于承认"这里有个你看不见的东西",
-> 等于把节点的存在与标题泄露给不该知道的人。
-> **所以:读路径的拒绝用 404,写路径的拒绝仍用 403。** 这个区分是有意的,不要"统一"掉。
-> (完整判定与理由见 §5.6「读不到时回 404」;`verify-org` 有断言钉住它。)
+> ⚠️ **`NOT_FOUND` 有两种含义,不要「统一」掉这个区分。**
+> 读路径上「存在但读不到」一律回 **404** —— 403 等于承认这里有个你看不见的东西(§5.6);
+> 写路径上被拒一律回 **403** —— 你看得见它,只是改不了,这个信息对用户更有用。
 
-- 分页:评论、审计日志、**人员列表**用游标分页(`?cursor=&limit=`)。
-  - 人员列表原来是一次 `take: 200` 一截了事,而且**直接返回数组** —— 全公司 320 人时
-    管理员只看到 200 个,界面上没有任何迹象(v2.12 修)。现在返回
-    `{ users, total, nextCursor }`,界面显示「人员 · N / 共 X 人」与「加载更多」。
-- 组织树一次性返回整棵,但 **v2.13 起按可见性过滤**:受限节点连同整棵子树从树里摘掉
-  (判定是 `packages/shared/src/visibility.ts` 的 `readableNodeIds`,纯函数、有单测)。
-  理由与检索那条一致 —— 读取路径必须逐条收口,见 §5.6。
 - **请求体上限 8MB**(`app-setup.ts` 的 `BODY_LIMIT`)。
-  ⚠️ Express 的 JSON 解析器默认只有 **100kb**,而正文上限是 2MB ——
-  不显式抬高的话,长文档保存会被 body-parser 直接拒掉,表现成「短文档正常、长文档存不进去」。
-- body-parser 的解析错误**不是** `HttpException` 的子类(只带 `status` / `type` 属性),
-  异常过滤器必须显式识别,否则「请求体过大」会变成 **500** —— 而它明明是客户端的问题,
-  500 会把排查方向引向服务端。现在统一映射成 `VALIDATION_FAILED` 并给出可读文案。
-- 请求体解析走 Nest 的 `useBodyParser()`,**不从 `express` 里 import `json()`**:
-  express 只是 `@nestjs/platform-express` 的传递依赖,直接 import 在本地能跑,
-  进了镜像就是 `ERR_MODULE_NOT_FOUND`(实测踩过)。
+  Express 的 JSON 解析器默认只有 100kb,而正文上限是 2MB —— 不抬高的话长文档保存会被
+  body-parser 直接拒掉,表现成「短文档正常、长文档存不进去」。
+- body-parser 的解析错误**不是** `HttpException` 的子类,异常过滤器必须显式识别,
+  否则「请求体过大」会变成 500 —— 而它明明是客户端的问题。
+- 分页:评论、审计日志、人员列表用游标分页(`?cursor=&limit=`)。
+  人员列表返回 `{ users, total, nextCursor }` —— **带 `total`** 是刻意的:
+  以前直接返回数组,全公司 320 人时管理员只看到前 200 个,而界面上没有任何迹象。
 
-### 6.1.1 会话机制(v1.4 定稿)
+### 6.1.1 会话机制
 
-v1.1~v1.3 只写了「HttpOnly Cookie 承载会话」这个**载体**,没定义会话本身是什么;而 §3.1 又提到阶段二协同网关要与 api「共用同一套 JWT」。两处合起来读会产生歧义,这里定死。
+- 会话 id 是**不透明随机串**,服务端存 **SHA-256 哈希**,库里没有明文。
+- Cookie 属性:`HttpOnly` + `SameSite=Lax` + `Secure`(由 `SESSION_COOKIE_SECURE` 控制)。
+- 默认有效期 720 小时(`SESSION_TTL_HOURS`,默认 24 × 30)。
+- 过期会话由定时任务清理(6 小时一次)。
+- **守卫每次请求都查一次 `users.status`**,所以停用/离职能立刻生效;
+  改状态时还会主动删掉该用户的全部会话行(§9.3)。
 
-**决定:阶段一用「不透明会话 id + 服务端会话表」,不用 JWT。**
+### 6.1.2 密码策略与首次登录改密
 
-- 登录成功后生成 256 位随机 token,写入 HttpOnly / SameSite=Lax / Path=/ 的 Cookie(名 `kc_session`)。
-- **库里只存 token 的 SHA-256,不存 token 本身** —— 即使数据库被读走,也无法据此伪造登录态。
-- 会话记录落 **PostgreSQL 的 `sessions` 表**,带 `expires_at`。
+- 密码用 **bcrypt,cost 12**。
+- 初始密码统一 `123456`,新账号一律带 `must_change_password=true`。
 
-三条理由:
-
-1. **可吊销。** 登出、停用账号、把某人移出空间,都必须立刻失效。JWT 要做到同样效果就得再维护一份 denylist —— 那等于把「无状态」省下的成本又原样花回去。
-2. **符合 §3.2 的分层原则。** §3.2 明确 Redis「不作为唯一数据源」。若会话只放 Redis,Redis 就成了登录态的唯一来源:一次 flush 全员掉线,而且它从「可降级缓存」变成了「认证硬依赖」。放 PG 则 Redis 保持纯缓存角色。
-3. **不引入签名密钥轮换问题。** 不透明 token 的强度来自随机性、不依赖密钥,所以 `SESSION_SECRET` 可以留给阶段二签短期 JWT 用。
-
-**代价:** 每个已认证请求多一次 PG 主键查询。本项目规模下可忽略,且 §5.5 的权限判定本来就要查库或查缓存。
-
-**与 §3.1「同一套 JWT」的关系(阶段二路径,此处只记约束):** 协同网关真正需要的是「握手时验证一次身份、之后不查库」。届时由 api 用 `SESSION_SECRET` **签发一枚短期 JWT** 交给网关即可,而不是把阶段一也改成 JWT —— 这样阶段一的吊销能力不受影响。
-
-**运维注意:`SESSION_COOKIE_SECURE` 默认跟随 `NODE_ENV=production` 打开。** §2.4 已要求内网也上 HTTPS,但 TLS 要到 M6 才落地;在那之前若走 http 访问(例如本机 compose 验收),必须显式设 `SESSION_COOKIE_SECURE=false`,否则浏览器不会回传 Cookie。
-
-### 6.1.2 密码策略与首次登录改密(v2.5 重做)
-
-用户决定:**新账号统一初始密码 `123456`**,密码**不进 Excel 模板**(由服务端内置),
-**首次登录强制改密**。
-
-#### 两条规则
-
-| | 规则 |
-|---|---|
-| 初始密码 | 固定 `123456`。建号时由服务端写入,**模板里没有密码列** |
-| 新密码要求 | **至少 8 位**,且**必须同时包含字母与数字** |
-
-#### ⚠️ 首次登录**不建立会话**(v2.5 重新设计)
-
-用户的原话:
-
-> 「重置密码,不需要输入原密码,直接输入新密码。还有一点,用户在初次登录页面以后,
-> 无法回到 login 页面,必须改密码才行,这样是不合适的,**用户第一次登录,不应该记录登录状态**,
-> 重置完密码以后,应该要用户重新登录才对,你的逻辑出问题了。」
-
-v2.2 的做法是「照常登录 + 守卫拦住所有接口 + 白名单放行改密页要用的那几条」。
-它能挡住越权,但造出了一个**谁都不想要的状态**:那个人既进不去系统
-(每条业务接口都 403),又退不出去(连登录页都回不去,因为"已经登录"了)。
-
-现在改成:
+**首次登录不建立会话。** 这是刻意的:
 
 ```
-POST /auth/login
-  ├─ 常规               → 建立会话,下发 Cookie,响应 kind = 'session'
-  └─ mustChangePassword → **不建立会话、不下发 Cookie**
-                          响应 kind = 'password-change-required' + setupToken
-                                     ↓
-POST /auth/initial-password  { setupToken, newPassword }   ← 公开接口,**不要原密码**
-  └─ 成功 → 204,**仍然不建立会话**
-                                     ↓
-                       用户用新密码重新登录一次(这时才 kind = 'session')
+POST /auth/login        → 若 must_change_password:返回 password-change-required + 一次性凭证
+                          **不下发会话 Cookie**
+POST /auth/initial-password(凭一次性凭证)→ 改密成功,仍然不下发会话
+POST /auth/login        → 用新密码登录,这次才下发会话
 ```
 
-四条由此而来的性质:
+> 为什么这么绕:如果首次登录就发会话,那么"还没改密的人"就是一个可被利用的中间态 ——
+> 他能用一个全公司统一的初始密码访问系统。现在这个状态**在服务端根本不存在**(没有会话)。
 
-1. **改密之前,这个人没有登录状态** —— 他对业务接口而言就是未登录(401)。
-   注意**不是 403**:403 意味着"你登录了但没权限",而事实是他压根没登录。
-2. **不需要"改密白名单"了。** 白名单是为了让"已登录但未改密的人"能碰到改密页;
-   现在不存在这种状态,整套机制连同 `@AllowDuringPasswordChange()` 装饰器一起删掉。
-   顺带消掉一类 bug:白名单漏一条,用户就会卡在某个页面上(v2.0 就漏过 `GET /auth/me`)。
-3. **改密不要原密码。** 登录那一步已经用初始密码验过身份,再要一次是重复。
-   代替它的是那张 `setupToken`。
-4. **改完必须重新登录。** 这样"我设的密码真的能用"是**当场验证**的,
-   而不是等他下次来才发现打错了。
+一次性凭证(`setupToken`):
 
-> **登录是"两种结果",不是"成功/失败"两种。** 这一点在类型上就写死了
-> (`LoginResponse` 是判别联合),所以前端不可能"忘记处理首登"——
-> 它会直接编译不过。
+- 内容含用户 id、过期时间,**用 `SESSION_SECRET` 做 HMAC 签名**;校验用 `timingSafeEqual`。
+- **`SESSION_SECRET` 没有默认值**,部署时必须显式配置;为空时首登改密**不降级放行**,而是明确报错 ——
+  降级会让这条链路静默失效,那是更坏的结果。
+- ⚠️ 已知风险(写在这里,不藏):凭证是**无状态**的,改密成功后服务端不记录"已用过",
+  因此理论上在有效期内可以重放。它只在"未改密"这个极短窗口内有意义,且需要先拿到密码。
 
-#### 一次性凭证(`setupToken`)
-
-| | |
-|---|---|
-| 形式 | `base64url(payload).base64url(HMAC-SHA256(payload, SESSION_SECRET))` |
-| 内容 | 只有 `sub`(用户 id)与 `exp`(毫秒时间戳)—— **不放工号、不放密码** |
-| 有效期 | **10 分钟** |
-| 存储 | **服务端不存**。无状态签名,进程重启也不影响手上这张 |
-| 一次性 | **不需要服务端记"用过了"** —— 改密成功会把 `must_change_password` 翻成 `false`,而校验时会检查这个标志。**状态本身就把凭证作废了** |
-
-> **为什么不放 Redis**:Redis 在这个系统里是**可降级依赖**(权限缓存没了也能正常判定)。
-> 把"首次改密"这条必经之路挂在 Redis 上,等于给登录链路凭空加一个可用性约束。
-> 数据库则要加表、加清理任务。签名方案两者都不需要。
->
-> **为什么不降级**:`SESSION_SECRET` 未配置时,`login` / `setInitialPassword`
-> 直接报 `INTERNAL_ERROR`,**绝不用空密钥签**。空密钥签出来的凭证任何人都能伪造 ——
-> 那比"首登改密暂时不可用"严重得多。
-
-#### 守卫里保留了一条纵深防御
-
-按上面的流程,"有会话但还待改密"这个状态**不可能出现**。守卫仍然检查它:
-一旦发现,就**吊销该会话并按未登录处理**。
-
-这不是多余 —— 它挡的是"有人手工改库"这类绕过流程的情况,
-而处理方式是让那个状态**不可能存在**,而不是放进来再逐个接口去判。
-(v2.2 正是"放进来再判",还因此漏过一次白名单。)
-
-#### 已知风险(写在这里,不藏)
-
-**初始密码全员相同,意味着在某人首次登录改密之前,任何知道他工号的人都能登进他的系统。**
-三条缓解措施都已落实:
-
-- 首次登录**强制**改密,且**服务端拦截** —— 他拿不到任何业务数据
-- 改密之前**没有任何登录状态** —— 连业务接口都是 401
-  (而不是"登进去了但什么都看不到"那种半状态)
-- **工号列表不对未登录用户暴露**;登录失败一律回同一个错误,不区分"工号不存在"与"密码错误"
-
-> 若要更严,可改为"管理员生成一次性激活码"模式(记在 §11.3)。但阶段一按用户要求:
-> **统一初始密码 + 首登强制改密**。
-
-#### 与 BCrypt 的关系
-
-- 密码上限仍是 **72 字节**(bcrypt 会静默截断,M2 已加校验)。8 位的要求远低于此,不冲突。
-- 强度校验**只在改密接口做**。登录时**不做**强度校验 —— 否则一旦收紧规则,老账号会直接登不上。
-- 两条改密路径(`/auth/initial-password` 与 `/auth/change-password`)都调**同一个**
-  `checkPasswordStrength`,不各写一份正则 —— 两处规则不一致的表现是
-  "某个入口能设出不合规的密码",而且不会报错。
-
-### 6.1.3 登录限流与锁定(v2.12)
+### 6.1.3 登录限流与锁定
 
 **两道门,按账号与按 IP 分别计数。**
 
-| 维度 | 计数键 | 阈值 | 窗口 / 锁定时长 | 环境变量 |
-|---|---|---|---|---|
-| 账号 | `kc:login:fail:u:{工号}` | 5 次 | 15 分钟 | `LOGIN_MAX_ATTEMPTS` / `LOGIN_LOCK_MINUTES` |
-| 出口 IP | `kc:login:fail:ip:{ip}` | 100 次 | 15 分钟 | `LOGIN_IP_MAX_FAILURES` / `LOGIN_IP_WINDOW_MINUTES` |
+| 维度 | 计数键 | 阈值 | 窗口 / 锁定时长 |
+|---|---|---|---|
+| 账号 | `kc:login:fail:u:{工号}` | 5 次 | 15 分钟 |
+| 出口 IP | `kc:login:fail:ip:{ip}` | 100 次 | 15 分钟 |
 
 锁定期间**不校验密码** —— 否则锁了照样能拿密码去撞,锁定形同虚设。
-被锁时返回 `RATE_LIMITED`(429),错误体里带 `retryAfterSeconds`,文案是"还需等待 N 分钟"。
+被锁时返回 `RATE_LIMITED`(429),错误体里带 `retryAfterSeconds`。
 
 **四条刻意的设计,每条都对应一种写错就静默失效的情形:**
 
 1. **限流检查放在 bcrypt 之前。** 密码哈希是这里最贵的一步(故意贵),
-   放在它后面等于让攻击者用一次请求换一次 hash —— 限流就白加了。
-2. **锁定键按"工号"计数,包括不存在的工号。** 若只对真实账号计数,
-   攻击者就能靠"哪些工号会被锁"来**枚举出公司有哪些人**。
-   现在无论工号是否存在,失败都计数、都返回同一个错误体(`verify-org` 有断言钉住"两种失败的错误体完全一致")。
-3. **`IP` 那道门只统计失败,且成功不清 IP 计数。** 一个出口 IP 是多人共用的,
+   放在它后面等于让攻击者用一次请求换一次 hash。
+2. **锁定键按「工号」计数,包括不存在的工号。**
+   若只对真实账号计数,攻击者就能靠「哪些工号会被锁」**枚举出公司有哪些人**。
+   现在无论工号是否存在,失败都计数、都返回同一个错误体。
+3. **IP 那道门只统计失败,且成功不清 IP 计数。** 一个出口 IP 是多人共用的,
    某个人登录成功不代表那个 IP 上的撒网行为已经停止。
-   而账号那道门在**登录成功时会清零**(`recordSuccess`)—— 正常人打错几次不该被一路锁下去。
-4. **计数只在第一次失败时设过期。** `bump()` 里 `if (value === 1) expire(...)`:
-   每次都续期的话,持续攻击会让计数**永不过期**,把真实用户一起永久锁住。
+   而账号那道门在**登录成功时会清零** —— 正常人打错几次不该被一路锁下去。
+4. **计数只在第一次失败时设过期。** 每次都续期的话,持续攻击会让计数**永不过期**,
+   把真实用户一起永久锁住。
 
-**Redis 挂了会怎样:锁定失效,但系统其他部分照常。**
+⚠️ **Redis 挂了会怎样:锁定失效(退回无限尝试),系统其他部分照常。**
 
-`enableOfflineQueue: false` 意味着 Redis 没连上时命令**立刻抛**,而 `run()` 会把这个错误
-降级成"没读到计数" → 判定为未锁定。这是刻意的取舍:
+这是刻意的取舍。限流是「防爆破」的加固,不是「身份正确性」的一部分;
+让登录在 Redis 故障时**完全不可用**的代价(全员登不进)远大于「这段时间少一道门」。
 
-> **Redis 是可降级依赖**(§3.2 / §5.5)。限流是"防爆破"的加固,不是"身份正确性"的一部分。
-> 让登录在 Redis 故障时**完全不可用**的代价(全员登不进)远大于"这段时间少一道门"。
-> 因此:Redis 挂 = 退回无限尝试,而不是拒绝所有人。这条要写出来,不能只留在代码里。
-
-**审计。** 只有**真实存在**的账号被锁时才写 `auth.login.locked` ——
+**审计:** 只有**真实存在**的账号被锁时才写 `auth.login.locked` ——
 不存在的工号也写的话,审计日志会被攻击者用无关工号灌满。
-
-**给运维的两个开关:**
-
-- 某个账号被锁且用户急着登录:`docker compose exec -T redis redis-cli del kc:login:lock:u:kc004`。
-- 完全关掉账号那道门:把 `LOGIN_MAX_ATTEMPTS` 设为 `0`(`disabled()` 要求**两道门都 ≤ 0** 才整体关闭)。
-  ⚠️ 验收脚本会连续尝试多个候选密码,容易把自己的账号试锁 ——
-  真机踩过一次,细节见 §9.10。
-
-### 6.1.4 管理员重置密码(v2.6 补)
-
-**这是在 v2.5 之前根本不存在的能力** —— 也就是说,在那之前系统里没有
-"同事忘了密码"的出口。唯一的办法是运维登进容器、连上数据库、手工改哈希。
-那既不该是运维的活,也**不留任何痕迹** —— 而"谁能登进这个账号"是最该留痕的事之一。
-
-#### 一次重置做三件事,少一件都会留下说不清的状态
-
-| # | 动作 | 漏掉的后果 |
-|---|---|---|
-| 1 | 哈希写回内置初始密码 `123456` | — |
-| 2 | `must_change_password = true` | 等于**永久**把密码设成了 `123456` |
-| 3 | **吊销他的全部会话** | 他手上那个标签页还能继续用,而管理员以为"他已经进不来了" |
-
-第 3 条最容易被当成多余的 —— 它其实才是"重置"这个词在管理员心里的真实含义。
-实测踩过同类(改密码不清会话),表现是「改完密码旧标签页还能用」,看着像没生效。
-
-#### 两条刻意的拒绝
-
-- **不能重置自己。** 能点到那个按钮,说明他已经登进来了 —— 能登进来的人不需要
-  重置自己。允许它只会制造一次手滑:他立刻被踢下线,然后用 `123456` 登回来、
-  还得再改一遍密码。想改自己的密码走「修改密码」。
-- **不能重置「已离职 / 已停用」的人。** 重置了也登不进来(守卫按 `status` 拦),
-  白做工且会让人以为"重置了怎么还是登不上"。错误信息直接点出真正的原因:
-  「要先把他改回在职」。
-
-#### 为什么不去作废"已签发的一次性凭证"
-
-重置一个**还没激活**的账号时,他上一步拿到的 `setupToken` 在 10 分钟内仍然可用。
-
-这**不构成额外暴露**:他能拿旧凭证改密码,也能拿 `123456` 重新登一次换张新的 ——
-未激活账号的初始密码本来就等同于公开信息,而那正是这套强制改密机制存在的前提
-(§6.1.2「已知风险」)。为了它引入"凭证版本号",等于给认证主链路加一条
-谁都不敢动的耦合,换不来任何实际的安全收益。
-
-真正需要收回的东西(**已发出的会话**)重置是收回了的。
-
-#### ⚠️ 顺带修掉的一处判权缺口
-
-加 `mustChangePassword` 这个字段时才发现:`GET /admin/users` **此前根本没有判权** ——
-任何登录用户都能拿到全公司名册,而文档一直写的是超管。那个字段等于一份
-**"谁的密码还是 123456"的目标清单**,对非管理员绝不该可见。
-
-现在它按文档收紧了(超管专属)。那"这个部门里有谁"要不要公开?**要** ——
-但它走的是 `GET /nodes/:id/members`(v2.4,读全员开放)。
-公开的是**组织归属**,不是账号状态与登录时间。
-
-前端 `/admin/*` 也补了一层 `RequireSuperAdmin`,但那**只是体验**:
-非管理员手工敲地址时看到一句人话,而不是一屏 403 报错。判权仍在服务端。
 
 ### 6.2 接口清单
 
-> ✅ 本节与代码的**双向**一致性由 `pnpm audit:docs` 校验(见 §0.5)——
-> 接口加了没写进来、或写了但代码里没有,都会让 `pnpm check` 失败。
-
-权限列的取值现在都是**关系**,不再是角色:v2.0 起写 `canEdit` / `canManage` / `祖先所有者` / `超管` / `登录(全员)`。
-
-#### 认证
-
-| 方法 | 路径 | 权限 | 说明 |
-|---|---|---|---|
-| POST | `/auth/login` | — | 登录。**两种结果**(v2.5):常规 → 下发会话 Cookie;`mustChangePassword` → **不下发 Cookie**,只给一张一次性 `setupToken` |
-| POST | `/auth/initial-password` | — | **首次改密**。凭 `setupToken`,**不需要原密码**;成功后**也不建立会话**,用户要用新密码重新登录 |
-| POST | `/auth/change-password` | 登录 | **已登录用户**主动改密。需要当前密码(会话可能被他人接管) |
-| POST | `/auth/logout` | 登录 | 登出 |
-| GET | `/auth/me` | 登录 | 当前用户 + **组织归属列表** |
-| POST | `/auth/setup` | — | **仅当库中无用户时可用**,创建首个管理员(工号 + 姓名 + 密码) |
-| GET | `/auth/setup-state` | — | 返回 `{ required: boolean }`,供前端 `/setup` 判断该显示引导页还是登录页 |
-
-> v2.0 起 `/auth/me` **不再返回"可见空间列表"** —— 所有节点对所有登录用户可见,没有"可见子集"这回事。
-> 前端拿到的是"我是不是某些节点的所有者 / 我的组织归属在哪",用于决定界面上的操作开关(服务端仍是唯一裁判)。
->
-> v2.5 起 `/auth/me` 也**不再返回 `mustChangePassword`** —— 能拿到这个响应就说明会话已建立,
-> 而首登不发会话,所以它在前端恒为 `false`。留一个永远为假的字段只会让人以为它还有用;
-> 服务端自己需要这个判断(守卫的纵深防御),用的是内部的 `SessionUser`。
-
-#### 组织架构
-
-| 方法 | 路径 | 权限 | 说明 |
-|---|---|---|---|
-| GET | `/org/tree` | 登录 | 整棵节点树(组织与内容合一)。**全员可得全部,不做过滤** |
-| GET | `/org/tree?root=<id>` | 登录 | **只返回那棵子树**(v2.4)。`root` 不存在或已删 → 404,**不静默返回空树** |
-| GET | `/org/scopes` | 登录 | 组织范围下拉数据:一级 / 二级节点的路径 + 该范围内的人数 |
-| POST | `/org/nodes` | 超管 / 祖先所有者 | 建部门(`parentId` 为空,超管)或建组(部长)。`parentId` 为空时必须指定部长为所有者 |
-| GET | `/nodes/:id/owner-candidates` | 祖先所有者 / 超管 | 能担任该节点所有者的人选(**已按操作者组织范围过滤**) |
-| PATCH | `/nodes/:id/owner` | 祖先所有者 / 超管 | 任命 / 变更所有者(部长任命组长走这里)。**一级部门只有超管能改** |
-| GET | `/nodes/:id/members` | 登录 | **这个节点下都有谁**(v2.4)。分「直接成员 / 下属成员」两段,带 `canManage` |
-| GET | `/nodes/:id/member-candidates` | 该节点所有者 / 超管 | 能加进该节点的人(**已按操作者组织范围过滤**;超管不受范围限制) |
-| POST | `/nodes/:id/members` | 该节点所有者 / 超管 | **追加**一条组织归属。幂等;受组织范围约束 |
-| DELETE | `/nodes/:id/members/:userId` | 该节点所有者 / 超管 | **移出**一条组织归属 —— 调岗两步的第二步 |
-| GET | `/admin/users?q=&cursor=&limit=` | **超管** | 人员列表,**游标分页**(v2.13)。返回 `{ users, total, nextCursor }` —— `total` 让"只看到一部分"在界面上可见。带 `mustChangePassword`,界面据此标「初始密码未改」 |
-| POST | `/admin/users` | 超管 | 建人(**预置,不是注册**) |
-| POST | `/admin/users/:id/reset-password` | 超管 | **把密码打回初始值**(v2.6)。同时置 `must_change_password = true` 并**吊销他全部会话**。见 §6.1.4 |
-| PATCH | `/admin/users/:id/assignments` | 超管 | 设置组织归属(多归属,**整表替换**) |
-| PATCH | `/admin/users/:id` | 超管 | 改姓名 / **状态**(`active` / `disabled` / `departed`) |
-| GET | `/admin/org/import-template` | 超管 | 下载组织架构 `.xlsx` 模板(**带当前全部人员与节点**,不是空表) |
-| POST | `/admin/org/import?dryRun=1` | 超管 | 上传并**只返回差异预览**,不写库 |
-| POST | `/admin/org/import` | 超管 | 确认写入(一次事务;任何一行失败整批回滚)。**新建账号一律用内置初始密码 `123456`,并置 `must_change_password = true`** |
-
-> **成员与授权是两条接口、两套门槛,v2.4 起刻意不合并。**
-> 「成员」管的是**组织归属**(他在哪个部门 / 组),「授权」管的是**判定结果**(他能改什么)。
-> 前者的写权限是 `canManage` **或超管**(组织架构本就归超管管,而且他的组织归属
-> 可能是空的,过不了范围检查);后者是 `canManage`,**超管不在其列**
-> (他不是内容所有者,不该改别人的内容权限)。
-> 合成一条接口就会出现「超管能改成员、但候选列表是空的」这种自相矛盾的界面。
-
-#### 节点
-
-| 方法 | 路径 | 权限 | 说明 |
-|---|---|---|---|
-| POST | `/nodes` | `canCreateUnder` | 新建(带 `parentId` / `kind`),服务端计算 `materialized_path` |
-| GET | `/nodes/:id` | 登录 | 单节点元信息 + 祖先链 |
-| PATCH | `/nodes/:id` | `canEdit` | 改标题 / 状态,带 `version` |
-| POST | `/nodes/:id/move` | `canEdit` | 拖拽排序与改父级,**递归重建子树路径** |
-| POST | `/nodes/bulk/move` | 每个节点各自 `requireEdit` + 目标 `requireEdit` | **批量移动**(v2.14)。只移动,**不做批量删除**(移动可逆、删除不可恢复,风险差一个量级)。服务端拒绝「批量里互为祖先」的选法 —— 那种选法的结果取决于执行顺序。全部校验通过后一个事务里全做或全不做。上限 `BULK_MOVE_MAX`(50) |
-| DELETE | `/nodes/:id` | 祖先所有者 | **物理删除整棵子树,不可恢复**(v2.12;回收站移除后门槛由 `canEdit` 提到 `canManage`) |
-| GET | `/nodes/:id/content` | 登录 | 取正文 |
-| PUT | `/nodes/:id/content` | `canEdit` | 存正文,同步重算 `text_for_search` |
-
-#### 授权(替代原「页面权限」)
-
-| 方法 | 路径 | 权限 | 说明 |
-|---|---|---|---|
-| GET | `/nodes/:id/grants` | 先能读该节点 | 三段授权视图(所有者 / 上级所有者 / 显式名单)+ `canManage`。**v2.13 起要先能读** —— 否则受限节点的授权名单会连同"谁在名单里"一起暴露给全公司 |
-| GET | `/nodes/:id/grant-candidates` | `canManage` | 可授权的人(**已按操作者组织范围过滤**);无管理权时返回空数组 |
-| PUT | `/nodes/:id/grants` | `canManage` | 整表替换。**逐个校验被授权者在操作者组织范围内**,越界拒绝 |
-| GET | `/nodes/:id/readers` | 先能读该节点 | 可见性 + 读者名单(v2.13)。含 `inheritedFrom` —— 告诉界面"限制是从哪个祖先继承来的" |
-| GET | `/nodes/:id/reader-candidates` | 创建者 / 所有者 | 候选读者。**刻意不按组织范围过滤** —— 受限节点的读者常常就是外部门的人 |
-| PUT | `/nodes/:id/readers` | 创建者 / 所有者 | 整表替换可见性与读者名单。**与授权名单是两条接口、两套门槛** |
-
-> 注意这里**只有名单,没有 deny**。收回权限 = 把人从名单里删掉。
-> 候选人接口返回的列表已经过滤过,但**服务端在写入时仍要再校验一次** —— 前端的过滤只是便利,不是安全边界。
-
-#### 评论
-
-| 方法 | 路径 | 权限 | 说明 |
-|---|---|---|---|
-| GET | `/nodes/:id/comments` | 登录 | 评论列表 |
-| POST | `/nodes/:id/comments` | 登录 | 发表评论或回复(带 `parent_id`)。**全员可发** |
-| PATCH | `/comments/:id` | 作者 / 祖先所有者 | 标记已解决、重新打开、编辑正文 |
-| DELETE | `/comments/:id` | 作者 / 祖先所有者 | 删除评论 |
-
-#### 检索与治理
-
-| 方法 | 路径 | 权限 | 说明 |
-|---|---|---|---|
-| GET | `/search?q=` | 登录 | 模糊检索。**v2.13 起按可见性过滤**(受限节点的标题与正文不出现在别人的结果里,§8.3) |
-| GET | `/nodes/:id/export?format=md` | 登录 | 导出为 Markdown(以 `text/markdown` 直接下载) |
-| GET | `/comment-counts?ids=` | 登录 | 批量取未解决评论数(节点树角标) |
-| POST | `/uploads` | 登录 | 上传图片,返回 `{ url }`;白名单 `.png/.jpg/.jpeg/.gif/.webp/.avif`(不含 SVG),单文件 ≤ 10MB |
-| GET | `/audit-logs?cursor=&limit=` | 祖先所有者 / 超管 | 审计日志 |
-| GET | `/audit-logs/export` | 同上(按所有者范围) | **导出 CSV**(v2.14)。与列表**共用同一个可见范围查询** —— 导出若绕过范围就是一次越权读取。上限 `AUDIT_EXPORT_MAX_ROWS`(5000),超了用响应头 `X-Audit-Capped` 告知,不静默截断 |
-
-#### 运维探针(**无需登录**)
-
-| 方法 | 路径 | 权限 | 说明 |
-|---|---|---|---|
-| GET | `/health` | — | **存活**探针。只要进程还能响应就返回 200,刻意**不查依赖** —— 它回答的是"要不要重启这个进程",数据库挂了不该导致容器被反复杀掉 |
-| GET | `/health/ready` | — | **就绪**探针。逐项报告 `database` / `redis`,依赖不全时返回 **503** 并指明是哪一个(用 `passthrough` 保留响应体只改状态码) |
-
-> 整个控制器标 `@Public()`:探针不带凭证,容器编排也拿不到 Cookie。
-> 这两个接口是**唯一**不需要登录的业务之外的接口
-> (另两个是 `/auth/setup` 与 `/auth/setup-state`,它们只在库中无用户时有意义)。
-
-#### 阶段二占位(不实现)
-
-| 方法 | 路径 | 说明 |
+<!-- BEGIN GENERATED:routes -->
+| 方法 | 路径 | 实现 |
 |---|---|---|
-| WS | `/collab?nodeId=&token=` | 握手时校验该节点的写权限(`canEdit`),无权限直接拒绝连接;只读用户标记 `readOnly`,服务端丢弃其 outgoing update |
+| GET | `/admin/org/import-template` | `org/org.controller.ts` |
+| POST | `/admin/org/import` | `org/org.controller.ts` |
+| PATCH | `/admin/users/:userId/assignments` | `org/org.controller.ts` |
+| POST | `/admin/users/:userId/reset-password` | `org/org.controller.ts` |
+| PATCH | `/admin/users/:userId` | `org/org.controller.ts` |
+| GET | `/admin/users` | `org/org.controller.ts` |
+| POST | `/admin/users` | `org/org.controller.ts` |
+| GET | `/audit-logs/export` | `audit/audit.controller.ts` |
+| GET | `/audit-logs` | `audit/audit.controller.ts` |
+| POST | `/auth/change-password` | `auth/auth.controller.ts` |
+| POST | `/auth/initial-password` | `auth/auth.controller.ts` |
+| POST | `/auth/login` | `auth/auth.controller.ts` |
+| POST | `/auth/logout` | `auth/auth.controller.ts` |
+| GET | `/auth/me` | `auth/auth.controller.ts` |
+| GET | `/auth/setup-state` | `auth/auth.controller.ts` |
+| POST | `/auth/setup` | `auth/auth.controller.ts` |
+| GET | `/comment-counts` | `comment/comment.controller.ts` |
+| DELETE | `/comments/:commentId` | `comment/comment.controller.ts` |
+| PATCH | `/comments/:commentId` | `comment/comment.controller.ts` |
+| GET | `/health/ready` | `health/health.controller.ts` |
+| GET | `/health` | `health/health.controller.ts` |
+| GET | `/nodes/:nodeId/comments` | `comment/comment.controller.ts` |
+| POST | `/nodes/:nodeId/comments` | `comment/comment.controller.ts` |
+| GET | `/nodes/:nodeId/content` | `node/node.controller.ts` |
+| PUT | `/nodes/:nodeId/content` | `node/node.controller.ts` |
+| GET | `/nodes/:nodeId/export` | `node/node.controller.ts` |
+| GET | `/nodes/:nodeId/grant-candidates` | `permission/permission.controller.ts` |
+| GET | `/nodes/:nodeId/grants` | `permission/permission.controller.ts` |
+| PUT | `/nodes/:nodeId/grants` | `permission/permission.controller.ts` |
+| GET | `/nodes/:nodeId/member-candidates` | `org/org.controller.ts` |
+| DELETE | `/nodes/:nodeId/members/:userId` | `org/org.controller.ts` |
+| GET | `/nodes/:nodeId/members` | `org/org.controller.ts` |
+| POST | `/nodes/:nodeId/members` | `org/org.controller.ts` |
+| POST | `/nodes/:nodeId/move` | `node/node.controller.ts` |
+| GET | `/nodes/:nodeId/owner-candidates` | `org/org.controller.ts` |
+| PATCH | `/nodes/:nodeId/owner` | `org/org.controller.ts` |
+| GET | `/nodes/:nodeId/reader-candidates` | `permission/permission.controller.ts` |
+| GET | `/nodes/:nodeId/readers` | `permission/permission.controller.ts` |
+| PUT | `/nodes/:nodeId/readers` | `permission/permission.controller.ts` |
+| DELETE | `/nodes/:nodeId` | `node/node.controller.ts` |
+| GET | `/nodes/:nodeId` | `node/node.controller.ts` |
+| PATCH | `/nodes/:nodeId` | `node/node.controller.ts` |
+| POST | `/nodes/bulk/move` | `node/node.controller.ts` |
+| POST | `/nodes` | `node/node.controller.ts` |
+| POST | `/org/nodes` | `org/org.controller.ts` |
+| GET | `/org/scopes` | `org/org.controller.ts` |
+| GET | `/org/tree` | `node/node.controller.ts` |
+| GET | `/search` | `search/search.controller.ts` |
+| POST | `/uploads` | `upload/upload.controller.ts` |
+
+共 **49** 条。前缀 `/api/v1` 由 `app-setup.ts` 统一加;本表由 `scripts/gen-doc.mjs` 从控制器生成,`pnpm audit:docs` 会校验它是否与代码一致。
+<!-- END GENERATED:routes -->
+
+### 6.3 几个容易看错的细节
+
+- **`GET /nodes/:id/export` 必须带 `?format=md`**。合法取值只有 `md`(见 `EXPORT_FORMATS`);
+  传别的值回 400,而且**参数校验先于权限校验** —— 所以对它传错格式时看到的是 400 而不是 404,这是正常的。
+- **`POST /nodes/bulk/move` 的路径写作 `nodes/bulk/move`**,而且**注册在 `nodes/:nodeId/...` 之前**。
+  Express 按注册顺序匹配,否则 `bulk` 会被当成一个 nodeId、被 `ParseUUIDPipe` 以 400 拒掉。
+- **`GET /audit-logs/export` 返回 `text/csv`**,不是 JSON;文件名走 RFC 5987 编码;带 UTF-8 BOM(Excel 不乱码)。
+- **`DELETE /nodes/:id` 是物理删除**,删除整棵子树,不可恢复(§8.2)。
+- **`GET /health` 不碰外部依赖**,`GET /health/ready` 才会检查数据库与 Redis。两个探针的用途不同:
+  前者用于容器存活探针(数据库没起来时不该把 api 反复重启)。
+
+### 6.4 审计游标为什么必须校验
+
+游标对外是**字符串**(审计主键是 `BigInt`,JSON 装不下 64 位整数)。
+原实现把它原样拼进 `::bigint`,于是 `?cursor=abc` 会让 PostgreSQL 抛 22P02,
+再被全局过滤器兜成 **500 INTERNAL_ERROR** —— 一个纯客户端的参数错误显示成「服务器内部错误」,
+任何登录用户都能触发,还在日志里留下假的故障记录。
+
+现在 `normalizeCursor` 只接受 `^[0-9]{1,19}$`(19 位是 signed 64-bit 的十进制上限),其余一律 400。
 
 ---
+## 7. 前端
 
-## 7. 前端架构
+### 7.1 路由与页面
 
-### 7.1 仓库结构(monorepo)
-
-```
-knowledgeCool/
-├─ apps/
-│  ├─ web/                 # React + Vite
-│  │  └─ src/
-│  │     ├─ routes/        # 页面级组件
-│  │     ├─ features/      # editor / tree / permissions / comments / search
-│  │     ├─ components/    # 通用 UI
-│  │     └─ lib/api.ts     # 统一请求封装
-│  └─ api/                 # NestJS
-│     └─ src/
-│        ├─ modules/       # auth / user / space / page / permission / comment / search / audit
-│        ├─ common/        # 守卫、拦截器、异常过滤器
-│        └─ prisma/        # schema.prisma + migrations
-├─ packages/
-│  └─ shared/              # 前后端共享:类型、权限常量、错误码
-├─ prototype/              # 交互原型(UI 参考,不参与构建)
-├─ docs/
-│  └─ DESIGN.md            # 本文
-├─ docker/
-│  └─ nginx.conf
-├─ docker-compose.yml
-└─ pnpm-workspace.yaml
-```
-
-`packages/shared` 是选全 TS 的最大收益点:角色枚举、错误码、DTO 类型只定义一次,前后端同时受益。
-
-### 7.2 路由与页面
-
-| 路由 | 页面 | 谁能进 |
-|---|---|---|
-| `/login` | 登录(**工号 + 密码**) | — |
-| `/change-password` | 首次登录强制改密 | 全员(未改密时唯一可达页) |
-| `/setup` | 首次部署的管理员初始化(含组织架构导入) | — |
-| `/` | **工作台 —— 登录后直达** | 全员 |
-| `/n/:nodeId` | 节点页(主工作面) | 全员 |
-| `/search` | 检索结果 | 全员 |
-| `/admin/org` | 组织架构维护:建部门 / 任命所有者 | 超管 |
-| `/admin/users` | 人员、归属、**重置密码**、状态(在职 / 停用 / 离职);**分页**(`?cursor=&limit=`) | 超管 |
-| `/audit` | 审计日志 | 祖先所有者 / 超管 |
-| `*`(其它任意地址) | 404 页(`NotFound`) | 全员 |
-
-> 前 5 条(`/setup`、`/login`、`/change-password`)不需要登录外壳;
-> 其余都在 `AppLayout` 里(顶栏 + 左树 + 主区)。`/admin/*` 外面还包了一层
-> `RequireSuperAdmin` —— 它**只负责体验**(手工敲地址时看到一句人话而不是满屏 403),
-> 判权始终在服务端。
-
-**登录后直接进 `/`(工作台),不再有"空间列表"这一中间页。**
-v1.x 的 `/spaces` 与 `/s/:spaceId/members` 两条路由作废,`/s/:spaceId/p/:pageId` 简化为 `/n/:nodeId`。
-
-左侧是**完整的组织与内容树**(全员可见全部),主区是编辑器,右侧是上下文面板(目录 · 评论)。
-
-> **权限设置从"独立页面"改成节点上的弹窗。** 授权是节点级的动作(§6.2 的 `/nodes/:id/grants`),
-> 而节点会有几百个,不可能每个都配一个页面。这与 v1.x 把成员管理做成 `/s/:spaceId/members` 页面是两种做法。
->
-> **树顶不设"公司"节点。** 一级节点就是部门,直接并排展示 —— 多一层"公司"会让每个用户每次都要多点一次才能展开。
-
-**v2.4:节点上有两个弹窗入口,刻意分开。**
-
-树行悬停时有两个按钮(都是 `canManage` 才出现,超管对一级部门另放行):
-
-| 按钮 | 弹窗 | 管什么 |
-|---|---|---|
-| ⚙ | 权限 | **判定结果** —— 谁能改这个节点(所有者 / 上级所有者 / 额外授权三段) |
-| ☰ | 成员 | **组织事实** —— 这个节点下都有谁(直接成员 / 下属成员两段) |
-
-合并成一个带 Tab 的弹窗会更省地方,但没有这么做 —— 两者混在一起会让
-「移出成员 = 收回权限」变成一种反复出现的误解。它们是两件事:
-
-- 移出归属**不改变所有权**:被移出的组长仍然是组长,该能改的还是能改;
-- 但**会缩小他的组织范围**:他能授权给别人的人变少了;若是他最后一条归属,
-  他将不能在别人下面新建、也不能被授权。
-
-这两句写在移出前的确认框里,而且有单测钉住(`removal-note.test.ts`)——
-
-**v2.13:多了一个「可见范围」入口,它和上面两个不是一类。**
-
-| 按钮 | 弹窗 | 谁能开 | 管什么 |
-|---|---|---|---|
-| 🔒(受限时显示徽标) | 可见范围 | **该节点的创建者或所有者** | **保密** —— 这个节点谁能读(§5.6) |
-
-> ⚠️ 它与「权限」「成员」的授权口径**刻意不同**,不要统一:
->
-> - 「权限」(授权名单)走 `canManage`,而且**上级所有者可以代为管理**;
-> - 「可见范围」只有**创建者与所有者**能改,**上级不能**。
->
-> 理由:读者名单决定的是"谁能看到这份内容",它的授权面比"谁能改"更敏感 ——
-> 上级能替你决定谁能改,但**不该能替你决定谁能看**。
-> 判定是纯函数(`canManageReaders`,在 `packages/shared/src/permission.ts`),因为它属于安全边界。
->
-> 另:受限节点在树上与详情页都显示 🔒 徽标,让"这篇是受限的"一眼可见,
-> 而不是等点进去才发现看不见。
-它们是这件事的安全边界,漏了或写反了会让人照着错误的心智模型做人事调整。
-
-### 7.3 状态管理
-
-- 服务端状态:TanStack Query(缓存、失效、重试都交给它)。
-- 本地 UI 状态:Zustand(侧栏折叠、当前 Tab 之类)。
-- **不引入 Redux** —— 这个规模用不上。
-
-### 7.4 编辑器与文档模型
-
-- Tiptap 配置为输出 ProseMirror JSON,`content_json` 列的格式与之**逐字节对应**。
-- 阶段二接协同时,`y-prosemirror` 的 `XmlFragment` 与这个 JSON 结构是 1:1 映射的,不需要改存储层。这就是现在把模型定对的价值。
-- **禁用编辑器自带的撤销栈之外的问题**:阶段一用自带的即可;阶段二挂 Yjs 时必须关掉它并改用 `Y.UndoManager`,否则会有两套撤销栈打架。这一条写在第 10 节。
-
-**实现要点(v1.7 补)**
-
-- 编辑器用 Tiptap 3。**扩展包必须声明为直接依赖**:`@tiptap/core`、`@tiptap/pm`、
-  `@tiptap/extensions`(v3 的 `Placeholder` 在这里,不再是单独的 `extension-placeholder`)。
-  只靠 `starter-kit` 的传递依赖会让命令增强(`toggleBold` 之类)在类型层全部丢失。
-- **`content` 只在挂载时读一次**。父组件用 `key={pageId}` 控制重建,而不是靠 props 更新 ——
-  每次服务端返回新内容就 `setContent` 会把正在打字的人的光标顶走、输入被吞。这是
-  「自动保存 + 受控内容」最经典的坑。
-- 工具栏按钮**必须拦 `mousedown` 并 `preventDefault()`**。用 `onClick` 会先丢焦点、
-  选区随之消失,于是「选中一段再点加粗」什么都不发生。
-- 自动保存防抖 1200ms;正文的冲突检测用 `baseUpdatedAt`(见 §6.2 的 `PUT /content`),
-  **不用 `nodes.version`** —— 那个号被改名/移动共用,耦合的结果是「改正文让改名冲突」。
-  冲突时**不自动覆盖**,显示横幅让用户自己决定重新加载。
-- 大纲(右栏目录)从 `editor.getJSON()` 里抽 1~3 级标题,与工具栏能插入的层级一致;
-  这样序号能对上正文里的 `h1/h2/h3`,点击跳转靠 `scrollIntoView`。
-- 编辑器正文样式**不用 `@tailwindcss/typography`**:它面向博客正文,表格边框、
-  代码块底色、空单元格可点击这几件事都不管。手写约 30 行 CSS 更直接,也不会因插件升级走样。
-
-#### 工具栏的三件"上下文相关"控件(v2.10)
-
-用户实测反馈了三件事,它们有一个共同点:**控件本身没问题,是"做不成事"**。
-
-| 反馈 | 真正缺的东西 |
+<!-- BEGIN GENERATED:pages -->
+| 路径 | 组件 |
 |---|---|
-| 「添加链接竟然是弹窗输入链接,这个不太对」 | 一个能同时填**地址 + 显示文字**、能校验、能回填的表单 |
-| 「表格默认三行三列,不支持扩展」 | 行列的增删(以及合并、表头) |
-| 「代码块不支持语言能力指定」 | 语言属性 + 语法高亮 |
+| `/setup` | `SetupPage` |
+| `/login` | `LoginPage` |
+| `/change-password` | `ChangePasswordPage` |
+| `/` | `HomePage` |
+| `/n/:nodeId` | `NodeDetailPage` |
+| `/search` | `SearchPage` |
+| `/audit` | `AuditPage` |
+| `/admin` | `RequireSuperAdmin` |
+| `/admin/org` | `OrgAdminPage` |
+| `/admin/users` | `UsersAdminPage` |
+| `*` | `NotFound` |
 
-**链接:换成贴着按钮展开的气泡。** `window.prompt` 除了观感,有三件事**做不到**:
-只有一个输入框(定地址和定文字要分两次)、不能校验(`javascript:` 会直接写进文档)、
-编辑已有链接时看不到原文。地址归一化抽成纯函数 `link-url.ts` 并有单测 ——
-其中最容易做错、也最难发现的一条是:**站内路径(`/n/…`)与 `#锚点` 绝不能补 `https://`**,
-补了会把"跳到另一篇文档"悄悄改成"跳到外网站点",而且**不报错**。
+共 **11** 条。由 `scripts/gen-doc.mjs` 从 `App.tsx` 生成。
+<!-- END GENERATED:pages -->
 
-**表格:能力收进一个按钮,而不是铺一排按钮。** 要补的操作有十来个(前后左右插行列、
-删行列、合并、拆分、表头、删表),铺成一行在这个布局里放不下 ——
-正文列只有 `1084 - 320(左树) - 320(右栏) ≈ 444px`,v2.8 已经因为折行踩过一次。
-所以做成**一个按钮两种状态**:不在表格里时只做"插入"(带 6×6 网格选行列数);
-光标进了表格,同一个按钮高亮,菜单里多出「表格工具」一组。
-`合并 / 拆分` 用 `editor.can()` 判断可用性并给出**说明为什么不可用**的 title
-(「先用鼠标拖选两个以上单元格」),而不是让按钮静默失效。
+除 `/setup`、`/login`、`/change-password` 外,其余页面都在 `AppLayout` 里(顶栏 + 左树 + 主区)。
+`/admin/*` 外面包了一层 `RequireSuperAdmin` —— 它**只负责体验**(手工敲地址时看到一句人话而不是满屏 403),
+判权始终在服务端。
 
-**代码块:语言属性 + 低亮语法高亮。** 三处要点:
+左侧是**完整的组织与内容树**(按可见性过滤后),主区是编辑器,右侧是上下文面板(目录 · 评论)。
 
-1. **必须关掉 StarterKit 自带的 `codeBlock`**(`codeBlock: false`),再挂
-   `CodeBlockLowlight` —— 同一个节点两份实现会冲突,表现是"语言存不住、类名时有时无"。
-2. **语言清单与高亮注册表必须是同一份数据。** 下拉里有、注册表里没有 =>
-   选了语言却不着色,**而且不报任何错**。所以注册表由 `CODE_LANGUAGES` **推导**出来
-   (`lowlightRegistry()`),并有单测断言"每个 id 与别名都真的注册过"。
-3. **原始语言不能直接交给 lowlight。** 实测确认:它对未注册的语言**抛错**
-   (`Unknown language: xxx`),不是"原样返回不报错"。一篇从别处粘进来、
-   带 ` ```brainfuck ` 的文档会让渲染炸掉。界面上一律先过 `normalizeLanguage()`,
-   认不出来的一律当纯文本 —— 但下拉里**照实多显示一个「brainfuck(未识别)」选项**,
-   而不是装作是纯文本(后者会让人以为自己写的东西被系统改掉了)。
+### 7.2 状态管理
 
-顺带修掉一件"看起来偶发"的老问题:**工具栏的激活态原来会滞后** ——
-`isActive('bold')` / `isActive('table')` / `isActive('codeBlock')` 都是"此刻光标在哪"的
-函数,而 `onUpdate` 只在**内容**变化时触发。于是"点进代码块看不到语言下拉、
-光标移到加粗文字上 B 不亮",得再敲一个字才对。订阅 `onSelectionUpdate` 之后正常。
+- **服务端状态**:TanStack Query(缓存、失效、重试都交给它)。
+  ⚠️ 树的 `editableNodeIds` 是服务端算的,所以**改完必须失效重取**,不要在本地推导 ——
+  本地推不出来(祖先链变了会连带影响判定)。
+- **客户端状态**:Zustand。
+- **个人视图**(最近浏览 / 收藏 / 检索历史)**只存 localStorage**,刻意不落库:
+  这是「我的顺手」,不是「公司的事实」—— 落库就要有接口、有权限判定、有清理策略,
+  而它带来的产品价值并不值得这些。
+  ⚠️ 读写两侧都包了 `try/catch`:无痕模式/策略禁止时 localStorage 会直接抛,
+  不能让它把整个工作台带崩。
+  ⚠️ 展示前要**按组织树过滤**:节点可能已被删除,也可能被设成受限而当前用户不在名单里 ——
+  直接渲染本地列表就会把一个他已经无权看见的标题摆在他面前。
 
-> 语法高亮只注册了 18 个语言(highlight.js 自带 190+,全量引入会让这个页面的包
-> 大出几百 KB),按"研发场景真的会写"挑的。前台正文字号那一档也顺手对齐了刻度表
-> (`0.85em` → `0.875em` = 14px)。
->
-> 打包体积因此从 ~600KB 涨到 **871KB(压缩后 275KB)**。这是把编辑器能力补全的代价,
-> 若要压回去,方向是**按需加载语法**(用到某个语言才 import 那一个语法文件),
-> 已记进 §11.3。
+### 7.3 字号与排版刻度
 
-### 7.5 字号与排版刻度(v2.8,有出处、有机器检查)
+四档,与 Tailwind 具名档一一对应,**不允许任何任意值字号**:
 
-用户**三次**反馈「字体太小」,并在最后一次明确要求：
-「你能不能找几个好点的网站去参考一下,就常规的博客网站也行,或者直接去看看 confluence 是如何做的」。
-
-这句话点破了问题的性质：**前两次我都在拍脑袋调数值,没有参照任何真实产品的设计。**
-这一次先查规范,再定刻度。
-
-#### 参照一：Atlassian Design System(Confluence 用的就是它)
-
-| Token | 字号 / 行高 | 官方说明 |
+| 用途 | 字号 | Tailwind |
 |---|---|---|
-| `font.body.large` | **16 / 24** | 长文阅读的默认档(博客、文档) |
-| `font.body` | **14 / 20** | **组件里的默认档**;「配合图标时用 Medium(500) 字重」 |
-| `font.body.small` | **12 / 16** | 「**谨慎使用**,仅用于次级内容,如细字印刷」 |
+| 正文 | 16px | `text-base` |
+| 标题 | 24px | `text-2xl` |
+| 界面文字 / 树行 / 评论 | 14px | `text-sm` |
+| 辅助说明(下限) | 12px | `text-xs` |
 
-Confluence 的更新日志里还有一句关键的话：视觉改版「把最小的标题与正文字号
-**从 11px 提到 12px**」—— 也就是说 **11px 低于 Atlassian 自己的下限**。
-Confluence 编辑器的正文是 **16px**,新加的「小号正文」是 14px。
+参照的是 Atlassian Design System(Confluence 用的就是它)与 Ant Design 的公开规范。
+**12px 是下限**,再小在内网的老显示器上读不清。
 
-#### 参照二：Ant Design(中文界面,更贴近本项目)
+另外两条下限:
 
-- 基础字号**从 12 提到 14**,理由是「基于 50cm 阅读距离与最佳阅读角度」。
-- 推荐正文 14 / 行高 22;辅助文字 12 / 行高 20。
-- **中文字体行高要在 1.5–1.8 之间** —— 汉字密实且字高一致,比西文更需要留白。
-- 「字阶的选择尽量控制在 **3–5 种**之间,保持克制」。
+- **点击目标 ≥ 24px**(键盘与触屏可点)。
+- **对比度 ≥ 4.5:1**(WCAG AA)。
+  ⚠️ `text-slate-400` 在浅背景上只有 **2.56:1**,已在全部界面文字上换成 `slate-500`。
+  这一条是**量出来的**,不是看出来的 —— 我第一次测量得出的结论还是错的。
 
-#### 刻度(四档,与 Tailwind 具名档一一对应)
+### 7.4 编辑器
 
-| 层 | 值 | 写法 | 依据 |
-|---|---|---|---|
-| 文档正文 | **16px / 1.7** | `.kc-prose`(`styles.css`) | ADS `body.large` 16/24;Confluence 编辑器正文也是 16px。行高取 1.7 而非 1.5,是照顾中文 |
-| **内容**：组织树行、右栏目录项、评论正文、子页面列表 | **14px / 20px** | `text-sm` / `T_BODY` | ADS `font.body` —— **组件默认档** |
-| **组件标签**：tab、按钮、字段标签、面包屑、元信息 | **14px / 20px** + `font-medium` | `text-sm font-medium` / `T_LABEL` | ADS：组件里用 14px,配合图标时用 Medium |
-| **元信息**：计数、快捷键提示、时间戳、状态徽章 | **12px / 16px** | `text-xs` / `T_META` | ADS `body.small` —— 仅用于细字印刷 |
+Tiptap 3,内容以 **ProseMirror JSON** 存库(`node_contents.content_json`)。
 
-三档的数值与 ADS 的 `body.small` / `font.body` **完全一致** ——
-因为 Tailwind 的 `text-xs`(12/16)与 `text-sm`(14/20)恰好就是这套值。
+- **工具栏**:标题、列表、代码块(带语言高亮)、图片、表格(行列增删)、引用、链接气泡。
+- **图片**:每页最多 **10 个**(`MAX_IMAGES_PER_NODE`,服务端强制),工具栏显示剩余额度。
+- **乐观锁**:保存时带 `baseUpdatedAt`;服务端发现已被别人改过就回 409,前端提示重新加载。
+  ⚠️ 无法解析的 `baseUpdatedAt` 按校验错误处理,而不是"当成没传"——
+  后者会让乐观锁在最需要它的时候静默失效。
 
-字体族也显式写出来了(`styles.css` 的 `body`)：系统字体优先,中文字体按平台覆盖
-(PingFang SC / Microsoft YaHei / Noto Sans SC)。不写的话会出现"开发机上是雅黑、
-服务器上变宋体"这类只在某台机器上难看的问题。
+### 7.5 保存与数据安全
 
-#### ⚠️ v2.7 的两个错误(这一节存在的意义)
+⚠️ **这一节记录一个真实的 P0 事故。**
 
-| 错误 | 后果 | 纠正 |
-|---|---|---|
-| **最小字号定成 11px** | 比 Confluence 的下限还低 | 提到 **12px**。Atlassian 特意从 11 提到 12,理由是可读性 |
-| **把 tab / 目录 / 评论当成"次级信息"塞进 12px** | 用户连续两次说"目录很小、评论很小" —— 它们本该是**组件级文字** | 提到 **14px**。ADS 明确说 12px 是"谨慎使用的细字印刷" |
+编辑器曾经只在"点保存"和"定时器触发"时写库。实测:在文档里输入后 **250ms** 内切走页面,
+**零个写请求发出** —— 输入的内容直接没了,而界面上没有任何提示。
 
-判据不是"它重不重要",而是「**它是不是要被读 / 被点的界面文字**」。
-真正的 12px 只剩：计数、快捷键提示、状态徽章这类一眼扫过的东西。
+现在三条路都兜住:
 
-#### 唯一规则：不允许任何任意值字号
+1. **组件卸载时保存**(`useEffect` 的清理函数里真的发请求,不是"只清定时器")。
+2. **`beforeunload`** 时用 `navigator.sendBeacon` 发一次(它能在页面卸载后送达),
+   并给出离开确认提示。
+3. 常规的防抖保存。
 
-`lib/typography.test.ts` **扫描源码**,两条断言：
+> **教训不是"记得加保存",是"只在定时器里保存"这种设计本身就有一个静默的丢失窗口。**
 
-1. 没有任何字号小于 12px
-2. **不允许出现任何任意值字号**(9 / 10 / 11 / 13px 这类)
+### 7.6 其余界面能力
 
-第 2 条比 v2.7 更严：上一轮还留了一个 11px 的例外,而那一档已经被规范否掉了,
-所以现在**一个例外都没有** —— 全部走 Tailwind 具名档(唯一的 16px 在 `styles.css`)。
+| 能力 | 说明 |
+|---|---|
+| `Modal` | `role=dialog` + `aria-modal`;焦点移入与还原;Tab 循环不逃逸;Esc 关闭(挂 document 捕获阶段);锁 body 滚动 |
+| `Toast` | 常驻的 `aria-live=polite` 容器(每次新建的话读屏不会念);错误用 `role=alert`,成功 4 秒、失败 8 秒 |
+| `ErrorBoundary` | 渲染期抛错时显示可读页面,而不是整片白屏 |
+| `Skeleton` | 加载占位,`role=status` + `aria-hidden`(读屏念「正在加载」),避免布局跳变 |
+| `ErrorNote` | 失败时给**「重试」按钮**,不只是显示一句红字 |
+| 树键盘导航 | ↑↓ 走可见顺序;→ 展开/进子节点;← 折叠/回父节点;Home/End;Enter 打开 |
+| 打印 / PDF | `window.print()` + `@media print`;隐藏顶栏侧栏,只留正文。**零新依赖** |
+| 检索高亮 | 命中词用 `<mark>`;切分函数满足「拼回去 === 原文」的固定不变式 |
 
-> ⚠️ 扫描器**不区分注释** —— 所以写"原来 9px 太小了"这类说明时不能写出完整类名。
-> 这是故意的：注释掉一行照样被查到,规则没有绕过的余地。
-> (反过来做要先用正则认注释,而 `//` 出现在 URL 之类的字符串里就会误剥。)
+> **为什么导出 PDF 走浏览器而不是服务端:** 服务端生成要引入一整条渲染链(无头浏览器或 PDF 库),
+> 在**内网离线**环境里既加体积又加维护面,而用户要的只是「能打出来 / 能存成 PDF」。
+> 浏览器自带的打印对话框正好提供这两件事,且中文字体用系统字体(不会缺字)。
+> 这是**明确取舍**,写在这里以免以后有人顺手补上服务端 PDF。
 
-#### 同一个问题里的**非字号**缺陷(v2.8)
-
-改字号的过程中,真渲染验证又抓出四处**跟字号无关、但同样让人说"丑"**的问题：
-
-| # | 问题 | 根因 |
-|---|---|---|
-| 1 | 页头元信息被挤成 **3 行**,且「更新于 2026/9/27」与「02:35:15」被**拆成两截** | 元信息嵌在标题的 `flex-1` 容器里,右侧那排按钮(约 220px)把它挤到只剩一百多 px。**这不是字号问题,是谁和谁抢同一行的问题** —— 挪到标题行外面、占满页头宽度,并给每项加 `whitespace-nowrap` |
-| 2 | 页头 / 卡片 / 编辑器用了**三种横向内边距**(24 与 32px 混用) | 左边框对不齐。统一到 **32px** |
-| 3 | 侧栏底部常驻**三段灰色说明文字** | 典型的"信息架构没做、用说明书补"。拖拽说明改成**只在拖拽时出现**(正好出现在需要它的那一刻);"悬停能看到什么"交给按钮的 `title` |
-| 4 | 「组 / 部门」节点打开是**一块空白编辑器** | 而它下面其实挂着好几篇文档。Confluence 在空间首页列的是子页面 —— 补 `ChildPages`(数据直接取自已缓存的组织树,不新增接口) |
-| 5 | 树只有缩进、没有**层级引导线** | 第三级以下要靠数像素去猜"属于哪个组"。补上细竖线(Confluence / Notion 的做法),位置与上一级展开箭头对齐 |
-
-#### 一处差点误删
-
-清理测试残留节点前,我先查了创建时间与父子关系,发现 `视觉项目组`(含一个三级页面)
-**是用户自己建的** —— 他用来复现更早那个「第三级没缩进」的问题。
-只有 `赵敏的临时笔记` 才是测试产物。
-**清理前必须按时间 / 归属区分"用户建的"与"测试建的",不能按标题猜。**
-
-#### 点击目标尺寸(v2.9):字号之外的另一条下限
-
-用户最后一条反馈是「把这个展开符号搞大一点,不然鼠标点着太费劲了」。
-它和字号问题同源,但**不是同一件事**:那处控件是**点击目标**,不是文字。
-
-| | 改前 | 改后 |
-|---|---|---|
-| 字形 | Unicode 的 `▾` / `▸`,12px | **SVG 雪佛龙,16px** |
-| 点击区 | 20×20 | **24×24**(树行高 36px,放得下) |
-| 悬停反馈 | 只有字形变色 | 字形加深 **+ 24px 圆角底色** |
-
-三点理由,都不是"看着大一点"这么含糊:
-
-1. **24px 是公认的目标尺寸下限**(Apple HIG 与 WCAG 2.2 的 Target Size 都是 24px)。
-   低于它的控件对鼠标就是不友好 —— 用户说的"费劲"是准确的。
-2. **Unicode 三角不该用来做控件。** `▾`/`▸` 在大多数字体里**垂直居中偏移**
-   (下缘比上缘空),所以它看着比字号更小,而且换个字体就换一个样子。
-   换成 SVG 之后尺寸与居中都由自己控制,放大不糊,还能加旋转过渡(150ms)。
-3. **只让字形变色,用户仍不知道该往哪儿瞄准。** 悬停给一层底色,
-   把"这里可点、可点范围有这么大"直接画出来。
-
-> ⚠️ 靠**加宽点击区**解决问题时,必须重新核对**同一行里其它元素的落点**。
-> 这个箭头是行的第一个元素,它宽 4px 就意味着整列(徽章、标题、
-> 以及层级引导线)全部右移 4px。这里的做法是把行的 `paddingLeft` 常数
-> 从 `6` 减到 `4`,于是 `4 + 24/2 = 16` 与原先 `6 + 20/2 = 16` **完全相等** ——
-> 引导线公式一个字没改,整列一个像素没动。改动越小,越容易证明没改坏。
-
-#### 验证方式
-
-除源码扫描外,还用无头 Chrome **在运行时**核对：遍历每个叶子文本节点,
-断言计算字号 ≥ 12px。**5 个页面 + 3 个弹窗全部为 0**,
-并读回关键位置的计算字号(树行 14 / tab 14 / 目录项 14 / 评论正文 14 / 正文 16 / 标题 24)
-与"有没有被截断"。
-
-> 窗口尺寸取**用户的实际窗口**(1084×872)。用 1440 宽渲染会让字"相对更小",
-> 与他的观感对不上 —— 他说"太小"是在**他的窗口里**看到的。
-
-### 7.6 v2.12–v2.14 补齐的前端能力
-
-这一节记录几件**之前没有、现在有了**的东西。它们单个都不大,但都属于"缺了会让人觉得系统难用"的那类,
-而且**都是用户第 11、12 条意见直接要求的**。
-
-#### 三个基础组件(此前每个页面各写一遍)
-
-| 组件 | 解决什么 | 关键实现 |
-|---|---|---|
-| `Modal` | 键盘与读屏可用性 | `role="dialog"` + `aria-modal`;打开时**焦点移入**、关闭时**还原**;Tab 循环不逃逸;Esc 关闭(挂在 document 的捕获阶段);打开期间锁 body 滚动 |
-| `Toast` | 操作反馈 | 常驻的 `aria-live="polite"` 容器(不是每次新建 —— 每次新建读屏不会念);错误用 `role="alert"`;成功 4 秒、失败 8 秒(失败要看清) |
-| `ErrorBoundary` | 白屏 | 渲染期抛错时显示可读页面而不是整片空白 |
-
-> `Modal` 里 Esc 挂在 **document 的捕获阶段**而不是弹窗节点上 ——
-> 焦点如果在弹窗内的输入框里,挂在节点上的 handler 要等事件冒泡上来才触发,
-> 而某些控件会 `stopPropagation`。捕获阶段收不到这种影响。
-
-#### 个人视图(只存在浏览器里)
-
-「最近浏览」「我的收藏」在工作台,「最近搜过」在检索页。
-
-> **刻意不落库。** 这是"我的顺手",不是"公司的事实" ——
-> 落库就要有接口、有权限判定、有清理策略,而它带来的产品价值并不值得这些。
-> 纯逻辑在 `apps/web/src/lib/personal-lists.ts`(16 条单测),`personal-store.ts` 负责读写 localStorage,
-> **读写两侧都包了 `try/catch`**:无痕模式/策略禁止时 localStorage 会直接抛,
-> 不能让它把整个工作台带崩。
-
-两处容易错的细节:
-
-1. **最近浏览与收藏要按组织树过滤后再显示。** 节点可能已被删除,
-   也可能被设成受限而当前用户不在名单里 —— 直接渲染本地列表就会把
-   一个**他已经无权看见的标题**摆在他面前。
-2. **检索结果里的命中词要高亮**,且 `splitByQuery` 必须满足"切出来的片段拼回去 === 原文"
-   (单测的固定不变式)。高亮是最容易把正文改坏的一种渲染。
-
-#### 加载与失败(不再只有"转圈"和"空白")
-
-- `Skeleton`:列表/详情加载时给形状占位,`role="status"` + `aria-hidden`(读屏念"正在加载"),
-  避免布局跳变。
-- `ErrorNote`:失败时给**「重试」按钮**,不只是显示一句红字 ——
-  内网抖动很常见,让用户刷新整页是浪费。
-
-#### 打印 / 导出 PDF(零新依赖)
-
-节点页有「打印 / PDF」按钮,走**浏览器的 `window.print()`** + `styles.css` 里的 `@media print` 规则:
-打印时隐藏 `header` / `aside` 与所有 `[data-print='hide']` 元素,只留正文。
-
-> **为什么不做服务端生成 PDF:** 那要引入一整条渲染链(无头浏览器或 PDF 库),
-> 在**内网离线**环境里既加体积又加维护面,而用户要的只是"能打出来 / 能存成 PDF"。
-> 浏览器自带的打印对话框正好提供这两件事,且中文字体用的是系统字体(不会缺字)。
-> 这条是明确取舍,写在这里以免以后有人"顺手补上服务端 PDF"。
-
-#### 检索页与审计页
-
-- 检索:最近搜过的词以 chip 形式给出,一键复用;可清除。命中词高亮。
-- 审计:可按 `action` 筛选(下拉选项来自 `AUDIT_ACTIONS`,与服务端同一份枚举);
-  「导出 CSV」是一个**普通链接**(不是 fetch)—— 让浏览器自己处理下载与文件名,
-  文件名用 RFC 5987 编码(`审计日志-YYYY-MM-DD.csv`),Excel 打开不乱码(BOM)。
-  导出与列表**共用同一份可见范围**,见 §6.2 的 `/audit-logs/export`。
-
-#### 无障碍与对比度的两处修正
+### 7.7 无障碍
 
 - 全局 `:focus-visible` 焦点圈;`.kc-prose { overflow-wrap: anywhere }`(长链接与长英文不撑破布局)。
-- **`text-slate-400` 全部换成 `slate-500`**(74 处):前者在浅背景上只有 **2.56:1**,
-  低于 WCAG AA 的 4.5:1。这一条是**量出来的**,不是看出来的 ——
-  过程见 §9.9 的第 4 条(那里也记着我第一次测量得出的结论是错的)。
+- 树是 `role=treeitem` + `aria-expanded` / `aria-level` + roving tabindex。
+- 弹窗、toast、骨架屏都有对应的 ARIA 角色(见 §7.6)。
 
 ---
-
----
-
 ## 8. 关键流程
 
-### 8.1 页面移动(最容易做错的一个)
+### 8.1 移动节点(最容易做错的一个)
 
+移动 = 改父级 + 重排位置,**同一个接口**(`POST /nodes/:id/move`)。
+
+```sql
+-- 一条语句覆盖整棵子树:从「旧前缀长度 + 1」处截掉旧前缀,再接上新前缀
+UPDATE nodes
+   SET materialized_path = <新路径> || substr(materialized_path, <旧前缀长度 + 1>::int),
+       depth = depth + <新深度 - 旧深度>::int
+ WHERE id = <节点>
+    OR materialized_path LIKE <旧前缀> || '%'
 ```
-POST /pages/:id/move  { newParentId, newPosition }
-  1. 校验目标父节点不是自身或自身的子孙(防止环)
-  2. 校验目标父节点在同一空间内
-  3. 校验操作者对目标父节点有 editor 权限
-  4. 更新本节点 parent_id / position
-  5. ⚠️ 递归重建整棵子树的 materialized_path 与 depth
-  6. 删除以旧路径为前缀的权限缓存
-  7. 写审计日志
-全过程在一个数据库事务里完成。
-```
 
-第 5 步是绝对重点。只改自己的路径,所有子孙的路径都会失效,权限判定会跟着出错,而且**不会立刻报错** —— 这是最危险的一类 bug。
+自身(整串等于旧前缀)截出来是空串,恰好得到新路径;子孙则保留下半段相对路径。
 
-**实现要点(v1.6 补)**
+**三条必须记住的:**
 
-- 递归重建用**一条 UPDATE** 完成,不逐行改:
-  `SET materialized_path = <新前缀> || substr(materialized_path, <旧前缀长度> + 1)`
-  自身(整串 = 旧前缀)截出来是空串,恰好得到新路径;子孙则保留下半段相对路径。
-- 防环用**路径前缀**判定(`目标路径.startsWith(自身路径 + '/')`),不递归查子孙 ——
-  更便宜,而且不可能漏。**前缀末尾的斜杠不能省**,否则 `/p-1` 会被误判为 `/p-10` 的祖先。
-- ⚠️ **必须写 `substr(x, $n::int)`,不能写 `substring(x from $n)`**:
-  后者在参数类型为 `unknown` 时(驱动层就是这么发的)会被 PostgreSQL 解析成
-  **POSIX 正则**那一支并**静默返回 NULL** —— 开工实测踩过。
-  若 `materialized_path` 可空,这会把整棵子树的路径悄悄清空而不报任何错。
-- 「数一数再写」的检查放在 **Serializable** 事务里(同 §6.1 的会话机制与 §5.5 的缓存策略):
-  并发下两个移动可能互相踩。
-- 删除是**物理删除整棵子树**,按 `depth` **从叶子往根**删:`nodes.parent_id` 是 `onDelete: Restrict`,
- 而 `DELETE` 不支持 `ORDER BY` —— 外键检查是即时触发的,处理到父行时子行还在,直接撞约束。
- - 这一段的逻辑只有一份(`NodeService.deleteSubtree`):曾经"手工彻底删除"与"回收站到期清理"
- 要共用它,现在只剩删除这一条路径。
+1. **防环**:目标不能是自己或自己的子孙。判据用**物化路径前缀** —— 比递归查子孙便宜,而且不可能漏。
+2. **目标父节点也要 `canEdit`**。否则可以把节点「搬进」一个自己无权动的分支。
+3. ⚠️ **必须用 `substr(x, $n::int)`,不能写 `substring(x from $n)`。**
+   PostgreSQL 里 `substring(string from pattern)` 是 POSIX 正则那一种,
+   当参数类型是 `unknown`(Prisma 的 `$executeRaw` 就是这么发的)时会被解析到
+   **正则分支,结果静默返回 NULL** —— 若路径列可空,这会把整棵子树的路径悄悄清掉,而不报任何错。
+
+位置用 `makeRoomAt` 实现:把该位置及之后的兄弟整体后移一位。
+⚠️ 它必须 `excludeId` —— 被移动的节点此刻**还挂在原位置**,不排除的话它会被自己挤走一位,拖拽结果偏一格。
 
 ### 8.2 删除(物理删除,不可恢复)
 
-> **v2.12 起没有回收站。** 用户的原话是「不该有回收站这个概念,删除就应该直接删除」。
-> 在此之前这里是"软删除 + 回收站 + 30 天保留策略",现在整条链路都去掉了。
+**没有回收站,没有保留策略。** 删除就是立即、不可恢复的物理删除,**整棵子树一起删**。
 
-```
-DELETE /nodes/:id
-  1. 按 materialized_path 前缀圈出整棵子树
-  2. 按 depth **从大到小**逐层删(叶子先走):parent_id 是 onDelete: Restrict,
-     而 DELETE 不支持 ORDER BY —— 一条语句删整棵树会撞外键
-  3. 审计日志记录子树规模与标题
-```
+顺序是刻意的:**按深度从叶子往根删**,不是靠数据库的级联。
+理由是级联删除的报错信息很难定位(只说"外键冲突"),而逐层删能明确报出是哪一层出的问题。
 
-**三条必须一起理解的东西:**
+**删除的门槛是 `canManage`(祖先链所有者),不是 `canEdit`。**
+被授权者能改、能建,但不能**销毁** —— 删除不可逆之后,「能改」与「能销毁」必须分开。
 
-1. **门槛是 `canManage` 而不是 `canEdit`。** 删除不可逆之后,"能改"与"能销毁"必须分开 ——
-   被授权者可以改,但删不掉。这是这次改动里唯一的**权限收紧**,值得单独记住。
-2. **`nodes.parent_id` 的 `onDelete: Restrict` 现在只服务于"逼删除按深度走"。**
-   以前它的理由是"强制走软删除流程",那个理由随回收站一起消失了。
-3. **迁移必须先删数据再删列。** `20260927120000_drop_trash` 先把所有 `deleted_at is not null`
-   的子树物理删掉,然后才 DROP 掉那两列。**顺序反了会静默复活一批已删除的节点**:
-   它们会带着旧的 `materialized_path` 重新出现在树、检索与权限判定里,而父节点可能早就不在了。
-   这是本次改动里唯一一处"做错了不会报错、只会慢慢烂"的地方。
+> ⚠️ **上线前必须让使用者知道这一条:误删无法挽回。** 只能从备份里找。
+> 要确认是谁删的,进 `/audit` 搜 `node.delete`。
 
 ### 8.3 检索
 
 ```sql
-GET /search?q=知识
-  1. SELECT n.id, n.title, n.materialized_path, COALESCE(c.text_for_search, ''), n.updated_at
-       FROM nodes n
-       LEFT JOIN node_contents c ON c.node_id = n.id          -- ① 注意是 LEFT
-      WHERE n.title ILIKE %q% OR COALESCE(c.text_for_search, '') ILIKE %q%
-      ORDER BY <命中位置权重> DESC, similarity(...) DESC, n.updated_at DESC
-      LIMIT 20;
-  2. 对这最多 20 条**逐条**做 canRead 判定,读不到的丢掉。
+SELECT n.id, n.title, n.materialized_path, COALESCE(c.text_for_search, ''), n.updated_at
+  FROM nodes n
+  LEFT JOIN node_contents c ON c.node_id = n.id      -- ← 必须是 LEFT
+ WHERE n.title ILIKE %q% OR COALESCE(c.text_for_search, '') ILIKE %q%
+ ORDER BY <命中位置权重> DESC, similarity(...) DESC, n.updated_at DESC
+ LIMIT 20;
+-- 然后对这最多 20 条逐条做 canRead 判定,读不到的丢掉
 ```
 
-**① `LEFT JOIN` 不是可选的**
-
-必须用 `LEFT JOIN node_contents` 而不是 `JOIN`:后者会让**没有正文的节点(纯「组 / 部门」)**
+**① `LEFT JOIN` 不是可选的。** 用 `JOIN` 会让**没有正文的节点(纯「组 / 部门」)**
 永远搜不到,哪怕标题完全匹配 —— 表现是「我明明建了个叫『市场部』的组,搜『市场部』却没有它」。
+`COALESCE` 同样不能省:LEFT JOIN 未命中时该列是 NULL,而 `NULL ILIKE …` 求值为 NULL(不是 false),整行会被 WHERE 丢掉。
 
-`COALESCE(c.text_for_search, '')` 里那个 `COALESCE` 同样不能省:LEFT JOIN 未命中时该列是 NULL,
-而 `NULL ILIKE …` 求值为 NULL(不是 false),整行会被 WHERE 丢掉。
+**② 权限过滤写在代码里,不写进 SQL。** 命中已被 `LIMIT 20` 收窄,这里最多 20 次判定;
+而在 SQL 里再写一遍「祖先链 + 读者名单」的判定,等于**把安全逻辑实现第二遍**,
+那份迟早与 `permission.ts` 分叉 —— 而分叉的表现是静默越权。
 
-> 这一条**一直就是对的**(v1.x 起就是 `LEFT JOIN`),写在这里是提醒后来改的人:
-> 顺手去掉 `LEFT`、或把 `COALESCE` 拆开"看起来更干净",但会**静默丢掉一整类结果**。
-> 真机实测:搜「市场部」命中 2 条(那个组本身 + 它下面标题含该词的页)。
+> ⚠️ **检索是最容易漏的一条读取路径。** 树、详情、导出、评论都挡住了,却忘了检索的话,
+> 受限文档的**标题与正文片段会直接出现在全公司的搜索结果里**,而保密功能看起来完全正常。
 
-**② 权限过滤:检索是最容易漏的一条读取路径(v2.13 起)**
+排序与中文方案的原理见 §2.3。
 
-> ⚠️ **下面这段推翻了 v2.0 的一个决策,必须连着读。**
->
-> v2.0 的原话是「**不再需要权限过滤** —— 读是全员开放的」,并据此删掉了
-> `PermissionService.visibility()`。那个结论**在当时是对的**:树上与检索里都是全集,
-> 不存在"树上看不到但搜得到"。
->
-> v2.13 引入**保密能力**之后,这个前提没了 —— 受限节点在树上被摘掉,
-> 而检索若不过滤,受限文档的**标题与正文片段会直接出现在全公司的搜索结果里**。
-> 那是最隐蔽的一种泄露:**保密功能看起来完全正常**,因为树、详情、导出、评论都挡住了,
-> 只有检索这条路径在漏。
-
-过滤**故意写在代码里,不写进 SQL**(§5.6「必须在每一条读取路径上收口」):
-命中已经被 `LIMIT 20` 收窄,这里最多 20 次判定;而在 SQL 里再写一遍
-「祖先链 + 读者名单」的判定,等于**把安全逻辑实现第二遍**,
-那份迟早与 `packages/shared/src/permission.ts` 分叉 —— 而分叉的表现是静默越权。
-
-> 同一类教训在 v1.x 也有过一次:「可见范围必须与页面树共用同一份计算」。
-> 要求没变,**变了的是"共享方式"** —— 从"在 SQL 里复刻一份"改成"调用同一个纯函数"。
-
-**排序为什么不只用 `similarity()`(v1.7 补)**
-
-trgm 的 `similarity()` 需要至少 3 个字符才有意义 —— 中文搜两个字(「权限」「部署」)
-普遍得到 0,排序会退化成不确定顺序。所以主排序键是**命中位置**(标题命中权重 2、
-正文命中权重 1),`similarity()` 只做同档内的次级排序,最后以 `updated_at` 兜底。
-这样无论查询是两个字还是十个字,结果顺序都稳定且符合直觉。
-
-另外:`LIKE` 的通配符必须转义。不转的话搜 `100%` 会命中全部内容(实测已覆盖)。
-
-⚠️ 与 §2.3 呼应:PG 自带分词器**不支持中文**,`tsvector` 命中率是 0
-(`verify-db` 每次都会实测并打印 `tsvector 命中: false`)。中文靠 `ILIKE` 子串 + `pg_trgm`。
-
-### 8.4 页面级评论
-
-```
-POST /nodes/:id/comments  { body, parentId? }
-  1. **不校验权限** —— 全员都能评论(§5.4)
-  2. parentId 若非空,校验其属于同一节点,且不产生二层以上嵌套
-  3. 写入
-  4. 角标计数(节点树)由服务端一并算好
-```
-
-阶段一**不发任何通知**。用户怎么知道有新评论?靠节点树上的角标(`GET /comment-counts?ids=`)。
-这是刻意的范围控制 —— 通知是阶段二的事。
-
-#### ⚠️ 评论就是评论,不是"问题单"(v2.5 修正)
-
-v2.0 那一版给评论加了一套 `open` / `resolved` 状态,界面上表现为「标记已解决」按钮、
-「已解决」徽章,以及节点树上"未解决评论"的琥珀色角标。
-
-用户明确纠正:
-
-> 「评论只是评论,不是问题,你在页面中直接把评论列为问题,这个不对,
-> **你不要擅自赋予评论额外的含义**。」
-
-那套语义已**整体移除**,包括:
-
-| 移除的东西 | 换成了什么 |
-|---|---|
-| `comments.status` 列(`open` / `resolved`) | **删列**(迁移 `drop_comment_status`) |
-| 「标记已解决」/「重新打开」按钮 | 没有了 |
-| 「已解决」徽章 | 没有了 |
-| 树上的**未解决**评论角标(琥珀色) | **评论总数**角标(中性灰) |
-| `CommentView.status` / `canResolve` | 换成 `canEdit`(只有作者本人) |
-| `CommentListResponse.openCount` | 换成 `total` |
-| `PATCH /comments/:id { status }` | 只剩 `{ body }` |
-
-> **角标颜色也是这次一起改的。** 琥珀色等于暗示"有待处理的事" ——
-> 而它数的只是"有几条评论"。颜色在中性灰上,含义才与事实一致。
->
-> **不要再以"将来可能会用"为理由把状态字段加回来。** 一个没人要求的状态机,
-> 会让每条评论都背上"它解决了没有"这个问题,而讨论本来不需要被结案。
-
-**实现要点(v1.7 补;v2.0 / v2.5 修订)**
-
-- **只允许一层回复**:`parentId` 指向的那条必须自己也是顶层评论,否则 400。
-  无限嵌套在 UI 上极难表达,而知识库的讨论几乎不需要它。
-- 跨节点的 `parentId` 一律拒绝。
-  (v1.x 给的理由是"否则可以挂到你无权访问的页面上";新模型里读是全员开放的,这个理由不再成立,
-  但仍要拒绝 —— 一串讨论必须落在同一个节点上,否则 UI 无处呈现。)
-- **改与删是两件事,门槛不同**(v2.5 分开):
-  - **改正文:只有作者本人** —— 该节点的所有者也不行,改别人的话是篡改他人言论
-  - **删除:作者本人,或该节点的任一祖先所有者** —— 后者属于版务清理
-
-  v2.0 时两个按钮共用 `canDelete` 一个标志,结果是**所有者能看到「编辑」按钮、点了却 403**。
-  现在接口返回 `canEdit` 与 `canDelete` 两个字段,按钮与服务端判定才一致。
-
----
-
-### 8.5 组织架构导入(Excel · v2.1 定稿)
-
-管理员维护组织架构的**主入口**。日常只加人不减人,所以语义定为**增量**。
-
-#### 三步流程
+### 8.4 组织架构导入(Excel)
 
 ```
 GET  /admin/org/import-template   → 下载 .xlsx(带当前全部人员与节点)
        在 Excel 里改
-POST /admin/org/import?dryRun=1   → 上传,只返回差异预览,**不写库**
+POST /admin/org/import?dryRun=1   → 上传,只返回差异预览,不写库
 POST /admin/org/import            → 确认写入(一次事务)
 ```
 
-⚠️ **第二步与第三步是同一个接口的两个模式,不是两个接口。** 服务端只有一份解析与差异计算逻辑,
-`dryRun` 只是"算完不提交"。这样预览里看到的与真正写进去的必然一致 —— 若拆成两套代码,
-两边迟早算出不同结果,而管理员是**照着预览做决定**的。
+**第二步与第三步是同一个接口的两个模式**,不是两个接口。服务端只有一份解析与差异计算逻辑,
+`dryRun` 只是「算完不提交」。这样预览里看到的与真正写进去的必然一致 ——
+若拆成两套代码,两边迟早算出不同结果,而管理员是**照着预览做决定**的。
 
-#### 增量语义的准确含义
+增量语义:
 
 | 表格里的情况 | 处理 |
 |---|---|
-| 工号在系统里**不存在** | **新建**(`status=active`,初始密码 `123456`,`must_change_password=true`) |
-| 工号**已存在** | 不新建;按需要补上归属 |
-| 工号已存在但**姓名不同** | **以表格为准更新姓名**(改名 / 上次填错都是常事) |
+| 工号不存在 | 新建(`status=active`,初始密码 `123456`,`must_change_password=true`) |
+| 工号已存在 | 不新建;按需要补上归属 |
+| 工号已存在但姓名不同 | 以表格为准**更新姓名** |
 | 归属已存在 | 跳过(**幂等**) |
-| 归属不存在 | **新增一条归属** |
+| 归属不存在 | 新增一条归属 |
 | 表格里**没出现**的人 | **完全不动** —— 不删、不停用、不改他的归属 |
 
-> **因此:同一份表格上传第二遍、第三遍都不会重复建号,可以放心反复上传。**
-> 这是"增量"最有价值的一条保证。
+> 因此:同一份表格上传第二遍、第三遍都不会重复建号,可以放心反复上传。
 
-#### ⚠️ 已知限制(必须在界面上有对应操作)
+⚠️ **已知限制:「把人从某个组移出去」做不到。** 增量语义下,「表格里没写」与「要删掉这条归属」
+**无法区分**。所以界面上必须有「节点成员」入口作为配套 —— 少了它,调岗只有一半路径走得通。
 
-**"把人从某个组移出去"做不到。** 增量语义下,"表格里没写"与"要删掉这条归属"**无法区分** ——
-既然不删人,也就不删归属。所以**调岗**需要两步:
+模板必须有**两列 ID**(`部门ID(勿改)` + `组ID(勿改)`):一列只能标识「最深那个节点」,
+遇到「组是新建的 + 部门刚改名」时仍会重复建部门。
 
-1. 导入新归属(表格里加上「张三 / 前端组」),或在节点的成员弹窗里直接「加入」
-2. 在界面上把旧的「张三 / 后端组」移出
+两条实现要点:
 
-**第二步的入口已在 v2.4 补齐**:节点成员弹窗(`☰`,见 §7.2)列出该节点下的所有人,
-可加入 / 移出。它刻意与权限弹窗分开 —— 归属是组织事实,权限是判定结果。
-
-移出归属**不会**改变所有权(被移出的组长仍然是组长),但**会缩小他的组织范围**。
-这两个后果写在确认框里,并有单测钉住。
-
-> 为什么"两步"是设计而不是缺陷:一步式(导入即全量覆盖)意味着**一次误操作就能把全公司的
-> 组织关系抹掉**,而导入又是管理员会反复做的事。增量 + 显式移出把不可逆的那一步
-> 留给了一个必须逐个确认的动作。
-
-同理,**离职走界面,不走表格**:把该用户的 `status` 改为 `departed`(见 §4.2),
-而不是从表格里删掉他那一行。用户明确要求:**"人员删除以后,把这个人员标记为离职,
-在他自己创建的页面上也标记为离职"** —— 前端在作者名旁显示「已离职」,历史记录不抹掉。
-
-#### 模板列设计
-
-| 工号 | 姓名 | 部门 | 组 / 项目 | 负责人 | 部门ID(勿改) | 组ID(勿改) |
-|---|---|---|---|---|---|---|
-| KC2026001 | 王建国 | 技术部 | | 是 | 7f3a… | |
-| KC2026002 | 李峰 | 技术部 | 后端组 | 是 | 7f3a… | 9c21… |
-| KC2026003 | 陈默 | 技术部 | 后端组 | | 7f3a… | 9c21… |
-| KC2026003 | 陈默 | 技术部 | CRM 项目 | | 7f3a… | 4b88… |
-| KC2026010 | 赵敏 | 设计部 | | 是 | 1d05… | |
-
-**一行 = 一个人在一个节点上的归属。** 陈默出现两行不是重复,是"他同属后端组与 CRM 项目"。
-
-- **`工号` 是人的唯一标识**,也是判断"这一行说的是谁"的依据 —— 不是姓名(会重名),也不是邮箱
-- `工号` / `姓名` / `部门` 必填;`组 / 项目` 留空 = 只属于部门
-- `负责人` 填「是」:指**这一行最深的那个节点**的负责人(填了组/项目即组长,没填即部长)
-- **`部门ID` / `组ID` 两列只读、勿改**,是**匹配节点的第一依据**(理由见下)
-- **模板里没有密码列** —— 新账号统一用内置初始密码,首次登录强制改密(见 §6.1.2)
-
-#### ⚠️ 为什么必须有 ID 列:部门会改名
-
-用户明确说明"**部门不会消失,只会更名**"。若只用**名称**匹配节点,会撞上一个很难发现的坑:
-
-> 管理员把「技术部」改名为「技术中心」,然后照常下载模板、上传 —— 服务端按名字找不到「技术中心」,
-> 于是**自动创建一个新的「技术中心」**,而旧的「技术部」(连同其下全部文档)还在。
-> 结果:**同一个部门在系统里出现两份**,新那份还是空的。
-
-所以匹配规则是**两段式**:
-
-1. **先看 ID 列**:非空且系统里存在 → 就是它。此时名称变化视为**更名**,直接更新标题
-2. **ID 为空**(新行)→ 再按**名称**匹配(部门在 depth 0、组在其部门下);仍匹配不上才**自动创建**
-
-**为什么是两列而不是一列**(v2.3 实现时的修正):一列只能标识"这一行最深的那个节点"。
-当**组是新建的、而部门刚改过名**时,那一列是空的,名称又对不上 → 还是会重复建部门。
-拆成两列之后,部门这一层始终有 ID 兜底。
-
-#### 自动创建与负责人规则
-
-- 表格里出现、系统里没有的部门 / 组 → **自动创建**(免掉"先建组织再导人"两步)
-- **新建的部门必须恰好有一个「负责人 = 是」**,否则**拒绝导入并报错**。
-  这条同时防住一类事故:**部长离职后若把他的行删掉,技术部就没人能管了** —— 导入会直接拦下来
-- ⚠️ **现有部门没写负责人 → 保持原所有者不变**,不报错。
-  这条是实现时补的,而且是**必须**的:部长常常并不是本部门的归属成员,
-  模板里就没有他那一行 —— 若把"没写"当成"要清空",会出现
-  「下载模板 → 原样上传」就报一堆错的情况。增量语义的意思是"没写就不动"。
-- ⚠️ **不做任何"兜底继承"**。曾想给"没写负责人的组"继承部门负责人,但那会破坏一条重要的性质:
-  **下载模板后原样上传应当是零差异**。兜底一旦存在,每次导入都会把没写负责人的组建模成"改成部长",
-  而管理员根本没表达过这个意思。(这条性质在 §9.3 有专门的验收用例。)
-- 两个负责人(同一节点)> 任何解释都不对(谁说了算没定)→ 直接拦下来
-
-#### 实现要点
-
-- 解析用 **`exceljs`**。不选 `xlsx`(SheetJS):社区版的已知安全问题较多,而这是**上传文件解析**场景,
-  正好是它的攻击面。
-- 导入要处理**顺序依赖**:某行的负责人可能是同一表格后面几行的人。
-  实现上是**先建人、再建节点、最后建归属**(节点分 depth 0 / depth 1 两批插,
-  因为 `parent_id` 是自引用外键而 PostgreSQL 逐行即时检查)。
-- 差异预览分六类并给计数与明细:**新增人员 / 人员改名 / 新增归属 / 新建节点 / 节点改名 / 换所有者**,
-  外加「跳过的行」及其原因。
-- 整个写入放在**一个事务**里,并在事务外先把 bcrypt 哈希算好(全员共用初始密码,只算一次)
-  —— 放进事务里会让几百毫秒的 CPU 计算占着一条数据库连接。**任何校验失败 → 整批不写**,
-  不允许"导了一半"。
-- **解析与写库共用同一份纯逻辑**(`org/import.core.ts`):预览与确认写入走同一份代码,
+- **权限检查必须在文件校验之前。** 反过来的话,普通成员不带文件请求会先撞上「请选择文件」的 400 ——
+  等于确认了「这个接口存在」。权限不足就该一律 403。
+- **解析与写库共用同一份纯逻辑**(`org/import.core.ts`)。预览与确认走同一份代码,
   否则两边迟早算出不同结果,而管理员是照着预览做决定的。
-  这个文件是"错了会静默越权"的高危逻辑,单测覆盖了幂等性、改名识别、组织边界等 20 余条
-  (§9.3 有实测口径)。
-- ⚠️ **权限检查必须在文件校验之前**。反过来的话,普通成员不带文件请求会先撞上
-  "请选择文件"的 400 —— 等于确认了"这个接口存在"。权限不足就该一律 403。
-  (这条是实跑验收时发现顺序错了才补的。)
-- 审计:导入记一条 `org.import`,detail 带差异摘要(新增 N / 变更 M)。
-  **一次导入写一条**,不逐行写 —— 几百行会把这个表刷爆。
 
-### 8.6 批量移动(v2.14)
+### 8.5 批量移动
 
-`POST /nodes/bulk/move`,body 为 `{ nodeIds: string[], newParentId: string }`,
-一次最多 `BULK_MOVE_MAX = 50` 个(前端与服务端共用同一个常量,避免两处各写一个数字)。
+`POST /nodes/bulk/move`,body 为 `{ nodeIds, newParentId }`,一次最多 **50** 个。
 
-**只做移动,不做批量删除。** 移动可逆(再移回去就行),而删除 v2.12 起**不可恢复** ——
+**只做移动,不做批量删除。** 移动可逆(再移回去就行),而删除不可恢复 ——
 两者的风险差一个量级,不该共用一个入口。真要清理一整块旧内容,删那个组本身就够了。
 
-**三条为了"结果可预测"而加的限制**,每条都对应一种会静默出错的情形:
+三条为了「结果可预测」而加的限制:
 
 | 限制 | 漏了会怎样 |
 |---|---|
 | 不能移到**它自己或它的子孙**下 | 物化路径变成自引用,之后前缀查询既找不到祖先、又把自己算成自己的后代 —— 而**权限判定也走物化路径**,会被一起带偏 |
 | 批量里**不允许互为祖先** | 选了 A 又选它里面的 B 时,结果取决于执行顺序:先移 A 把 B 一起带走,再移 B 又把它拽出来。**直接拒绝比猜用户想要什么清楚** |
-| 校验**全部通过才写**,且一个事务里全做或全不做 | 不做「部分成功 + 失败清单」—— 那会留下一个用户没预期过的中间状态,而他要自己去核对哪几个动了 |
+| 校验**全部通过才写**,一个事务里全做或全不做 | 不做「部分成功 + 失败清单」—— 那会留下一个用户没预期过的中间状态,而他要自己去核对哪几个动了 |
 
-**位置一律追加到目标末尾。** 让每个节点都能指定位置的话,用户要在脑子里模拟一次完整的排序,
-而那是拖拽该做的事。
+位置一律**追加到目标末尾**。让每个节点都能指定位置的话,用户要在脑子里模拟一次完整的排序,而那是拖拽该做的事。
 
-**权限:逐节点 `requireEdit`,目标也要 `requireEdit`。** 不做任何"选了一批就一起放行"的捷径;
-审批式的批量放行是越权的常见来源。
+**权限:逐节点 `requireEdit`,目标也要 `requireEdit`。** 不做任何「选了一批就一起放行」的捷径。
 
-**实现上有一处是刻意的:单节点移动的写入抽成了 `applyMoveTo()`,两个入口共用同一份路径重写。**
-抄一份出来的代价是某天有人只修了其中一份,而物化路径写错的表现是「某棵子树的祖先链错了」——
-**不报任何错**。这与 §9.4「凡是写数据的逻辑,只允许存在一份」是同一条。
+> ⚠️ 实现上有一处是刻意的:**单节点移动的写入抽成了 `applyMoveTo()`,两个入口共用同一份路径重写。**
+> 抄一份出来的代价是某天有人只修了其中一份,而物化路径写错的表现是「某棵子树的祖先链错了」——**不报任何错**。
 
-> ⚠️ **路由写成 `nodes/bulk/move`(而不是 `nodes/bulk-move`),且必须注册在 `nodes/:nodeId/...` 之前。**
-> Express 按注册顺序匹配:`bulk` 会被当成一个 `nodeId`,然后被 `ParseUUIDPipe` 以 400 拒掉 ——
-> 表现是这条接口"不管怎么调都说参数不对"。
+前端入口在节点页(只在组 / 部门上出现),是个**弹窗**而不是树上多选:
+树上多选要改 `OrgTreePanel`(承载着整套键盘导航与 ARIA),为一个低频操作去动它风险与收益不成比例。
+两处把服务端规则**提前变成界面语言**:
 
-**前端(节点页的「批量移动」按钮,只在组 / 部门上出现)。**
-
-刻意做成**弹窗**,而不是在组织树上做多选:树上多选要改 `OrgTreePanel`(承载着整套键盘导航与 ARIA),
-为一个低频操作去动它风险与收益不成比例;而"把一个组里的几篇挪到另一个组"在弹窗里反而更清楚 ——
-勾选是列表式的,目标是有路径的下拉,没有"拖到哪儿去了"的歧义。
-
-两处把**服务端规则提前变成界面语言**(纯逻辑在 `apps/web/src/lib/bulk-move.ts`,有 13 条单测):
-
-1. **选了 A 又选它里面的 B 时,弹窗明说**「『接口规范』不会单独移动 —— 它已经在『后端组』里面了」,
-   而不是等提交后被服务端打回。被去掉的每一条都带原因显示出来 ——
+1. 选了 A 又选它里面的 B 时,弹窗**明说**「『X』不会单独移动 —— 它已经在『Y』里面了」,
+   而不是等提交后被服务端打回。被去掉的每一条都带原因显示 ——
    **静默缩小用户的选择是最糟的处理方式**(他会以为系统自作主张)。
-2. **目标下拉里不出现**选中项自己与它的子孙 —— 那些目标必然成环、必然被拒。
+2. 目标下拉里**不出现**选中项自己与它的子孙 —— 那些目标必然成环、必然被拒。
    让用户能选中一个注定失败的目标,等于把错误推到最后一步才告诉他。
 
-> ⚠️ 写这段时单测抓到一个**真 bug**:`tidySelection` 第一版只拿"已保留的那几个"去比,
-> 于是先勾里面的、再勾外面的时,外面的进来不会反查"我是它的祖先吗" ——
-> 结果两个都留下,而且**取决于勾选顺序**。这正是这个函数存在的理由(顺序无关),却被写反了。
-> 服务端那条规则本来就防这个(所以树不会被弄坏),但前端算错时用户看到的是
-> 「提示说会移动 2 个、实际动了 1 个」这种更难查的不一致。
+### 8.6 成员与授权是两件事
 
-审计:一次批量移动写一条 `node.bulkMove`,detail 带 `count` 与被移动节点的标题。
+它们看起来都在回答「这个节点上都有谁」,共享一个入口位置与一套候选人过滤,
+合并成一个带 Tab 的弹窗能省一半代码。但**没有合并**,因为混在一起会让
+「移出成员 = 收回权限」变成一种反复出现的误解:
 
----
+- 移出归属**不改变所有权**:被移出的组长仍然是组长,该能改的还是能改;
+- 但**会缩小他的组织范围**:他能授权给别人的人变少了;若是他最后一条归属,
+  他将不能在别人下面新建、也不能被授权。
 
----
-
-## 9. 阶段一里程碑任务拆解
-
-以下按**单人全时**估算,共约 **22 个工作日**,预留缓冲后 **4~5 周**。
-
-> ⚠️ **这份 M1~M6 清单是 v1.x 时代的执行记录,不是待办。**
-> 被 v2.0 作废的部分在各阶段开头有单独的 ⚠️ 标注(如 M2 的"空间与成员");
-> 未标注的条目里也有**表名已改**的(如 `page_contents` → `node_contents`)——
-> 那些描述的是"当时建了什么",不是"现在叫什么"。
-> **v2.0 及之后的任务清单看 §9.2**,接口与模型的当前状态看 §6 / §4。
-
-> ⚠️ **清单里有两类条目已经与当前功能不符,看到时不要当成现状:**
->
-> 1. **已整条移除的功能。** M3 的「软删除 / 回收站 / 恢复」在 v2.12 被**整体删除** ——
->    删除现在是物理删除、不可恢复(§8.2)。清单里的 `[x]` 表示"当时确实做完了",
->    不代表它还在。同理:凡提到"彻底删除"、"保留期"、"恢复"的句子都已失效。
-> 2. **页面清单里的「回收站」。** §9.1 与 §9.2 的验收记录里写着"前端 N 个页面已实渲染确认"
->    并列举了页面,其中包含**回收站页**(`TrashPage.tsx`,已删除)。
->    现在的页面清单以 §7.2 的表格为准。
->
-> 判断方法:**功能以正文为准**(§4 模型 / §5 权限 / §6 接口 / §7 前端 / §8 流程),
-> §9 只作为"当时是怎么验的"的历史材料。
-
-> 说明:这个数字比早期口头估的"3~4 周"要长。原因是把"页面级评论 + 审计日志 + 备份脚本"正式纳入范围了。宁可报长做短。
-
-### M1 · 基础设施(3 天)
-
-- [x] monorepo 初始化(pnpm workspaces + tsconfig base)
-- [x] `docker-compose.yml`:postgres / redis / api / web
-- [x] NestJS 骨架 + Prisma 接入 + 首次 migration
-- [x] `packages/shared` 建立,放角色枚举、错误码、DTO 类型
-- [x] 健康检查接口 + 统一异常过滤器
-- **验收**:`docker compose up` 后 `/api/v1/health` 返回 200
-  —— **已达成(2026-09-26)**。补充实测口径:先 `docker compose down -v` 清空数据卷,
-  再 `docker compose up -d`,6.5 秒全部就绪;经 Nginx 反代访问 `/api/v1/health` 得
-  `{"status":"ok",...}`;`/api/v1/health/ready` 同时报告 database 与 redis 均为 up;
-  全新建库的迁移自动执行,扩展 `citext`/`pg_trgm`、8 张业务表与三个手写索引(含部分索引与
-  GIN 三元组索引)均已就位。
-
-### M2 · 身份与空间(4 天)
-
-> ⚠️ **v2.0 起本阶段的「空间与成员」部分整体作废** —— 空间不再由用户创建、成员角色制被取消。
-> 认证部分(不透明会话 / 守卫 / `/auth/setup`)保留。重做清单见 §9.2。
-
-- [x] users / spaces / space_members 表与迁移
-- [x] 密码哈希 + 会话 Cookie + 鉴权守卫(实现为**不透明会话 token**,不是 JWT —— 见 §6.1.1)
-- [x] `/auth/setup` 首次初始化(另新增公开接口 `GET /auth/setup-state`)
-- [x] 空间列表、创建空间、成员增删改角色
-- [x] 前端引导页、登录页、空间列表、空间概览、成员管理页
-- **验收**:全新数据库启动后能创建管理员**并建出第一个空间**
-  —— **已达成(2026-09-26)**。实测口径:`docker compose down -v` 清空数据卷 → `up -d --build`
-  → 走完整链路 **41 项断言全通过**,且**覆盖失败路径**:未登录 401、重复初始化 403、
-  缺参与非法 slug 400、非成员得到 `NOT_FOUND`(而非 `FORBIDDEN`)、commenter 越权 403、
-  所有者不可降级 / 不可移除、畸形 spaceId 400、移除非成员 404。
-  单测:api 104 项 + shared 59 项 + web 10 项。前端四个页面已用无头浏览器实渲染确认。
-- **本阶段额外的两处修补**(不属原计划,但发现即修):
-  1. `users.last_login_at` 原为**死字段**(schema 有、全代码库无写入),现于签发会话后写入,写失败不影响登录成功。
-  2. 前端 `apiFetch` 的 **header 覆盖 bug**:`...init` 原先展开在 `headers` 之后,调用方一旦传 headers,
-     `Accept: application/json` 就被整块顶掉。已调整展开顺序。
-
-### M3 · 页面树(5 天)
-
-- [x] pages 表、物化路径与 depth 维护逻辑
-- [x] 页面树 CRUD + `move`(含递归重建路径)+ 防环校验
-- [x] 软删除 / 回收站 / 恢复(子树级联;原父不在树上时挂回根)
-- [x] 前端页面树组件:展开折叠、新建、重命名、删除、**拖拽排序(三区命中)**
-- **验收**:把一棵三层子树拖到另一个分支下,查库确认所有子孙的路径都已更新
-  —— **已达成(2026-09-26)**。实测刻意分两段:
-  ① **接口层 55 项断言全通过**,且覆盖失败路径:防环 400、乐观锁 409、
-     只读成员建/删/移/彻底删全部 403、畸形 id 400、彻底删除必须先软删除 400。
-  ② **直接查库 11 项断言全通过** —— 把 `X ─ Y ─ {Y1,Y2}` 里的 Y 移到另一个根 W 下之后,
-     库里 `Y / Y1 / Y2` 三行的 `materialized_path` 与 `depth` 全部重建,
-     而未移动的 X 与 Z 一个字都没变。这正是「只改自己那条路径」写错时会失败的地方。
-  单测:api 139 / shared 60 / web 27。
-  前端四个页面(空间概览、页面树、页面详情、回收站)已用无头浏览器实渲染确认。
-- **本阶段的一处实测坑**(已写进 §8.1):`substring(x from $n)` 在参数类型 unknown 时
-  会走 PostgreSQL 的 POSIX 正则分支并**静默返回 NULL**,导致整棵子树的路径被清空而不报错。
-
-### M4 · 正文与检索(6 天)
-
-- [x] page_contents 表 + ProseMirror JSON 存取(带 `baseUpdatedAt` 乐观锁)
-- [x] `content_json` → `text_for_search` 的纯文本抽取器
-- [x] Tiptap 编辑器:工具栏、图片上传(本地卷)、表格、代码块
-- [x] `pg_trgm` 索引 + `/search` 接口(含权限过滤)
-- [x] 前端编辑器页 + `Cmd/Ctrl + K` 命令面板 + `/search` 结果页
-- **验收**:中文关键词能搜到正文里的内容,且搜不到无权限页面的内容
-  —— **已达成(2026-09-26)**。覆盖率见下方的「M4+M5 端到端验收」。
-
-### M5 · 权限与评论(5 天)
-
-> ⚠️ **v2.0 起本阶段的「权限判定」部分整体作废** —— 五档角色、能力矩阵、deny、最小可见全部取消。
-> **评论部分保留**,并放开为全员可发。重做清单见 §9.2。
-
-- [x] page_permissions 表 + `effectiveRole` 判定实现
-- [x] Redis 缓存 + 变更时整片失效(实现为**空间级世代号**,理由见 §5.5)
-- [x] 全接口接上权限守卫,**逐条写测试**
-- [x] comments 表 + 4 个接口(+ 未解决计数)
-- [x] 前端:权限设置弹窗(推导链 + 规则增删)、评论面板
-- [x] 审计日志写入与查询页
-- **验收**:权限矩阵里每一格都有对应的通过 / 拒绝测试 —— **已达成(2026-09-26)**。
-
-### M6 · 收尾(3 天)
-
-- [x] 页面导出为 **Markdown**(PDF 需要额外依赖,不在阶段一范围内 —— 见 §11.3)
-- [x] 备份脚本:`pg_dump` + 附件目录打包,**含恢复演练脚本**
-  (`scripts/backup.sh` / `restore-drill.sh` / `restore.sh`)
-- [x] 部署文档(`DEPLOY.md`)+ `.env.example` + 初始化说明
-- [x] 全量冒烟测试 / 走查
-- **验收**:在干净机器上照部署文档从零跑通一遍 —— 见 §9.1
-
-### 9.1 M4+M5 端到端验收(2026-09-26 实测 · **历史记录**)
-
-> ⚠️ 这一节记录的是 **v1.x 模型**下的验收。v2.0 改造后,验收脚本已换为
-> `pnpm verify:org`(85 项断言,见 §9.2),本节保留作为"那一版做过什么"的存档 ——
-> 但**其中的断言口径不要照搬**,有一批在新模型下是反的(如"只读成员越权 403")。
-
-`docker compose down -v` 清空数据卷 → `up -d --build` → `pnpm seed:dev` → `pnpm verify:m4m5`(已删除)。
-当时的验收脚本是 `apps/api/scripts/verify-m4m5.mjs`,**v2.0 改造时连同断言一起删掉了** ——
-所以下面这些数字**现在无法复现**,只能当作"那一版做过什么"的存档看。
-(原文写的是"脚本在仓库里…可以自己复现",那是 v1.x 的说法;表名与语义都换过一轮之后
-它既不成立、也会误导人。**留一份不能复现的数字是可以的,但必须写明它不能复现。**)
-**当时 76 项断言全部通过,0 失败**(连跑两遍结果一致 —— 脚本会自己还原改动,可重复运行),分为八组:
-
-| 组 | 覆盖 | 其中值得单列出来的 |
-|---|---|---|
-| A 正文 | 取/存/往返/冲突/上限 | 过期 `baseUpdatedAt` → **409**;非法结构 → 400;超 2MB → 400 |
-| B 中文检索 | 字词命中 / 标题命中标记 / 通配符 | 搜「%」**不命中全部**;超长关键词 → 400 |
-| C 页面级权限 | 树过滤 / 越权 / 检索过滤 | **deny 从树里消失**;**子页面的 allow 翻不了父页面的 deny**;**检索结果按权限过滤** |
-| D 规则与推导链 | 读写 / 校验 / 候选主体 | 同主体两条规则 → 400;页面级不接受 admin 角色 |
-| E 评论 | 增删改 / 嵌套限制 / 越权 | 回复的回复 → 400;跨页面 `parentId` → 400 |
-| F 审计 | 动作覆盖 / 越权 | 登录、建页、存正文、评论、权限变更均有记录;只读成员查审计 → 403 |
-| G 导出 | 内容 / 头 / 权限 | 表格导出为 GFM;导出被 deny 的页面 → 404 |
-| H 附件 | 上传 / 直出 / 白名单 | Nginx 直出带 `nosniff`;**svg → 400**;**`shell.png.exe` → 400** |
-
-单测:api 211 / shared 61 / web 27 = **299 项**;`pnpm typecheck && pnpm lint` 全绿。
-前端 8 个页面(登录、编辑器、评论、权限弹窗、检索、审计、回收站、只读视角)已用
-**无头浏览器 + CDP 注入会话 Cookie**实渲染确认,页面内无 JS 报错。
-
-**验收过程中发现并修掉的五个真问题**(都不是"只读代码"能发现的):
-
-1. **Express 请求体默认 100kb** —— 而正文上限是 2MB。长文档保存会被 body-parser 拒掉,
-   而且错误是 500。已抬高到 8MB,并把解析错误映射成 `VALIDATION_FAILED`。
-2. **`express` 是传递依赖** —— 直接 `import { json } from 'express'` 在本地能跑,
-   进镜像就 `ERR_MODULE_NOT_FOUND`。改用 Nest 的 `useBodyParser()`。
-3. **`jsonb` 不保留键顺序** —— 让"往返一致性"断言一开始误判成失败。已改为按语义比较,
-   并把结论写进 §4.3。
-4. **恢复演练用 `n_live_tup` 比行数 → 假失败** —— 那是 autovacuum 维护的**统计估算值**,
-   在一个刚恢复出来的库上与生产库根本不可比。第一次在服务器上演练时报
-   「audit_logs 生产=71 恢复后=61」,而备份完全正常(真实行数两边都是 61)。
-   **假失败比没有演练更糟**:要么让人对好备份失去信任,要么让人对真问题麻木。
-   已改成逐表 `count(*)`。5. **权限弹窗的 flex 布局** —— `w-full` 的 `select` 在 flex 行里抢满空间,
-   把规则标签压成竖排、按钮挤成两行。另外 `Button` 会**忽略**传入的 `className`
-   (JSX 里后写的同名属性胜出),已改成合并。这两处只有实渲染才看得出来。
-
-**服务器实跑额外验证的两件事**:
-
-- `scripts/backup.sh` 在部署实例上跑通(10 张表 + 附件包 + 对账清单)。
-- `scripts/restore-drill.sh` 跑通:备份导入临时库后 **10 张表逐表精确一致**,
-  附件包可解,全程不动生产库。
+这两句写在移出前的确认框里,而且有单测钉住 —— 它们是这件事的安全边界,
+漏了或写反了会让人照着错误的心智模型做人事调整。
 
 ---
+## 9. 运维
 
-### 9.2 v2.0 改造任务清单(2026-09-26 追加)
+### 9.1 配置项
 
-模型从"自由空间 + 角色等级"改为"组织架构 + 所有者/祖先链"后,以下工作**必须重做**。
-分四个批次,**约 15 个工作日**(不含重新验收)。
-
-#### 影响面速查
-
-| 原成果 | 处置 |
+<!-- BEGIN GENERATED:env -->
+| 环境变量 | 默认值 / 取值 |
 |---|---|
-| M1 基础设施 | **完全保留**(compose / Prisma / 健康检查 / 异常过滤器) |
-| M2 身份与空间 | 认证部分**保留**(会话 / 守卫 / setup);**空间与成员整块重做** |
-| M3 页面树 | **核心保留**,改名 `pages` → `nodes`,加 `kind` 与 `owner_id` |
-| M4 正文与检索 | **完全保留**,只需把 `/pages/:id/content` 改成 `/nodes/:id/content` |
-| M5 权限与评论 | 评论**保留**(放开为全员可发);**权限判定整体重写** |
-| M6 收尾 | 备份 / 恢复脚本**保留**;部署文档需同步组织架构初始化步骤 |
+| `API_PORT` | `toInt(process.env.API_PORT ?? process.env.PORT, 3000)` |
+| `APP_VERSION` | `process.env.APP_VERSION ?? '0.1.0'` |
+| `DATABASE_URL` | `跨行赋值,见 configuration.ts` |
+| `LOGIN_IP_MAX_FAILURES` | `toInt(process.env.LOGIN_IP_MAX_FAILURES, 100)` |
+| `LOGIN_IP_WINDOW_MINUTES` | `toInt(process.env.LOGIN_IP_WINDOW_MINUTES, 15)` |
+| `LOGIN_LOCK_MINUTES` | `toInt(process.env.LOGIN_LOCK_MINUTES, 15)` |
+| `LOGIN_MAX_ATTEMPTS` | `toInt(process.env.LOGIN_MAX_ATTEMPTS, 5)` |
+| `NODE_ENV` | `跨行赋值,见 configuration.ts` |
+| `REDIS_URL` | `process.env.REDIS_URL ?? 'redis://localhost:6379'` |
+| `SESSION_COOKIE_SECURE` | `toBool(process.env.SESSION_COOKIE_SECURE, isProduction)` |
+| `SESSION_SECRET` | `process.env.SESSION_SECRET ?? ''` |
+| `SESSION_TTL_HOURS` | `toInt(process.env.SESSION_TTL_HOURS, 24 * 30)` |
+| `UPLOAD_DIR` | `process.env.UPLOAD_DIR ?? './data/uploads'` |
+| `WEB_ORIGIN` | `process.env.WEB_ORIGIN ?? 'http://localhost:5173'` |
 
-#### 批次一 · 数据模型迁移(3 天)—— ✅ 已完成(2026-09-26)
+共 **14** 个。由 `scripts/gen-doc.mjs` 从 `configuration.ts` 生成;与 `.env.example` 的双向比对由 `pnpm audit:docs` 负责。
+<!-- END GENERATED:env -->
 
-- [x] 新 schema:去掉 `spaces` / `space_members` / `page_permissions`;`pages` → `nodes`(加 `kind` / `owner_id`);`page_contents` → `node_contents`
-- [x] 新增 `org_assignments`(组织归属)与 `node_grants`(授权名单)
-- [x] 删除 `users.department` 列(单值部门无法表达多归属)
-- [x] 三个索引(含部分索引与 GIN 三元组)重新声明,确保 `migrate dev` 不生成 `DROP INDEX`
-- **不写数据迁移脚本** —— 现有数据是演示数据,清库重建比迁移便宜(见 §11.3)
-- 实现补充:`users.employee_no` 取代 `email`(§6.1.2);`users.must_change_password` 新增;
-  `nodes` 的树查询响应补 `version` 与 `status`(拖拽要用 `version` 做乐观锁,
-  让前端"拖之前先拉一次详情"会读到过期版本然后**静默落到错误位置**)。
+对应地,`.env.example` 声明了部署时需要填的键。两者的**双向比对**由 `pnpm audit:docs` 负责:
+代码读了但 `.env.example` 没声明的会报,反之也报。
 
-#### 批次二 · 权限服务重写(4 天)—— ✅ 已完成
+### 9.2 常用命令
 
-- [x] `packages/shared/src/permission.ts` 重写为 `canRead` / `canEdit` / `canManage` / `canCreateUnder` 四个**纯函数**
-- [x] 删除 `CAPABILITY_MIN_ROLE` 能力矩阵与五档角色枚举
-- [x] 删除 `resolveRoleAlongChain` 与全部 deny 相关分支
-- [x] `PermissionService` 改为:取祖先链(一条 SQL)→ 判定 → 缓存(按部门分片的世代号)
-- [x] 实现 `orgScope(user)`(`isInOperatorScope`)—— 授权范围判定的核心
-- [x] **额外补了 `canGrantTo`**:光有 `canManage` 不够,还要"被授权者落在我的组织范围内"(§5.3 规则三)
-- [x] 单测重写:覆盖 §5.4 能力对照表每一行,重点是**组织范围越界必须被拒**
+```bash
+docker compose up -d --build        # 起/更新四个容器(迁移会自动应用)
+pnpm verify:org                     # 端到端验收(168 项,跑之前先 seed:dev)
+pnpm db:verify                      # 数据库契约自检(表 / 索引 / CHECK / v1 残留)
+pnpm seed:dev                       # 演示数据(**需要先清库**,不做幂等)
+pnpm check                          # typecheck + lint + test + audit:docs
+```
 
-#### 批次三 · 组织架构管理(5 天)—— ✅ 已完成
+⚠️ **在容器里跑验收脚本时必须带 `-e KC_API`**:
 
-- [x] 超管接口:建部门 / 建人 / 改状态 / 设归属 / 任命所有者
-- [x] **新账号统一初始密码 `123456` + 首登强制改密**(`must_change_password` 字段,见 §6.1.2)。
-  **⚠️ v2.5 重做了这一块**:首登改为**不建立会话**(只给一张一次性凭证),整套"改密白名单"机制删除
-- [x] **Excel 导入(见 §8.5)**:模板下载(`exceljs` 生成)、上传预览(`dryRun`)、确认写入
-- [x] 前端 `/admin/org` 与 `/admin/users`
-- [x] 审计:所有者变更、授权增删、归属变更、**导入动作**都要留痕
-- [x] ⚠️ **节点成员管理入口**(列出该节点下的人,可移出)—— 调岗与离职的必备配套,理由见 §8.5「已知限制」。
-  **v2.4 补齐**:`GET/POST /nodes/:id/members` 与 `DELETE /nodes/:id/members/:userId`,
-  前端是组织树上的 `☰` 与文档页的「成员」按钮。读全员开放、写要 `canManage`(超管另有放行),
-  加入时受组织范围约束。审计动作 `org.member.add` / `org.member.remove`。
+```bash
+docker compose exec -T -e KC_API=http://web/api/v1 -e KC_ROOT=http://web \
+  api node scripts/verify-org.mjs
+```
 
-#### 批次四 · 前端导航重构(3 天)—— ✅ 已完成
+脚本默认打 `http://127.0.0.1:8080`,而在 **api 容器内部** `127.0.0.1` 是它自己的回环,
+那里没有任何东西在 8080 上监听 —— 表现是 `ECONNREFUSED`,看起来像服务挂了。
+指向 `http://web/api/v1` 走的是 nginx,也就是**浏览器那条路径**,反而更接近真实。
 
-- [x] 登录后直达工作台(`/`);删除 `/spaces` 空间列表页与 `/s/:spaceId/members` 成员页
-- [x] 左侧树改为**完整组织树**(全员可见全部);路由 `/s/:spaceId/p/:pageId` → `/n/:nodeId`
-- [x] 权限弹窗改为节点级:展示「所有者 / 上级所有者 / 额外授权」三段
-- [x] 候选人选择器**调后端已过滤的接口**,前端不自己算组织范围
-- [x] 权限开关按服务端返回的 `editableNodeIds` / `manageableNodeIds` 重算
-      (前端只用来隐藏按钮,服务端仍是唯一裁判)
+### 9.3 账号与登录
 
-#### 验收口径(v2.0)—— ✅ 全部达成
+- **工号 + 密码**登录。新账号初始密码统一 `123456`,首次登录强制改密(§6.1.2)。
+- **管理员重置密码**:`POST /admin/users/:id/reset-password`。
+  它会做三件事,少一件都会留下说不清的状态:①密码重置回 `123456`;
+  ②置 `must_change_password`;③**吊销该用户全部会话**(「重置」在管理员认知里就是「我把他踢出去了」)。
+  两条刻意的拒绝:
+  - **不能重置自己**(你现在是登录状态,要改自己的密码请走「修改密码」;允许它只会制造一次手滑);
+  - **不能重置一个登不进来的人**(已离职/停用)→ 明确报错并说明要先改回在职,
+    而不是"重置了但他还是登不上"。
+- **改状态会立刻踢下线**:改成停用或离职时,服务端会删掉该用户全部会话行。
+  ⚠️ 界面上必须**先告知**再做 —— 「这个人会被立刻踢下线」。
+- **不能把最后一个在职管理员停用 / 离职。** 那会把系统锁死,而且**没有界面能改回来**。
+  同理,权限不能授给已停用或已离职的账号。
 
-1. ✅ 超管导入组织架构 → 部长登录 → 能在自己部门下建组、任命组长
-2. ✅ 组员在自己组下建页面 → **他自己的上级链(组长 / 部长)都能改**,同组其他人不能改
-3. ✅ 组长给该页面**加一个人** → 那个人能改;组长**删掉** → 那个人不能改
-4. ✅ 组长**不能**把权限授予别的部门的人(组织范围约束生效)
-5. ✅ 任意员工能**读到**任何部门的页面(全员开放)
-6. ✅ 端到端脚本按上述 5 条扩写;失败路径的形状要对:越界授权 403、非所有者任命所有者 403
+### 9.4 登录被锁了怎么办
 
-实际验收脚本是 **`pnpm verify:org`**(`apps/api/scripts/verify-org.mjs`),
-**85 项断言全部通过**。它按 A~K 十一组组织,与旧脚本的区别写在文件头:
-旧脚本里那批"建立在旧模型上"的断言被整体替换掉了,而不是被改绿。
+**同一个工号连续输错 5 次密码,锁 15 分钟;锁定期内即使密码正确也登不进去。**
+这是刻意的(防爆破),但它是**唯一一个会让正常用户「明明密码对却进不去」的机制**,
+必须在培训里说明,否则运维会收到「系统坏了」的报障。
 
-> ⚠️ `pnpm verify:m4m5` 已**删除**。它的断言里有相当一部分建立在旧模型上
-> (如"只读成员越权 403""检索结果按权限过滤")—— 这些断言在新模型下**本身就是错的**:
-> 读是全员开放的,不存在"越权读"。**不要为了让它变绿而把新模型改回旧语义**,那是本末倒置。
+```bash
+# a) 等 15 分钟(锁会自动过期,不需要任何操作)
 
-### 9.3 v2.0 改造中实跑发现的问题(2026-09-26)
+# b) 立刻解锁某一个工号:
+docker compose exec -T redis redis-cli del kc:login:lock:u:kc004
+```
 
-这一轮**有六个问题只有真跑起来才会暴露**。它们全都属于"读代码看不出来"的那一类,
-记在这里是为了下次不再犯:
+> ⚠️ **Redis 挂了的时候锁定会失效(退回无限尝试),这是刻意的取舍**(§6.1.3)。
+> 把 `LOGIN_MAX_ATTEMPTS` 设为 `0` 可以关掉账号那道门(IP 门仍然生效)。
 
-| # | 问题 | 症状 | 根因与修法 |
-|---|---|---|---|
-| 1 | **恢复与彻底删除实际上永远用不了** | 回收站打不开(404),恢复/彻底删除全部 404 | `PermissionService` 把"已删节点"当不存在,而回收站的三个操作恰恰要判定已删节点。`chainOf` 早就支持 `allowDeleted`,但 `requireEdit` / `requireManage` 没把它传下去 —— **只给取链传是不够的,判定本身也会拦** —— **⚠️ 已失效(v2.12):回收站整体移除,这条连同它修的代码都不存在了。保留是为了记"当时为什么会漏"这一课。** |
-| 2 | **`GET /auth/me` 不在强制改密的白名单里** | 未改密的用户看到「无法连接到服务」,卡在原地进不了改密页 | 前端要靠 `me` 读出 `mustChangePassword` 才知道该跳哪一页。白名单从两条补成三条。**⚠️ v2.5 起整套白名单机制已删除**(首登不再建立会话,不存在"已登录但未改密"的状态)—— 这类"漏一条就卡住"的 bug 从此不可能再发生 |
-| 3 | **导入接口的权限检查排在文件校验之后** | 普通成员请求时得到 400「请选择文件」,等于确认了"这个接口存在" | 权限不足就该一律 403,且要在任何其他判断之前。检查顺序挪到最前 |
-| 4 | **超管在界面上没有「换部长」的入口** | 只有超管能改一级部门所有者,但他对一级部门不显示齿轮按钮 | 他不在 `manageableNodeIds` 里(他不是内容所有者)。树面板与权限弹窗都对"超管 + 一级节点"单独放行,并在弹窗里说明"组织权限与内容权限是分开的" |
-| 5 | **模板里一个 ID 列不够** | 「组是新建的 + 部门刚改名」时仍会重复建部门 | 一列只能标识"最深那个节点"。拆成 `部门ID(勿改)` + `组ID(勿改)` 两列(§8.5) |
-| 6 | **组织架构页把文档标成了「组长」** | 界面显示「研发规范 · 组长 陈默」 | 空间与页面在同一棵树上(§4.1),子节点必须**按 `kind` 区分**展示 |
+### 9.5 备份
 
-> ⚠️ **v2.12 补注:上表第 1 条与下面第一个取舍点都已随回收站一起作废。**
-> 回收站被整体移除后,「恢复 / 彻底删除」这两个操作不存在了,
-> `allowDeleted`、`RetentionService`、`chainOf(…, true)` 这些为它存在的机制**全部删除**。
-> 上表**其余 5 条仍然有效**,而且都是"读代码看不出来"的典型 ——
-> 这正是这份清单该留着的原因:失效的只有结论,教训没过期。
+`scripts/backup.sh` 备份到 `./backups/<时间戳>/`,`scripts/restore-drill.sh` 做恢复演练
+(恢复到临时库并逐表比对行数,**不动生产库**)。
 
-另外两条**设计取舍**也在实现中被验证是对的,值得记下来:
+> ⚠️ **已知风险:备份与数据同盘。** 该盘整体故障时数据与备份会一起丢。
+> 这是用户已知悉并接受的风险,写在这里是为了后来的人不要以为「有备份脚本就安全了」。
 
-- **"下载模板 → 原样上传 = 零差异"这条性质必须成立。** 它逼出了两个正确决定:
-  现有部门没写负责人时**保持原所有者不动**(而不是报错或清空),以及**不做任何"兜底继承"**。
-  这两条都写进了单测(§8.5)。
-- **`allowDeleted` 这类开关必须在 service 的参数上显式存在**,而不是靠调用方"自己知道这是已删节点"。
-  隐式约定在权限代码里必然出事 —— 出事时是 404 或静默越权,都不是显式报错。
+### 9.6 常见故障
 
-### 9.4 v2.4 的两处刻意取舍
-
-这两处都是"本来可以更省事,但省下来的那点事会变成日后的困惑",所以记下来。
-
-**一、成员与授权不合并,哪怕它们看起来都在回答"这个节点上都有谁"。**
-
-它们共享一个入口位置(树上的齿轮旁边)、共享一套候选人过滤逻辑,合并成一条接口
-和一个带 Tab 的弹窗能省一半代码。但没有合并:
-
-| | 成员 | 授权 |
+| 现象 | 原因 | 处理 |
 |---|---|---|
-| 回答的问题 | 他在**组织里的位置** | 他**能不能改**这个节点 |
-| 数据 | `org_assignments` | `node_grants` |
-| 写门槛 | `canManage` **或超管** | `canManage`(超管不在其列) |
-| 移出的后果 | 他的组织范围变小(可能影响他能授权给谁) | 他不能改了 |
-
-写门槛不同这一条尤其致命:合并后必然要取**更宽的那个**(否则超管改不了成员),
-于是超管会看到一个"能编辑的授权名单"——而他在服务端根本没有那个权限。
-**一条接口的权限语义必须单一**,否则它迟早会把两种权限混成一个更大的洞。
-
-**二、`purgeSubtree` 抽出来给两条路径共用。**
-
-手工「彻底删除」与回收站到期清理,除了"谁有资格触发"之外**完全一样**。
-很容易顺手在 `RetentionService` 里再写一遍删除循环 —— 但那段循环里有一条
-不显眼却重要的约束:必须按深度从叶子往根删(`nodes.parent_id` 是 `onDelete: Restrict`),
-而 `DELETE` 不支持 `ORDER BY`。抄一份的代价是,某天有人只修了其中一份,
-另一份就开始"偶尔删不掉",且不报错。
-
-**凡是"删数据"的逻辑,只允许存在一份。**
-
-> ⚠️ **v2.12 补注(2026-09-27):** 上面提到的 `RetentionService` 与「回收站到期清理」
-> 这条第二条路径**已经不存在了** —— 回收站被整体移除,删除就是物理删除。
-> 于是「只允许存在一份」这件事从「靠纪律维持」变成了**结构上只有一个可能**:
-> 全仓库只剩 `NodeService.deleteSubtree` 一处删除循环。
-> 本节保留原样,因为它是「为什么当初要抽公共函数」的记录(§9.x 是历史,不追改)。
-
-### 9.5 v2.5 实跑发现的三个问题(2026-09-27)
-
-这一轮是**用户实测反馈**驱动的(四条反馈 → 三处真问题),记下来是因为它们
-都属于"读代码看不出来"的那一类。
-
-| # | 问题 | 症状 | 根因与修法 |
-|---|---|---|---|
-| 1 | **树缩进在第三级之后就不再递进** | 「第三级组下面的页面」与它的父节点同一缩进,看不出谁属于谁 | 缩进算的是 `(node.depth > 2 ? 2 : node.depth) * 12 + 4` —— **depth 超过 2 被钳成 2**。当时大概是想防止深层节点把整行推出可视区,但它把"递进"这件事本身毁掉了。改成 `Math.min(depth, 8) * 13 + 6`:封顶提到 8 级,正常组织深度下永远够用 |
-| 2 | **首次改密成功后,"密码已设置成功"的提示丢了** | 用户被送回登录页,但完全不知道刚才那步成没成 | 改密页有**两条**跳转路径:显式 `navigate(...)` 与兜底 `<Navigate to="/login">`。`clearSetup()` 一执行,`isFirstTime` 立刻变 false,兜底那条抢先触发 —— 而**它不带 state**。修法:不自己 navigate,改为先置一个本地 `changed` 标记,让**唯一**那条跳转路径带上提示。**同一件事有两条跳转路径时,只有一条会带上下文** —— 这类 bug 一定会发生 |
-| 3 | **服务器上验收失败 2 项,本地全过** | `审计里有 org.import` / `node.content.update` 失败 | 审计接口只返回**最近 200 条**,而这两个动作只有"种子"或日常使用才会产生 —— 库里跑过几轮之后,最早那批被挤出去了。**依赖"历史记录还在"的断言迟早会坏掉**。修法:让验收脚本**自己制造**这两个动作(存一次正文 + 下载模板原样上传)。顺带把「模板原样上传 = 零差异」这条性质在端到端层面也验了(此前只有单测) |
-
-> 第 3 条还有一层:**"本地过、服务器不过"本身就是信号**。
-> 第一反应容易是"服务器环境有问题",但多数时候是**本地库更年轻**
-> (记录更少、数据更干净),于是掩盖了断言的脆弱性。
-
-> 另外两条是**断言本身写错**,不是功能问题:`预览成功` 断的是 `status === 200`,
-> 而 Nest 的 POST 默认回 **201**。写死状态码在任何一次框架默认值变化时都会假失败 ——
-> 除非你确实在验那个具体的码。
-
-### 9.6 v2.6 实跑发现的两个问题(2026-09-27)
-
-这一轮由用户一句话触发 —— **「测试账号没了?」**。账号当然还在,但这个问题
-指出的是一类更值得记下来的东西。
-
-| # | 问题 | 症状 | 根因与修法 |
-|---|---|---|---|
-| 1 | **系统里根本没有「重置密码」** | 同事忘了密码,唯一的办法是运维登进容器连上数据库手工改哈希 | 这不是 bug 而是**能力缺口**,而且是 §6.1.2「统一初始密码 + 首登强制改密」这套机制的必然配套 —— 有初始密码就一定会有人忘了改。补 `POST /admin/users/:id/reset-password`(§6.1.4)。**它的存在本身也解释了 #2**:正因为它此前不存在,开发者(我)才只能靠脚本改密码 |
-| 2 | **验收脚本跑过之后,演示账号的密码就废了** | 「测试账号没了?」—— 文档里写 `123456`,实际是 `Kc-verify-2026` | `verify-org.mjs` 为验首次改密**必须真改** KC003 的密码,`login()` 辅助函数还会顺手改 KC004,而**没有任何地方还原**。后果有两条:①文档里的密码失效(用户直接撞上);②下一轮 A 组走"跳过"分支,总项数 **160 → 148**,看着像回归,其实是上一轮脚本自己造成的 —— **一个会污染自己前置状态的测试,比没有测试更坏**,因为它把"测试失败"和"环境被自己改坏"混成了同一个信号。修法:N 组用 #1 新加的接口把 KC003 / KC004 放回去,验收从此幂等(实测连跑三次:148 → 160 → 160) |
-| 3 | **`GET /admin/users` 此前没有任何判权** | 任何登录用户都能拿到全公司名册 —— 而文档 §6.2 一直写的是超管 | 加 `mustChangePassword` 字段时才暴露:那个字段等于一份**"谁的密码还是 123456"的目标清单**。这是"文档写了、代码没做"的典型漂移,平时看不出来,直到新字段把它的后果放大。已按文档收紧为超管专属;「这个部门里有谁」仍走 `GET /nodes/:id/members`(读全员开放)—— 公开的是**组织归属**,不是账号状态与登录时间 |
-
-> **这一轮的教训不是"忘了还原密码",而是:测试对系统状态的修改,必须由测试自己负责收回。**
-> 否则每次运行都会让环境偏离一次,直到某一天问题以"功能坏了"的样子暴露出来 ——
-> 而那时已经没人记得是第几次运行造成的了。
-
-### 9.7 v2.7 实跑发现的两个问题(2026-09-27)
-
-用户第二次反馈「字体太小了」,并在截图上圈了三个区域。这一轮的发现值得单独记:
-
-| # | 问题 | 症状 | 根因与修法 |
-|---|---|---|---|
-| 1 | **"改了但没改好" —— 因为改的是症状不是机制** | 第一次按处调完,用户仍然觉得小 | 上一轮我统一了**工具栏内**和**树行内**的控件尺寸,却没有定义**"这一处该是几号字"的判断依据**。全项目当时有 9/10/11/12/13/14 六个档,每一处单看都"有理由",合起来就是"整体不对劲"。修法:定四档刻度(§7.5)+ **源码扫描测试**,规则由机器执行 |
-| 2 | **放大字号之后,原本刚好放得下的标题被截断了** | 树的「CRM 项目概览」变成「CRM 项…」 | 树行那 6 个悬停按钮是 `flex-none` **常驻在流里**的,吃掉 130~160px;字号 13 → 14 之后剩下的 57px 就不够了。**这类副作用只有真渲染才看得见** —— 改字号时肉眼看的是"字清楚了",不会注意到右边少了一截。修法:改成绝对定位的悬停覆盖层,实测 8 个标题零截断、悬停前后标题宽度不变(245 → 245) |
-
-> **第 1 条是这一轮真正的教训。**
-> 用户说"字体太小",正确的问题是「**这里的字应该是几号?依据是什么?**」,
-> 而不是「这一处调到多少才好看?」。前者会产出一个刻度表和一条检查规则,
-> 后者只会产出一堆新的、各有各理由的数字 —— 而**下一轮还会有第三次反馈**。
->
-> 定刻度时我差点又犯同一个错:起草了五档,给"次级信息"单独加了 13px,
-> 写完才发现代码里已经有 64 处 12px。**多一档就多一次分歧的机会** ——
-> 于是退回四档。这一条也写进 `lib/typography.ts` 了。
-
-> 第 2 条还有一层:**任何"把东西变大"的改动都要重新检查"放得下吗"**。
-> 字号、内边距、图标尺寸都是这样 —— 布局里每一处"刚好"都是被换算过的余量,
-> 动了一边就必须看另一边。
-
-#### 顺带修掉验收脚本自身的两个缺陷(v2.7)
-
-部署时在服务器上跑验收,160 项里有 3 项失败。查下去发现**都不是产品的问题**,
-是脚本自己的:
-
-| # | 症状 | 根因 | 修法 |
-|---|---|---|---|
-| 1 | 「组长改不动内容了」等 3 项失败 | v2.6 只让脚本还原了**密码**,没还原**节点与所有者**。一次崩溃的运行把「后端组」的所有者改成了赵敏且没还原,库里还积了 3 个测试节点 —— 于是**下一轮从 C 组开始就失败**,而且看起来像功能坏了 | `restoreToolState()` 扩成三件事:**密码 + 残留节点 + 被改的所有者**;正常路径在 N 组调,异常时在 `finally` 兜底;**开头还会自检**,发现上一轮残留就先自动清掉再跑 |
-| 2 | 脚本中途抛异常,连汇总都打不出来 | I 组那句 `ownTrash.body.some(...)`:`underOwnGroup.body.id` 在上一步失败时是 `undefined`,请求打到 `/nodes/undefined`,返回的不是数组,`.some` 直接把脚本打断 —— **于是收尾还原也跑不到**,库越跑越脏,恶性循环 | 抽出 `arr()` 兜底 + 用 `?.` 取 id;`main()` 包在 `try/finally` 里 |
-| 3 | 「赵敏看不到别人节点上的授权变更」失败,而**系统行为完全正确** | 断言只检查"她的日志里有没有 `grant.replace`"。可是审计的可见性规则是「**我是操作者** 或 目标节点在我的管辖范围内」—— **她自己**合法做过的授权变更本来就该出现。它能通过,只是因为干净的库里恰好没有这个反例 | 改成按操作者过滤:"看不到**别人的**授权变更"。这与 §9.5 第 3 条是同一类毛病 —— **别让断言的正确性依赖"历史里恰好没有某条记录"**,只是这次方向相反 |
-
-> 第 1 条把 v2.6 的教训推到了该有的位置。
-> v2.6 我写下"测试对系统状态的修改,必须由测试自己收回",但**只落实到密码上**。
-> 真正的规则是:**它改了什么,就要能收回什么** —— 密码、节点、所有者、状态,一样不少。
-> 而且收回不能只写在"正常路径的末尾"(那时的 `finally` 都还没写),
-> 否则一旦中途抛异常,收回本身也跑不到。
->
-> 第 3 条还说明:**断言"太严"和"太松"一样危险**。它一直绿着,不是因为性质成立,
-> 而是因为没有被污染过。这类断言在干净的开发机上永远发现不了问题 ——
-> 它只在"库被用过一段时间"之后才现形。
+| 登录成功但刷新后回到登录页 | `SESSION_COOKIE_SECURE=true` 却在用 http 访问 | 改成 `false` 后 `docker compose up -d` |
+| api 容器反复重启 | 数据库没起来 / 密码不对 | `docker compose logs api`,核对 `.env` 的 `POSTGRES_PASSWORD` 与 `DATABASE_URL` |
+| 页面能开、接口 502 | api 未 ready | `docker compose ps` 看 api 是否 healthy;`logs api` 找 `migrate deploy` 是否失败 |
+| 图片 404 | web 容器没挂到 uploads 卷 | `docker compose config` 看 web 的 volumes 里有没有 `uploads:/data/uploads:ro` |
+| 中文搜索搜不到 | `pg_trgm` 扩展或三元组索引丢失 | `psql -c "\dx"` 确认扩展;`pnpm db:verify` 会检查 |
+| **有人密码明明是对的却登不进去** | 连续输错 5 次触发了登录锁定 | 等 15 分钟,或按 §9.4 解锁。**先查这一条** |
+| **有人看不到某篇文档** | 节点被设成**受限**,而他不在读者名单里 | 让该节点的创建者或所有者打开「可见范围」把人加进去 |
+| **有人误删了文档** | 删除是物理删除,没有回收站 | **无法恢复**,只能从备份找。查是谁删的:`/audit` 搜 `node.delete` |
+| 某人不在某个组的成员列表里 | 他的归属被移出,或本来就没加过 | 节点成员弹窗能查「这个节点下都有谁」;调岗是**两步**:先加入新节点,再从原节点移出 |
 
 ---
 
-### 9.8 v2.8:为什么"改了两次还是小"(2026-09-27)
+## 10. 为阶段二预留的硬约束
 
-用户第三次反馈字体问题,并且说了一句关键的话：
+以下是为「实时协同 / 通知中心」预留的,**现在不做,但现在就不能破坏**:
 
-> 「你能不能找几个好点的网站去参考一下,就常规的博客网站也行,或者直接去看看 confluence 是如何做的。」
-
-**这句话点破的不是字号,是方法。** 前两次我都在**拍脑袋调数值**：
-第一次调控件尺寸,第二次定了个"四档刻度"——但那个刻度**没有任何外部依据**,
-于是我把它定成了 11 / 12 / 13 / 14,还把 tab、目录、评论这些**组件级文字**
-归进了"次级信息"。用户看到的"还是小",就是这套自造刻度的直接后果。
-
-| 我拍的 | 规范说的 |
-|---|---|
-| 最小 11px | Atlassian 的最小字号是 **12px**(他们特意从 11 提上去的,理由是可读性) |
-| tab / 目录 / 评论 = 12px「次级信息」 | 它们是**组件级文字**,ADS `font.body` = **14px**,而且"配合图标时用 Medium 字重" |
-| 12px 可以给"次级信息"用 | ADS 说 12px `body.small`「**谨慎使用**,仅用于次级信息,如细字印刷」 |
-| 正文 15px | ADS `body.large` = **16px**,Confluence 编辑器正文也是 16px |
-
-> **教训：定"刻度"这件事本身需要参照。**
-> 自己发明一套看起来很有条理的 11/12/13/14,和在真实产品里被验证过的
-> 12/14/16,差别不在数字,而在**依据** —— 前者只是把"我觉得"排了序,
-> 后者能回答"凭什么"。
->
-> 这也解释了为什么第一次和第二次的修改都"看起来有道理"却都不对：
-> 两次我都在**优化一套没有依据的体系**。
-
-#### 同一轮里抓到的五个非字号缺陷
-
-值得单独记的原因是：它们**都不属于字号**,但都会被笼统地说成"UI 很丑"。
-如果只盯着字号改,这些永远不会被发现。
-
-| # | 现象 | 真正的根因 |
-|---|---|---|
-| 1 | 页头元信息被挤成 3 行,「更新于 2026/9/27」与「02:35:15」被拆成两截 | **谁和谁抢同一行**:元信息嵌在标题的 `flex-1` 里,被右侧按钮挤到只剩一百多 px。挪出去就一行放下 |
-| 2 | 页头 / 卡片 / 编辑器左边框对不齐 | 三种横向内边距混用(24 与 32px)。**对齐问题看起来像"脏",但代码里没有任何一处是错的** |
-| 3 | 侧栏底部三段常驻灰字 | "信息架构没做、用说明书补"。说明应该在**需要它的那一刻**出现(拖拽时),否则它只是噪音 |
-| 4 | 组节点打开是空白编辑器 | 它下面是"没有正文"而不是"什么都没有"。Confluence 在这里列子页面 |
-| 5 | 树看不出层级 | 只有缩进没有**引导线**。层级要靠数像素去猜,就等于没有表达出来 |
-
-> 第 1 条尤其值得记：**"太挤"和"字太小"在观感上是同一件事。**
-> 用户说"小",有时候不是字小,而是**这一行本来就不该放这么多东西**。
-> 只看 `font-size` 会一直找不到病根。
->
-> 第 2 条同理：**对齐错误不会报任何错**,它只是让界面显得不专业。
-
-### 9.9 v2.10:这一轮踩的三个坑(2026-09-27)
-
-三个都不是产品逻辑问题,而是**环境与工具的问题** —— 它们的共同特征是
-"看起来像功能坏了",所以值得单独记下来。
-
-#### 1. 本机 pnpm 装完之后**缺符号链接**,而它报 "Already up to date"
-
-`pnpm add @tiptap/extension-code-block-lowlight lowlight` 失败在 esbuild 的
-postinstall(`EBUSY`)。加 `--ignore-scripts` 之后命令成功、`node_modules` 里也有
-`lowlight`,但 `@tiptap/extension-code-block-lowlight` **始终解析不到** ——
-而 `pnpm install` 一口咬定 "Already up to date"。
-
-查下来是两层缺链接:
-
-- **应用层**:`apps/web/node_modules/<包>` 根本没建;
-- **store 内层**:包的**依赖**也没建。第二层更阴险 ——
-  报错指向 `node_modules/.pnpm/.../dist/index.cjs`,看起来像"这个包坏了",
-  其实只是它的依赖没链上。而且是**传递**的:
-  `lowlight → devlop → dequal`,只修第一层照样报
-  `Cannot find package 'dequal'`。
-
-处置:`scripts/fix-pnpm-store-links.mjs` —— **以 `apps/web/package.json` 为准**逐个核对直接依赖,
-再沿依赖图递归补 store 内层的链接。以 package.json 为准这一点是关键:
-手工列包名的话,漏一个就表现为 `Cannot find module '@tiptap/extensions'`,
-而这看起来**像代码写错了**(实测就被误导过一次)。
-
-工具里另外记了两条 Windows 特有的坑:`fs.realpathSync()` **不解析 junction**,
-以及 `@scope/name` 在 store 里的那一层要**上溯两层**(不能只 `dirname` 一次)。
-两条都是"不报错、只是把东西放错地方"。
-
-#### 2. 我写的"顺手清理"删掉了 7 条**合法**链接
-
-第一版修复脚本带了一段自愈:把"作用域目录里除了本包之外的非 `@` 开头的条目"
-当成误建物删掉。**那个判断是错的** —— `apps/web/node_modules/@tiptap/` 下本来就该有
-core / react / starter-kit 等 8 个包,它一次删掉 7 条合法链接。
-(junction 只是摘链接不动实体,所以从 store 原样恢复了,没造成实际损失。)
-
-> **教训:清理逻辑的删除条件必须能从"正确状态"推导出来,不能从"看起来多余"推导。**
-> 一条修复环境的脚本,一旦自己会误删,它就比它要修的故障更危险。
-> 现在这个脚本**只建不删**。
-
-#### 3. 只在 `finally` 里 `process.exit(0)`,把失败变成了"正常结束"
-
-验证脚本的日志停在半截、退出码 0。原因是 `finally { ...; process.exit(0) }`
-**抢在错误打印之前**结束了进程 —— 一次真的失败(我的断言表达式里写了个
-`code 的 class` 这种带空格的键名)看起来像跑完了。
-
-> 同类问题的通用形态:**任何"统一收尾"都必须先把错误接住再收尾**,
-> 否则收尾动作会把失败的证据一起收走。
-
-#### 4. 一个把"验证顺序"变成结论的教训
-
-链接验证一开始是失败的:落库的 JSON 里找不到那个链接。查下去发现是
-**我的验证步骤自己造成的** —— 为了测"编辑已有链接",脚本把链接文字选中了,
-紧接着插入表格时,表格**替换掉了那个选区**,于是链接没了。
-产品是对的,流程是错的。
-
-> 改成**每个功能做完就立刻验它的持久化**,而不是攒到最后一起查。
-> 攒到最后,前面步骤的副作用会污染判断,而那时候已经看不出是谁干的。
-
-### 9.10 v2.15:第一次真机部署发现的六个问题(2026-09-27)
-
-前九节都是"在本机跑"。这一节是**第一次把 13 轮改动真的部署到 Docker 里**之后发现的,
-它们的共同点是:**静态检查(类型 / lint / 单测 / 文档漂移)全都通过,而问题只在真跑时出现**。
-
-#### 1. `docker-compose.yml` 里的两个死开关
-
-`TRASH_RETENTION_DAYS` / `TRASH_PURGE_INTERVAL_HOURS` 在 v2.12 移除回收站后,代码**再也不读**它们了,
-而 compose 还在传。**填了不生效比没有这个开关更坏** —— 有人会去调它,然后奇怪为什么没反应。
-
-为什么 13 轮没发现:`audit:docs` 第 2 项比对的是 `process.env.X` ↔ `.env.example`,
-而 **compose 是第三个地方,没人管**。已加第 4.7 项检查(只查 **api 服务**的 environment 块 ——
-postgres/redis 的变量是给官方镜像用的,一起查会立刻产生假告警,而假告警会让人关掉整个检查)。
-
-#### 2. 登录限流会绊倒验收脚本自己
-
-脚本登录时依次试候选密码,而**错的那几次会被限流记成失败** —— 5 次就锁 15 分钟。
-KC004 在后半段被锁,于是后续断言拿到 429/401,却被当成 404 报成失败。
-
-**那次跑出来的 7 条"失败"里,没有一条是产品缺陷。** 两处修:
-① 脚本记住每个账号试成功的密码(正常只错一次);
-② 拿到 429 就**明确报「被限流锁住」并终止**,不再让后面每条断言都变成假失败。
-
-#### 3. ★ 一个很危险的脚本缺陷:登录失败后**继续用上一个人的会话**
-
-`login()` 登不上时只 `return false`,而 **52 个调用点里只有 4 个看了返回值** ——
-其余 48 处会带着**上一步那个人的会话**发请求。
-
-实际后果:脚本想以「无关的人 KC004」去改可见范围,KC004 那次没登上,
-请求就带着上一步 **KC005(市场部所有者)** 的会话发出去了 → 服务端返回 200 →
-断言报「★ 无关的人改可见范围 → 200」——**看起来像一次越权漏洞**。
-实际是脚本自己在冒充另一个人。
-
-> **这类假阳性比漏测更坏**:它会让人去"修"一个根本不存在的安全问题,而真正的缺陷仍留在原处。
-> 独立复测(直接调接口、绕开脚本)确认权限是**对的**:KC004 得到 403
-> 「只有这个节点的创建者或所有者能管理它的可见范围」。
-
-修法:登录**先清空 cookie**,登不上**直接抛错**;只在"这个账号现在能不能登"本身是被测对象时,
-才用不抛错的 `tryLogin()`。
-
-#### 4. `Response.text()` 会吃掉 BOM
-
-「审计导出带不带 BOM」这条断言用 `text().startsWith("\uFEFF")` 判断,**永远为假** ——
-因为 `Response.text()` 按 WHATWG 规范用默认 UTF-8 解码,而 `TextDecoder` 默认**忽略 BOM**。
-字节流里 BOM 明明在(`ef bb bf`,实测过)。改成读 `arrayBuffer()` 再自己解码,查字节。
-
-#### 5. 又一条**永远不可能通过**的断言
-
-「把已离职的人加进组织 → 400」用**非超管的部长**去改用户状态。两个错叠在一起:
-① 改状态只有超管能做,那次 PATCH 是 403,人根本没变成离职;
-② 就算变了,服务端**先查组织范围、后查在职状态** —— 目标属于别的部门,先撞 403,
-永远走不到那条 400。
-
-> 这与 §9.3 第 1 条同类:**断言测错了对象,所以永远不通过,而它看起来一直在测某件事。**
-> 修法是①用超管改状态;②目标必须**在操作者自己的组织范围内**,否则测的不是"离职"这条规则。
-
-#### 6. 迁移与数据:顺序对了才不会丢东西
-
-`drop_trash` 必须**先把软删的行按深度从叶子往根删掉,再删列**。真机执行后:
-**10 个节点与 25 条评论完好**,`verify-db` 8/8 表 / 7/7 索引 / 3/3 CHECK 全过。
-
-**部署本身的结论:**
-
-- 两个迁移自动应用成功,`verify-org` **168 项全通过**(0 失败);
-- 保密功能独立复测(绕开脚本):详情 / 正文 / 导出 / 树**四条路径同步跟随读者名单**,
-  加进去 200、移出去 404,双向都对;超管不在名单里也读不到(与 §4.3 一致);
-- 审计导出实测 1529 行、BOM 正确;检索 200 且命中正确 ——
-  **§8.3 那个 `deleted_at` 裸 SQL 若不修,这里就是 500**。
-
-#### 这一节真正想说的是
-
-**验证工具本身也是代码,它同样有 bug,而且它的 bug 会伪装成产品缺陷。**
-这一轮 7 条"失败"里没有一条是产品的问题,却每一条都看起来像 ——
-如果不去逐条追到根因,最可能的结局是:去改一个没坏的地方,把它改坏。
-
----
-
----
-
-## 10. 为阶段二预留的六条硬约束
-
-**阶段一可以不做协同,但必须按这些约束写。违反任何一条,阶段二都要返工。**
-
-| # | 约束 | 违反的后果 |
-|---|---|---|
-| 1 | **房间标识用 `node_id`** —— 一篇文档一个 Y.Doc | 用 slug 或 URL 做房间名,文档改名后协同直接断 |
-| 2 | **正文存结构化文档树,绝不存 Markdown 字符串** | 阶段二整个内容层推倒重来 |
-| 3 | **WebSocket 握手校验页面写权限**,只读用户标记 `readOnly`,服务端丢弃其 update | 只读成员能绕过前端直接改文档 |
-| 4 | **结构操作(改名 / 移动 / 删除)走 REST + 乐观锁,不进 CRDT** | 这类操作在 CRDT 里无法收敛,会出现幽灵页面 |
-| 5 | **落库策略:最后一人离开立即存,或静默 2 秒防抖存**;版本快照按每 10 分钟或每 500 次更新打点 | 协同产生的更新量远超单机,没有策略会丢数据或撑爆日志表 |
-| 6 | **Yjs 二进制快照不能直接检索**,落库时同步拍纯文本 | 接上协同后检索全废 |
-
-### 10.1 阶段二接协同时必须同步改的地方(备忘)
-
-- 关闭 Tiptap 自带的撤销栈,改用 `Y.UndoManager`,否则两套撤销栈打架。
-- `node_contents.ydoc_snapshot` 开始写入,与 `content_json` 并存一段过渡期。
-- 权限变更需要通过协同网关广播,让在线用户立刻感知降权,而不是等 Redis TTL。
-- 检索从 `pg_trgm` 换到 Meilisearch。
+1. 评论表预留 `anchor_type` / `anchor_text` / `anchor_pos` 三列的位置(行内锚定用)。
+2. `SESSION_SECRET` 留给协同网关签短期 JWT 的用途(现在被首登改密借用)。
+3. Redis 已开 appendonly(阶段二放"在线态"与队列)。
+4. 附件走 `UPLOAD_DIR` 抽象,**不要**在业务代码里拼本地路径 —— 阶段二可能换 MinIO。
+5. 审计日志的 `detail` 是 JSONB,新动作往里加字段不需迁移。
+6. 所有时间列都是 `timestamptz`,不存本地时间。
 
 ---
 
 ## 11. 风险与开放问题
 
-### 11.1 阻塞项
+### 11.1 已知风险(接受并留档)
 
-| # | 风险 | 影响 | 处置 |
-|---|---|---|---|
-| 1 | ~~备份介质未落实~~ | **已接受风险(2026-09-26)** | 用户明确表示此事自己无法决定,**暂不处理、无须再提**。现状留档:`scripts/backup.sh` 只写到服务器本机 `./backups/`,与数据同盘 —— 该盘整体故障时数据与备份会一起丢。风险已如实告知,由用户知悉并接受 |
-| 2 | ~~与既有知识库项目的关系未界定~~ | **已关闭(2026-09-26)** | 用户已明确放弃该项目,并已连同其在服务器上的全部数据、备份与镜像一并移除 —— 迁移问题不复存在,原「替代 / 并存」之争作废 |
+- **备份与数据同盘**:见 §9.5。用户已知悉。
+- **一次性凭证无状态**:见 §6.1.2。窗口极短,但理论上可重放。
+- **Redis 故障时限流失效**:见 §6.1.3。刻意取舍。
+- **删除不可恢复**:见 §8.2。已要求提前告知使用者。
 
 ### 11.2 技术风险
 
 | 风险 | 说明 | 缓解 |
 |---|---|---|
 | 单机部署无冗余 | 本地卷存附件,机器坏了附件就没了 | 备份脚本 + 异地保存;附件目录单独挂盘 |
-| 大文档编辑器性能 | 几千行的页面,Tiptap 首次渲染会卡 | M4 压测;必要时引入分块加载,但那是阶段二的事 |
-| `pg_trgm` 检索精度 | 对长文档的相关度排序不如专业搜索引擎 | 阶段一可接受;阶段二换 Meilisearch |
-| 中文分词 | 已在 §2.3 给出方案,但 `ILIKE '%x%'` 在超大表上仍需注意 | 阶段一数据量下无虞;上量后必须迁 Meilisearch |
+| 大文档编辑器性能 | 几千行的页面,Tiptap 首次渲染会卡 | 阶段一可接受;必要时引入分块加载 |
+| `pg_trgm` 检索精度 | 对长文档的相关度排序不如专业搜索引擎 | 阶段一数据量下无虞;**上量后必须换 Meilisearch** |
+| 前端组件测试缺失 | 未安装 jsdom / testing-library,组件渲染没有自动化覆盖 | 把值得测的逻辑**抽成纯函数**再测(树导航 / 个人列表 / 高亮 / 批量移动选择);组件本身仍靠人工验收 |
 
-### 11.3 待确认(不阻塞开工)
+### 11.3 仍然开放
 
-#### 已关闭(v2.4 · 2026-09-26)
-
-- ~~附件单文件大小上限、允许的扩展名白名单~~ → **已定稿**:白名单
-  `.png / .jpg / .jpeg / .gif / .webp / .avif`(**不含 SVG** —— 它能内嵌 `<script>`,
-  是典型的存储型 XSS 载体),单文件 ≤ 10MB。
-  两个值都是**代码里的常量**,不做成环境变量:放宽白名单是安全决策,
-  不该靠改一个配置就能办到。
-- ~~`Cmd+K` 与模态弹窗并存~~ → **已修**:新增全局模态计数(`apps/web/src/lib/modal-store.ts`),
-  有模态时快捷键不再叠加。用计数而不是布尔 —— 布尔量在两层模态嵌套时会提前解锁。
-- ~~**节点成员管理入口**~~(v2.3 欠项,当时列为下一轮第一优先)→ **已实现**,
-  见 §7.2 与 §8.5。它是「增量导入无法表达调岗」那条限制的配套,
-  不是可选优化 —— 少了它,调岗只有一半路径走得通。
-
-#### 仍然开放
-
-- **是否需要"仅创建者可见的草稿"这一状态**(数据模型已预留 `draft`,阶段一未启用)。
-- **移动端**:阶段一完全不做,但要提前确认"同事会不会真的在手机上查文档";
-  如果是刚需,响应式布局的成本要提前排进去。
-- **附件的孤儿文件**:上传了但没插进文档的图片不会被回收。阶段一不处理(数据量小,
-  而清理需要引用计数)。若磁盘开始吃紧,再考虑按 `updated_at` 扫描 `content_json` 反查。
-- **`?root=` 已经能用,但前端还没用它**。左侧组织树仍然一次性拉全量。
-  这是**刻意的**:按需加载要配虚拟滚动、展开态与服务端分页的同步,是独立一块工作量。
-  接口先留好形状,是为了将来改的时候不用动契约 ——
-  **不要把这一条读成"规模问题已经解决"**,它只解决了"将来要改时不必动接口"。
-- **重置密码之后,目标用户不会收到任何通知**(v2.6 新增的一项)。
-  目前他只能靠"下次登录时被要求改密"察觉有人动过他的密码。
-  更严的做法是"重置后给本人发通知"或"双人审批才能重置",
-  两者都建立在**通知中心**上,而通知中心是阶段二的事(§10 已把它列为硬约束之一)。
-- **打包体积涨到 871KB(压缩后 275KB)**(v2.10 新增)。
-  来源是把编辑器能力补全:语法制导的 18 个语言文件(highlight.js 自带 190+,
-  全量引入会再大几百 KB)+ ProseMirror 的表格模块。
-  这**不是 bug**,但已经超过 Vite 默认的 500KB 提示线,值得在阶段二之前处理。
-  方向有两个:①**按需加载语法**(用到某个语言才 `import()` 那一个语法文件,
-  再把 highlight 结果换成异步的 —— 需要处理"先渲染纯文本、高亮到了再替换"的闪烁);
-  ②把编辑器整块做路由级 `lazy()`(但正文页是主场景,收益有限)。
-  **不要**靠"再砍几个语言"来压 —— 那是在砍能力去换一个数字。
-  在通知中心落地之前,这条张力靠两件事兜着:**每次重置都进审计** +
-  **重置会踢掉他的会话** —— 见 `DEPLOY.md` §10.2.1 的完整说明。
-- **导出的 PDF 格式**:接口留了 `?format=`,目前只实现 `md`。PDF 需要额外依赖
-  (无头浏览器或 wkhtmltopdf),要不要为它把一个几百 MB 的依赖塞进镜像,值得单独决策。
-- **自动清理删掉的东西,只有审计日志里有痕迹**。管理员能在 `/audit` 看到
-  `node.purge.auto`(actor 为空,带标题与子树大小),但**原作者看不到**
-  "我写的那篇被系统到期清掉了"。要补这个得做通知中心,那是阶段二的事。
-- **成员弹窗没有分页与搜索**。一个部门下几百人时,「下属成员」那一段会很长。
-  阶段一的组织形态是"部门 → 组"两层,几百人同属一个部门是正常量级 ——
-  等真出现这样的实例再补,现在加是过度设计。
-
-**v2.0 新增的四项:**
-
-- **审计覆盖面(v2.0 重写)**:v1.x 的缺口是"空间成员变更不留痕"(当时受模块环所限,写入侧已拆成
-  纯函数 `audit/record.ts` 解环)。v2.0 起要留痕的变成三类,**都在 §9.2 批次三里**:
-  ①**所有者变更**(谁把某个组交给了谁);②**授权增删**(谁给了谁编辑权、谁收回了);
-  ③**组织归属变更**(谁把谁调进了哪个部门)。这三类比原来的"成员增删"更该留痕 ——
-  它们直接决定"谁能改什么",一旦出事是要追责的。
-  v2.4 补上第四类:**节点级的成员增删**(`org.member.add` / `org.member.remove`),
-  以及系统自己的动作 `node.purge.auto`(actor 为空)。
-- ~~**保密能力(读全员开放的代价)**~~:**v2.13 已解决。** 原文写的是"v2.0 明确读对所有登录用户开放,
-  系统不提供任何保密手段"—— 用户后来要求「保密手段可以加上」,于是落地了 `visibility` +
-  独立读者名单(§5.6)。**这一条不再是"缺失的能力",改为"已提供、需按需使用"。**
-  这是有意的选择,但**首次部署时必须明确告知使用者** —— 避免有人把敏感内容(薪酬、合同、
-  个人材料)当普通文档写进去。若将来真出现保密需求,那是**权限模型级的设计变更**,不是加个开关。
-- ~~组织架构怎么进系统~~ → **已定稿(v2.1)**:Excel **增量**导入。模板列设计、匹配规则、已知限制全部写在 §8.5。
-- ~~节点树的规模上限~~ → **接口形状已就位(v2.4)**:`GET /org/tree?root=<id>`,只返回那棵子树。
-  仍开放的部分见上面第 4 条 —— 前端还没真正用上它。
-
-**v2.2 新增的两项:**
-
-- **登录标识要不要再留一个可选邮箱**:v2.2 起用工号登录,`users` 表已无邮箱列。
-  阶段二的通知中心若要做"邮件提醒",需要再加一个可选的 `email` 列。
-  **现在不加** —— 免得留一个没人用的字段;等真要做通知时再加。
-- **初始密码全员相同的风险**:按用户要求统一 `123456` + 首登强制改密(§6.1.2)。
-  三条缓解措施已落实,但**在某人首次登录改密之前,知道他工号的人仍可登进他的账号**。
-  若要更严,可改为"管理员生成一次性激活码、批量导出后分发"——需要额外的字段与界面。
+- **是否需要「仅创建者可见的草稿」这一状态。** 数据模型里 `draft` 是合法取值
+  (`NODE_STATUSES`),但没有接口会设置它 —— 现状等于未启用。
+  ⚠️ 注意它与 `visibility=restricted` 不是一回事:前者是**生命周期**,后者是**访问范围**。
+- **移动端**:阶段一完全不做,但要先确认「同事会不会真的在手机上查文档」。
+- **附件的孤儿文件**:上传了但没插进文档的图片不会被回收。清理需要引用计数,阶段一不处理。
+- **重置密码后通知本人**:需要通知中心,属阶段二。
 
 ---
 
-## 12. 附:开发约定
+## 12. 开发约定
 
-- **提交规范**:`feat: / fix: / refactor: / docs: / chore:`,一个提交只做一件事。
-- **分支**:`main` 保持可运行;功能开 `feat/xxx`,合并前必须过 M 阶段对应的验收。
-- **测试优先级**:权限判定 > 页面树删除/移动 > 正文保存 > 其他。前三个是"错了不会立刻报错"的类型,必须有测试兜住。
-- **密钥管理**:任何密钥、`.env`、凭证不入库、不写入文档、不留存在共享机器上。仓库根目录的 `.gitignore` 已覆盖。
-- **提交前自检**:`pnpm typecheck && pnpm lint && pnpm test`。
+- **注释写「为什么」,不写「做了什么」。** 代码已经说明做了什么。
+- **凡是写数据的逻辑,只允许存在一份。** 抄一份出来的代价是某天有人只修了其中一份。
+- **不要重排章节号** —— 代码注释里引用了它们(§0.4)。
+- **不要手改生成块**(§0.1)。改代码后跑 `node scripts/gen-doc.mjs`。
+- **新增读取路径时,把它加进 `verify-org` 的侧信道断言里**,而不是只加进 §5.6 那张表。
+- 提交前跑 `pnpm check`(typecheck + lint + test + audit:docs)。
 
 ---
 
 ## 附:变更记录
 
+> 这份文档只记录**当前状态**。历史变更在 git 里。
+> 下面这张表存在的唯一理由,是让 `audit:docs` 能校验「文档头版本 = 最新一行」
+> (防止有人改了内容却忘了改版本号)。
+
 | 日期 | 版本 | 变更 |
 |---|---|---|
-| 2026-09-26 | v1.0 | 初稿。检索方案由早期的 "PG tsvector" 修正为 "pg_trgm + ILIKE"(原因见 §2.3:tsvector 分词器对中文不可用) |
-| 2026-09-26 | v1.1 | §11.1 关闭「与既有知识库项目的关系」这一阻塞项 —— 用户已放弃该项目,不再并存。阻塞项由两项减为一项 |
-| 2026-09-26 | v1.2 | 开工实测后回写,共三处:①**§2.5 新增** —— NestJS 12 是 ESM-only 且官方新项目默认 ESM,故本项目采用 ESM;实测 esbuild 即使开 `emitDecoratorMetadata` 也不产出 `design:paramtypes`,故 Vitest 必须配 `unplugin-swc`;Prisma 7 的生成器 / 配置文件 / driver adapter 三处破坏性变化,以及 `importFileExtension` 这个 ESM 专属坑。连带把 Node 20 → **22 LTS**、TypeScript → **6.0.x**(均给出依赖下限依据)。②**§4.2** `audit_logs.ip` 由 `inet` 改为 `text`(Prisma 无 inet 标量)。③**§5.3** 补充同层多规则命中次序(user 强于 group;deny 先于一切)—— 原伪代码未定义该情形。 |
-| 2026-09-26 | v1.3 | M1 完成并**实测验收通过**(装上 Docker Desktop 后补跑):`docker compose down -v` 清空数据卷 → `up -d` → 6.5 秒四容器就绪;经 Nginx 反代 `/api/v1/health` 返回 200、`/api/v1/health/ready` 报 database 与 redis 均 up;全新建库迁移自动执行,扩展与三个手写索引均就位。同步修正两处实现缺陷:①`pnpm-lock.yaml` 与 package.json 的 typescript 版本不一致(`--frozen-lockfile` 会失败,影响任何全新克隆与 CI);②api 镜像原用 `pnpm exec` 调 prisma,导致每次容器启动都去外网下载 pnpm 并 relink 依赖(启动 39s+ 且耦合外网),改为直调 `./node_modules/.bin/prisma` 后降到 6.5s。§9 的 M1 任务项已勾选完成。 |
-| 2026-09-26 | v1.4 | ①**§6.1.1 新增**:定死会话机制 —— 不透明会话 id + PG `sessions` 表(库里只存 token 的 SHA-256),并说明为何不用 JWT(可吊销 / 符合 §3.2「Redis 不作为唯一数据源」/ `SESSION_SECRET` 留给阶段二签短期 JWT);同时给出与 §3.1「同一套 JWT」的衔接路径与 `SESSION_COOKIE_SECURE` 的运维注意。②**§4.3 补充**:实测发现三个"手写索引"中有两个可以表达进 schema(`pages_path_idx` 用 `ops: raw("text_pattern_ops")`、`page_contents_trgm_idx` 用 `type: Gin` + `ops: raw("gin_trgm_ops")`)—— 这一点很要紧,因为 schema 里没声明的索引会被 `migrate dev` 生成 `DROP INDEX` 删掉,而删掉三元组索引会让中文检索**静默**退化成全表扫描。③**§6.2 新增接口** `GET /auth/setup-state`(公开):§7.2 的 `/setup` 路由需要它才能判断该显示引导页还是登录页。④**M2 进度**:认证后端已完成并端到端实测(初始化 / 登录 / 登出 / 守卫 / 会话吊销),另新增 72 字节密码上限校验以规避 bcrypt 静默截断。 |
-| 2026-09-26 | v1.5 | ①**§5.3 新增**「`deny` 与 `role='none'` 的分工」小节 —— 两者语义不同且**都必要**(deny 是绝对否决、`role='none'` 可被更具体的层推翻),并定死 UI 约定:「拒绝访问」写 `deny=true`,原型的对应交互同步修改。②**§9 的 M2 全部勾选完成**并补齐实测口径(41 项端到端断言 + 各包单测数)。③**修复死字段**:`users.last_login_at` 此前 schema 有、全代码库无写入,现于登录与初始化时写入。④**去重**:`toSpaceRole` 由 auth / space 两处私有副本上提到 `packages/shared/src/roles.ts`。⑤**修复前端请求封装的 header 覆盖 bug**:`apiFetch` 原先把 `...init` 展开在 `headers` 之后,导致调用方一旦传 headers,`Accept: application/json` 被整块顶掉。⑥修正 `packages/shared/src/index.ts` 的模块制式注释 —— 它是 **ESM**(`"type": "module"`),原注释误写为「编译为 CommonJS」。 |
-| 2026-09-26 | v1.6 | ①**§9 的 M3 全部勾选完成**,并补齐两段实测口径(接口层 55 项 + 直接查库 11 项)。②**§8.1 补「实现要点」**:一条 UPDATE 递归重建路径的写法、用路径前缀做防环(以及末尾斜杠不能省的原因)、`substring(x from $n)` 的**静默 NULL 陷阱**(必须改写成 `substr(x, $n::int)`)、软删除只标记未删行(否则 `removedCount` 虚高)、彻底删除必须按 depth 从叶子往根删(`onDelete: Restrict` + `DELETE` 不支持 `ORDER BY`)。③**§5.4 矩阵新增**「彻底删除(不可逆)」一行(admin 起,门槛刻意比软删除高一级),`page.purge` 同步进 `CAPABILITIES`。④**§6.2 接口调整**:`GET /trash` → `GET /spaces/:id/trash`(回收站天然以空间为界,做成全局列表反而要额外处理跨空间权限)。 |
-| 2026-09-26 | v1.7 | ①**M4/M5/M6 全部完成并实测验收**：端到端 76 项断言全通过、单测 299 项全绿、前端 8 个页面用无头浏览器实渲染确认（验收细节与踩到的坑见 §9.1）。②**§5.5 缓存失效改为空间级世代号**（与原方案不同，已写明理由：`SCAN` 既慢又可能漏，漏了就是静默越权），并补充「Redis 是可降级依赖，判定正确性不依赖缓存可用性」。③**§6.1 新增请求体上限 8MB 的说明** —— Express 的 JSON 解析器默认只有 100kb 而正文上限 2MB，不抬高会让长文档存不进去；同时说明 body-parser 的错误形状（它不是 `HttpException` 子类），过滤器必须显式识别，否则「请求体过大」会变成 500。并记录「不从传递依赖 `express` 里 import」这条教训。④**§4.3 新增 jsonb 行为说明**：jsonb 不保留键顺序，任何「内容有没有变」的判断必须按语义比。⑤**§8.3 补排序策略**（主键是命中位置而非 `similarity()`，因为中文两字查询的相似度普遍为 0）、**§8.4 补评论实现要点**（只允许一层回复、跨页面 `parentId` 拒绝、改正文与标解决是两套权限）。⑥**§7.4 补编辑器实现要点**：Tiptap 扩展必须声明为直接依赖、`content` 只在挂载时读一次、工具栏按钮要拦 `mousedown`、正文冲突用 `baseUpdatedAt` 而非 `pages.version`、不引入 typography 插件。⑦**§6.2 补 5 条接口**（导出、候选主体、评论计数、附件上传）。⑧**§11.3 新增 6 项待确认**：孤儿附件、PDF 导出、审计缺「空间成员变更」、`Cmd+K` 与模态叠加、回收站未做自动清理。⑨文档头状态改为「阶段一全部完成」。 |
-| 2026-09-26 | v1.8 | ①**部署上线**:服务已部署至内网服务器,4 容器 healthy;在**部署实例上**复跑验收 76/76 通过,`scripts/backup.sh` 与 `restore-drill.sh` 亦实跑通过(10 张表逐表精确一致,全程不动生产库)。②**§11.1 关闭剩余的「备份介质」阻塞项** —— 用户明确表示此事自己无法决定,**暂不处理、不再追问**;风险现状已如实写入该行留档。阻塞项清零。③**§9.1 补记第 5 个真问题**:恢复演练原用 `pg_stat_user_tables.n_live_tup` 比行数,那是 autovacuum 维护的**估算值**,在刚恢复出来的库上与生产库不可比,会报出「备份坏了」的**假失败**;已改为逐表 `count(*)`。**假失败比没有演练更糟** —— 要么让人对好备份失去信任,要么让人对真问题麻木。④文档头状态改为「已上线」。 |
-| 2026-09-26 | v2.0 | **权限与空间模型整体重做(组织架构驱动)**。用户指出初版把"空间"当成"用户自由创建的容器"是理解偏差 —— 实际它是**公司既有的组织层级**,且**读全员开放**。①**§1.1 定位重写**:新增"通用知识库 vs 本项目"对照表。②**§1.5 新增**:记录四条变更理由与影响面(作废三张表 / 改名两张 / 新增两张 / 不受影响六块)。③**§4 整体重写**:`spaces` / `space_members` / `page_permissions` 作废;`pages` → `nodes`(空间与页面**合并为一棵树**,加 `kind` / `owner_id`);新增 `org_assignments`(组织归属,多对多)与 `node_grants`(授权名单);删除 `users.department`(单值无法表达多归属)。④**§5 整体重写**:删除五档角色与 `CAPABILITY_MIN_ROLE` 查表,改为四个纯函数 `canRead` / `canEdit` / `canManage` / `canCreateUnder`;**删除 `deny` 与「最小可见」两条铁律**;新增「**授权受组织范围约束**」这一条规则(组长不能把权限给到别的部门的人)。⑤**§6.2 接口清单重排**:分认证 / 组织架构 / 节点 / 授权 / 评论 / 检索治理六组,权限列由"角色"改为"关系";新增组织架构维护 6 条接口。⑥**§7.2 路由**:登录**直达工作台**,删除 `/spaces` 与成员管理页,`/s/:spaceId/p/:pageId` → `/n/:nodeId`;权限设置由独立页面改为**节点级弹窗**。⑦**§8.3 检索取消权限过滤**(读全员开放的必然结果),并写明"**系统不提供保密能力**"这一代价。⑧**§9.2 新增**:v2.0 改造任务清单(四批次,约 14 个工作日)+ 六条新验收口径,并**明确标注 `pnpm verify:m4m5` 必须整体重写**(它的部分断言在新模型下本身就是错的)。⑨**§11.3** 新增四项待确认(审计覆盖面 / 保密能力 / 组织架构导入格式 / 节点树规模上限)。 |
-| 2026-09-26 | v2.1 | **组织架构导入方案定稿(§8.5 新增)**。用户选定**增量**语义 —— 模板只做增量,删人走手工。①**三步两阶段**:下载带有当前数据的模板 → 上传得到**差异预览**(`dryRun`,不写库)→ 确认写入。预览与写入**共用同一份解析逻辑**,避免两边算出不同结果而管理员照着预览做决定。②**幂等保证**:同一份表格可反复上传,不会重复建号。③**新增 `节点ID(勿改)` 只读列** —— 用户明确"部门只会更名不会消失",若只用名称匹配,改名后会**自动创建一个重复部门**(旧部门及其文档仍在);此列成为匹配节点的第一依据,改名被正确识别为「更名」。④**已知限制写明**:增量语义下"表格里没写"与"要删掉归属"**无法区分**,故**调岗需要两步**(导入新归属 + 界面移出旧归属),为此新增**节点成员管理入口**任务(§9.2 批次三)。⑤**离职走界面而非表格**:`users.status` 增加第三档 `departed`,并要求在**该用户创建的页面上标注「已离职」**。⑥批次三 4 天 → 5 天,总计约 15 个工作日。⑦解析库选 `exceljs`(不选 SheetJS:其社区版安全历史问题较多,而上传解析正是攻击面)。 |
-| 2026-09-26 | v2.2 | **登录标识由邮箱改为工号,并定稿密码策略(新增 §6.1.2)**。①**工号取代邮箱**:`users.email`(citext) → `users.employee_no`(text);登录入参、Excel 模板列、人员匹配键随之全改;`citext` 扩展不再需要。用 `text` 而非数字类型 —— 工号常带字母前缀与前导零(`KC2026007`),当数字存会丢信息。②**统一初始密码 `123456`**,服务端内置,**不进模板**;新增 `users.must_change_password`(默认 true)。③**新增 §6.1.2**:新密码 ≥8 位且须同时含字母与数字;**强制改密必须服务端拦** —— 全局守卫白名单(除 `/auth/change-password` 与 `/auth/logout` 外一律 403 `PASSWORD_CHANGE_REQUIRED`),只做前端跳转无效;强度校验**只在改密接口做**,登录时不做(否则收紧规则会让老账号登不上)。④**如实写明风险**:在某人首登改密之前,知道其工号的人可以登进他的账号;已落实三条缓解(强制改密 / 改密前无任何业务权限 / 登录失败不区分"工号不存在"与"密码错误")。⑤**§6.2 新增** `POST /auth/change-password`;`/auth/me` 返回 `mustChangePassword`。⑥**§8.5 模板**改为「工号 / 姓名 / 部门 / 组或项目 / 负责人 / 节点ID」,并明确**无密码列**。⑦**§7.2** 新增 `/change-password` 路由。⑧**§11.3** 新增两项(可选邮箱字段、初始密码风险与更严的替代方案)。⑨**认证模块由"保留"改为"需重做"** —— 文档头状态同步更正(原判断有误)。 |
-| 2026-09-26 | v2.3 | **v2.x 模型全部落地并完成全量验收**。§9.2 四个批次全部完成;新增 **§9.3「改造中实跑发现的问题」**。①**数据模型**:迁移整体重建(旧的 v1 迁移作废 —— 模型变化是根本性的,而旧数据没有迁移价值);补充 `users.employee_no`、`must_change_password`,树的响应补 `version` / `status`(拖拽要用 `version` 做乐观锁,少了它前端只能"拖之前先拉一次详情",而两次读之间数据可能已经变了 → 静默落到错误位置)。②**权限服务**:`PermissionService` 成为唯一入口;`canGrantTo` 独立出来承担「授权受组织范围约束」;`access` / `requireEdit` / `requireManage` 增加 **`allowDeleted`** 参数(回收站三个操作必须能判定已删节点)。③**组织架构管理**:Excel 导入完整落地(模板 / 预览 / 写入);模板由一列 ID 改为 **「部门ID(勿改)」+「组ID(勿改)」两列** —— 一列在「组是新建的、而部门刚改过名」时会重复建部门;现有部门没写负责人时**保持原所有者不动**,并**不做任何兜底继承** —— 这两条都是为了保住「下载模板原样上传 = 零差异」这条性质,已写进单测。④**前端**:登录直达工作台;组织树替代页面树;节点级权限弹窗分三段(所有者 / 上级所有者 / 额外授权)。⑤**六个只有真跑才会暴露的问题**全部记入 §9.3:恢复与彻底删除因 `allowDeleted` 未下传而永远 404、`GET /auth/me` 漏出强制改密白名单导致用户卡在「无法连接到服务」、导入接口的权限检查排在文件校验之后、超管在界面上没有换部长的入口、模板 ID 列不够、组织架构页把文档标成「组长」。⑥**验收**:`pnpm verify:org` **85 项断言全通过**;单测 shared 13 / web 17 / api 147 = 177 项;前端 11 个页面用无头浏览器 + CDP 注入会话实渲染确认,页面内无 JS 异常;数据库契约自检按 v2 契约重写并加了一条「v1 的 5 张表必须不存在」的反向断言。⑦`pnpm verify:m4m5` 删除,§9.1 降级为历史记录并标注「口径不要照搬」。 |
-| 2026-09-26 | v2.4 | **§11.3 的欠账清零 —— 补齐「节点成员管理入口」,并清掉三项遗留。** ①**节点成员管理(上一轮列为第一优先)**:新增 `GET/POST /nodes/:id/members` 与 `DELETE /nodes/:id/members/:userId`,以及 `/nodes/:id/member-candidates`;前端在组织树上加 `☰`、文档页加「成员」按钮,弹窗分「直接成员 / 下属成员」两段(只有直接成员能从这里移出,子孙的归属要到对应层级去动)。**读全员开放、写要 `canManage`(超管另行放行)**;加入时受组织范围约束;**移出只删那一条归属,不改变所有权**——但会缩小他的组织范围,这两个后果写在确认框里并有单测钉住(`removal-note.test.ts`)。②**成员候选人与授权候选人刻意分成两条接口** —— 门槛不同(后者超管不在其列),复用会出现「超管能改成员、但候选列表是空的」这种自相矛盾的界面。③**回收站自动清理**(`RetentionService`):默认保留 30 天、每 6 小时扫一次,可用 `TRASH_RETENTION_DAYS` / `TRASH_PURGE_INTERVAL_HOURS` 覆盖,**`<=0` 表示关闭**(自动删除用户数据这件事必须能被明确关掉);过期判定抽成纯函数 `isPastRetention` 并单测边界;超管可 `POST /admin/maintenance/trash-purge`(支持 `?dryRun=true` 先空跑);审计动作 `node.purge.auto`(actor 为空)。删除逻辑与手工「彻底删除」**共用 `NodeService.purgeSubtree`** —— 凡是删数据的逻辑只允许存在一份。④**组织树按根查询**:`GET /org/tree?root=<id>`;**只返回子树时仍要补查祖先参与判权**,否则子树里每个节点都会被算成"我改不了"且不报任何错 —— 验收里有一对断言专门守它(同一个叶子,部长能改、别部门的人不能改)。⑤**`Cmd+K` 模态冲突已修**:新增全局模态计数(`apps/web/src/lib/modal-store.ts`),用计数而不是布尔 —— 两层模态嵌套时布尔会提前解锁,表现是"关掉里层、快捷键却恢复了"。⑥**关闭四项待确认**:附件白名单与上限(图片 6 种 / 10MB,**常量不入环境变量** —— 放宽白名单是安全决策)、回收站保留天数、自动清理、`Cmd+K`。⑦**修正接口清单与实现的多处漂移**(`/org/departments` → `/org/nodes`、补 `/org/scopes` 与 `/nodes/:id/owner-candidates`、去掉回收站与人员列表上并不存在的查询参数)。⑧**新增 §9.4**,记录两处刻意取舍:成员与授权为何不合并、删除逻辑为何只允许有一份。⑨**验收**:`pnpm verify:org` 由 85 项扩到 **129 项**,新增 L(节点成员与调岗两步)与 M(保留策略与按根查询)两组;单测 177 → **193 项**;前端用无头浏览器 + CDP 实渲染并**驱动交互** —— 成员弹窗、以及"弹窗开着时按 Ctrl+K 不叠出命令面板"的行为断言。⑩**部署**:服务器实例复跑 129/129 通过。 |
-| 2026-09-27 | v2.5 | **按用户实测反馈重做四处。** 用户的四条反馈原话:「页面整体的视觉效果非常差,图标、字体大小、字样都非常不对称」「评论只是评论,不是问题,你在页面中直接把评论列为问题,这个不对,**你不要擅自赋予评论额外的含义**」「重置密码,不需要输入原密码,直接输入新密码;用户在初次登录页面以后,无法回到 login 页面,必须改密码才行,这样是不合适的,**用户第一次登录,不应该记录登录状态**,重置完密码以后,应该要用户重新登录才对」。①**首次登录不再建立会话**(§6.1.2 整体重写):`POST /auth/login` 变成**两种结果**(`LoginResponse` 判别联合)—— 需要改密的账号**不下发 Cookie**,只给一张 10 分钟的一次性 `setupToken`(`base64url(payload).HMAC-SHA256`,无状态签名,复用 `SESSION_SECRET`,`SESSION_SECRET` 未配置时**明确报错不降级**);新增 `POST /auth/initial-password` 凭凭证改密,**不需要原密码**,成功后**仍不建立会话** —— 用户必须用新密码重新登录。②**删掉整套「改密白名单」机制**(`@AllowDuringPasswordChange()` 装饰器连同文件一起删除):不再存在"已登录但未改密"这种半登录态,白名单也就失去了存在意义;守卫里**保留一条纵深防御**(发现该状态就吊销会话并按未登录处理)。③**评论去掉「问题/已解决」语义**(§8.4 重写):删 `comments.status` 列(迁移 `drop_comment_status`)、删「标记已解决/重新打开」与「已解决」徽章、树角标从"未解决评论"(琥珀色)改为**评论总数**(中性灰 —— 琥珀色本身就在暗示"有待处理的事");`CommentView` 用 `canEdit`(仅作者)/`canDelete`(作者或祖先所有者)替代 `canResolve`,顺带修掉"所有者看得到「编辑」按钮却 403"。④**修树缩进**:`(depth > 2 ? 2 : depth)` 把第三级之后全钳成同一缩进,改为 `Math.min(depth, 8) * 13 + 6`。⑤**一轮视觉规范化**:抽出 `TOOL_BUTTON_CLASS`(工具栏 6 个按钮原先各有各的字号,`+`/`✎`/`×` 是 14px 而 `⊞`/`⚙`/`☰` 是 11px —— 这就是"字样不对称"的来源)、树行统一 `h-7`、树图标字号统一、工具栏内边距与正文对齐(`px-4` → `px-6`)、页标题 `text-2xl` → `text-xl`(24px 配 12px 元信息落差过大)。⑥**新增 §9.5**,记录这一轮实跑发现的三个问题,其中第 3 条(服务器验收失败而本地全过)的教训是**不要写依赖"历史记录还在"的断言**。⑦**验收**:`pnpm verify:org` 129 → **143 项**(A 组按新流程重写,含三条关键的否定性断言:首登不下发 Cookie、改完仍无会话、同一凭证不可复用;K 组改为自己制造 `org.import` / `node.content.update`,顺带在端到端层面验了「模板原样上传 = 零差异」);单测新增 `setup-token.spec.ts`(12 项,覆盖"换了 payload 但签名没变"这类伪造);本地与服务器实例**各跑 143/143**;前端用无头浏览器 + CDP 驱动交互确认(首登页只有两个输入框、有「返回登录页」、改完回登录页并显示提示、树缩进实测 `[6,19,32,45]` 每级 +13)。⑧**部署**:服务器已更新并复跑通过。 |
-| 2026-09-27 | v2.6 | **由用户一句「测试账号没了?」触发的一轮 —— 补上一个缺失的能力,并修掉一个会反复咬人的缺陷。** ①**新增「管理员重置密码」**(§6.1.4 新增):`POST /admin/users/:id/reset-password`。此前系统里**根本没有**"同事忘密码"的出口,唯一的办法是运维进容器连数据库改哈希 —— 既不该是运维的活,也不留任何痕迹。一次重置做三件事:写回初始密码 `123456`、置 `must_change_password = true`、**吊销他全部会话**(漏掉第三条,"重置"在管理员心里就不成立 —— 那是"我把他踢出去了");两条刻意的拒绝:**不能重置自己**(能点按钮就说明他已经登进来,允许只会制造一次手滑)、**不能重置已离职/停用的人**(重置了也登不进来,错误信息直接点出真正原因)。②**验收脚本改为幂等**(`verify-org.mjs` 新增 N 组):A 组为验首次改密**必须真改** KC003 的密码,`login()` 还会顺手改 KC004,而**此前没有任何地方还原** —— 后果是①文档里写的 `123456` 登不上(用户直接撞上)②下一轮 A 组走"跳过"分支,总项数 160 → 148,看着像回归,其实是上一轮脚本自己造成的。现在 N 组结尾用新接口把两个账号放回去,并顺带断言这个接口本身(越权 403 / 不能重置自己 400 / 重置会吊销已有会话 / 重置后仍不下发会话 / 重置离职者 400 并复原)。实测:**本地连跑三次 148 → 160 → 160,服务器连跑两次都是 160**。③**修掉一处判权缺口**:`GET /admin/users` 此前**根本没有判权**,任何登录用户都能拿到全公司名册(而文档一直写的是超管)—— 是加 `mustChangePassword` 时暴露的,那个字段等于一份"谁的密码还是 123456"的目标清单。已按文档收紧为超管专属;「这个部门里有谁」仍走 `GET /nodes/:id/members`(读全员开放)—— 公开的是**组织归属**,不是账号状态与登录时间。前端 `/admin/*` 补一层 `RequireSuperAdmin`(只负责体验,非安全边界)。④**`OrgUserView` 增加 `mustChangePassword`**,人员管理页对这类人标「初始密码未改」(带 tooltip 说明后果)。⑤**实渲染验证抓到一个跨模块的文案缺陷**:`window.confirm` 是纯文本,写给 Markdown 看的 `**加粗**` 会把星号原样显示出来 —— 新增的重置确认框**和 v2.4 就有的「移出成员」确认框**都中招。两处一起改掉,并各加一条断言把这类符号钉死(§9.6)。⑥**人员管理页表格列对齐**:姓名列原为 `flex-1`,后面多一个徽章就被挤窄,同表各行姓名起始位置不一致;徽章也改为定宽槽位;`上次登录` 与 `状态` 因此各归其位;重置按钮改用 `Button variant="danger"`(顺带修掉"同一行两种按钮高度不同");页面容器由 `max-w-4xl` 放宽到 `max-w-6xl` —— 九列的表在 4xl 里会挤到折行。⑦**验收**:`pnpm verify:org` 143 → **160 项**;单测 212 → **220 项**(shared 13 / web 32 / api 175,新增 `reset-note.test.ts` 与 `removal-note.test.ts` 的纯文本断言)。⑧**部署**:服务器已更新并复跑两次 160/160。 |
-| 2026-09-27 | v2.7 | **定死字号刻度,并让规则由机器执行(§7.5 新增)。** 触发点是用户**第二次**反馈「字体太小了」——在截图上圈了左栏、右栏、主区三处,并标注主区"字体正常"。说明问题不是某一处,而是**没有刻度**:全项目当时有 9 / 10 / 11 / 12 / 13 / 14 六个档混用,每一处单看都有理由,合起来就是"不成比例"。①**四档刻度**:正文 15px(`.kc-prose`)/ **内容 14px**(组织树的行、右栏目录项、评论正文)/ **次级 12px**(标签、提示、时间、tab、面包屑)/ **徽章 11px**(唯一的任意值)。判断只有一句:**它是"内容"(要被读)还是"标签"(要被认出)?** 左栏树行两次被指"太小",就是因为它明明是内容(13px)却按标签的尺寸在写。②**刻意不留 13px**:起草时写了五档并给"次级"单开 13px,写完才发现代码里已有 **64 处 `text-xs`(12px)** —— 要么大改、要么这一档是空文。**多一档就多一次分歧的机会**,于是退回四档(理由写进 `lib/typography.ts`)。③**规则由机器执行**:新增 `apps/web/src/lib/typography.ts`(刻度)+ `typography.test.ts`(**扫描源码**,断言无 <11px、无 11px 以外的任意值字号)。扫描器**刻意不区分注释** —— 注释掉一行照样被查到,规则没有绕过的余地;代价是写注释时换一种说法(这一条也写在测试的注释里)。④**全量对齐**:清掉 17 处 `text-[10px]` 与 1 处 9px(树上的展开箭头 ▾/▸ —— 9px 几乎看不出是箭头),左栏树行 13→14px、行高 `h-7`→`h-8`、面板宽度 288→320px,右栏目录项与评论正文 12→14px,顶栏与各类徽章同步对齐。⑤**修掉放大字号带来的副作用**:树行的 6 个悬停按钮原为 `flex-none` **常驻在流里**(吃掉 130~160px),字号变大后「CRM 项目概览」被截成「CRM 项…」。改成**绝对定位的悬停覆盖层**,实测 **8 个标题零截断**、悬停前后标题宽度完全一致(245px → 245px,无布局跳动)。⑥**验证**分两层:源码扫描(CI 内)+ **运行时核对**(无头 Chrome 遍历每个叶子文本节点断言计算字号 ≥11px)—— 6 个页面 + 2 个弹窗全部为 0,可拦住源码扫描漏掉的继承与特例。⑦**反思写进 §9.7**:用户说"字体太小",正确的问题是「**这里的字应该是几号?依据是什么?**」,而不是「这一处调到多少才好看?」—— 前者产出一个刻度表和一条检查规则,后者只会产出更多各有理由的数字,然后必然有第三次反馈。⑧**顺带修掉验收脚本自身的两个缺陷**(部署时在服务器上暴露,3 项失败**都不是产品问题**):**(a) 只还原密码、不还原节点与所有者** —— v2.6 的教训只落实了一半,一次崩溃的运行把「后端组」所有者改成赵敏并留下 3 个测试节点,于是下一轮从 C 组开始失败、看起来像功能坏了;新增 `restoreToolState()`(密码 + 残留节点 + 被改的所有者),正常路径在 N 组调、异常在 `finally` 兜底、**开头还自检残留并自动清掉**。**(b) 断言太严而一直假绿**:「赵敏看不到别人节点上的授权变更」只查"日志里有没有 `grant.replace`",可她**自己合法做过的**授权变更本来就该出现(审计可见性规则是"我是操作者或目标在我管辖内")—— 它能通过只因干净的库里恰好没有反例。改为按操作者过滤。**(c)** I 组的 `.body.some(...)` 在中途失败时会抛异常打断脚本、连收尾还原都跑不到(库越跑越脏),抽出 `arr()` 兜底并把 `main()` 包进 `try/finally`。⑨**验收**:单测 220 → **223 项**(web 32 → 35);端到端 160 项,本地与服务器**各连跑多次,项数恒定、零失败**;运行时长字号扫描在服务器实例上同样是 0 处 <11px。 |
-| 2026-09-27 | v2.8 | **按 Atlassian Design System 与 Ant Design 的公开规范重做字号与排版(§7.5 重写)。** 触发点是用户**第三次**反馈字体问题,并且说了一句点破性质的话:「你能不能找几个好点的网站去参考一下…或者直接去看看 confluence 是如何做的」—— 前两次我都在**拍脑袋调数值**,第二次甚至自造了一套"11/12/13/14"的刻度,**没有任何外部依据**。①**查到的规范**:Atlassian Design System 的 `font.body.large` = **16/24**(长文)、`font.body` = **14/20**(组件默认,"配合图标时用 Medium 字重")、`font.body.small` = **12/16**("谨慎使用,仅用于次级内容如细字印刷");Confluence 视觉改版明确写着「把最小的标题与正文字号**从 11px 提到 12px**」,编辑器正文 16px。Ant Design 基础字号从 12 提到 14,中文行高 1.5–1.8,字阶控制在 3–5 种。②**纠正两个硬错误**:最小字号 11px → **12px**(11 比 Atlassian 的下限还低);把 tab / 目录 / 评论这些**组件级文字**从 12px 提到 **14px**(它们不是"细字印刷")。③**新刻度**:正文 16/1.7、内容 14/20、组件标签 14/20 + medium、元信息 12/16 —— 三档数值与 ADS 的 `body.small` / `font.body` **完全一致**,因为 Tailwind 的 `text-xs`(12/16)与 `text-sm`(14/20)恰好就是这套值。**规则收紧为"不允许任何任意值字号"**(v2.7 还留了一个 11px 例外,那一档已被规范否掉)。④**显式字体族**:系统字体 + 中文字体按平台覆盖(PingFang SC / Microsoft YaHei / Noto Sans SC),避免"某台机器上难看"。⑤**修掉五个非字号缺陷**(这些都是"看起来像丑、代码里没有一处是错的"):页头元信息因与右侧按钮**抢同一行**被挤成 3 行且日期被拆成两截;页头/卡片/编辑器混用三种横向内边距(24 与 32px)→ 统一 32px;侧栏底部**常驻三段灰色说明文字**(信息架构没做、用说明书补)→ 拖拽说明改为只在拖拽时出现;「组/部门」节点打开是**一块空白编辑器** → 补 `ChildPages`(Confluence 在空间首页列子页面);树只有缩进、没有**层级引导线** → 补上并与上一级展开箭头对齐。⑥**验收脚本第四个漏洞**:脚本会真的**移出某人的组织归属**(L 组验"组员不能移出别人"时目标就是王思远),而收尾只还原密码 + 节点 + 所有者,**归属没收** —— 服务器上王思远的「后端组」真的丢了,表现成"组长改不动自己组里的东西"。新增 `EXPECTED_ASSIGNMENTS` 归属基线,收尾还原 + **开头自检**。至此"脚本改什么就收回什么"覆盖了密码 / 节点 / 所有者 / 归属四类。⑦**一处差点误删**:清理残留前先查创建时间与父子关系,发现 `视觉项目组`(含一个三级页面)**是用户自己建的**(他用来复现更早那个"第三级没缩进"的问题)—— **清理必须按时间/归属区分"用户建的"与"测试建的",不能按标题猜**。⑧**新增 §9.8**,记录这一轮的核心教训:**定"刻度"这件事本身需要参照** —— 自己发明一套看起来很有条理的 11/12/13/14,和被真实产品验证过的 12/14/16,差别不在数字,而在依据;以及"太挤"与"字太小"在观感上是同一件事,只看 `font-size` 会一直找不到病根。⑨**验收**:单测 **223 项**全绿;端到端 160 项,本地与服务器**各连跑两次均 160/160**;运行时字号扫描(遍历每个叶子文本节点断言 ≥12px)5 页面 + 3 弹窗**全部为 0**,并读回关键计算字号(树行 14 / tab 14 / 目录项 14 / 评论正文 14 / 正文 16 / 标题 24)。 |
-| 2026-09-27 | v2.9 | **补上「点击目标尺寸」下限(§7.5)。** 触发点:用户唯一剩下的不满 ——「把这个展开符号搞大一点,不然鼠标点着太费劲了」(截图圈的是组织树里的展开箭头)。它与字号问题同源但**不是同一件事**:那处控件是**点击目标**,不是文字,所以"最小 12px"这条规则管不到它。①**字形 12px 的 Unicode `▾`/`▸` → 16px 的 SVG 雪佛龙**:Unicode 三角在大多数字体里**垂直居中偏移**(下缘比上缘空),看着比字号更小,而且换字体就换样子;SVG 的尺寸与居中自己控制,放大不糊,顺带加了 150ms 旋转过渡。②**点击区 20×20 → 24×24**:24px 是公认下限(Apple HIG 与 WCAG 2.2 的 Target Size 都是 24px),低于它对鼠标就是不友好 —— 用户说的"费劲"是准确的;树行高 36px,放得下。③**悬停反馈从"只有字形变色"改成"字形加深 + 24px 圆角底色"**:只变色的话用户仍不知道该往哪儿瞄准,底色把"可点范围有这么大"直接画出来。④**加 `aria-expanded`**,并补 `focus-visible` 焦点圈(此前键盘用户完全看不到焦点在哪)。⑤**改动最小的证明**:加宽点击区会让整列(徽章、标题、层级引导线)右移 4px,所以把行的 `paddingLeft` 常数从 `6` 减到 `4` —— `4 + 24/2 = 16` 与原先 `6 + 20/2 = 16` **完全相等**,引导线公式一个字没改。实渲染实测:点击区 4 个全部 `24×24`、字形 `16×16`、无子节点的行占位同为 24px(徽章仍对齐)、箭头中心与引导线 x 坐标**逐行相等**(16 / 29)、悬停前后标题宽度不变(237 → 237px,无布局跳动)、点击一下行数 7 → 3、再点一下回到 7、控制台零异常。端到端 160 项、单测 223 项全绿,本地与服务器均已更新。 |
-| 2026-09-27 | v2.10 | **补齐编辑器的三处能力缺口(§7.4 重写该节)。** 三条都是用户实测反馈,共同点是**控件本身没坏,是"做不成事"**:①「添加链接竟然是弹窗输入链接,这个不太对」—— `window.prompt` 除了观感,有三件事**做不到**:只有一个输入框(定地址与定文字要分两次)、不能校验(`javascript:` 与 `data:` 会被直接写进文档)、编辑已有链接时看不到原文。换成贴着按钮展开的气泡:地址 + 显示文字两个字段、提交前归一化与校验、打开时回填、以及「移除链接」。地址归一化抽成纯函数 `link-url.ts` 并有单测,其中最易错也最难发现的一条是**站内路径(`/n/…`)与 `#锚点` 绝不能补 `https://`** —— 补了会把"跳到另一篇文档"悄悄改成"跳到外网站点",而且不报错。②「表格默认三行三列,不支持扩展」—— 补上行列增删、合并/拆分、表头切换、删除表格。实现上**收进一个菜单而不是铺一排按钮**:要补的操作有十来个,而正文列只有 `1084-320-320 ≈ 444px`,v2.8 已经因为折行踩过一次。做成**一个按钮两种状态**:不在表格里时只做"插入"(带 6×6 网格选行列数),光标进了表格同一个按钮高亮、菜单里多出「表格工具」;`合并/拆分` 用 `editor.can()` 判可用性并给出**说明为什么不可用**的 title。③「代码块不支持语言能力指定」—— 挂 `CodeBlockLowlight` + 18 个语言的语法高亮。三处要点:**必须关掉 StarterKit 自带的 `codeBlock`**(同一节点两份实现会冲突,表现为"语言存不住、类名时有时无");**语言清单与高亮注册表必须是同一份数据**(下拉里有、注册表里没有 => 选了语言却不着色且**不报错**,所以注册表由 `CODE_LANGUAGES` 推导并加单测断言);**原始语言不能直接交给 lowlight** —— 实测确认它对未注册语言**抛错**而不是原样返回,一篇带 ` ```brainfuck ` 的文档会让渲染炸掉,故界面上一律先过 `normalizeLanguage()`,但下拉里**照实显示「brainfuck(未识别)」**而不装作是纯文本。顺带修掉一个"看起来偶发"的老问题:**工具栏激活态滞后** —— `isActive(...)` 是"此刻光标在哪"的函数而 `onUpdate` 只在内容变化时触发,于是"点进代码块看不到语言下拉、光标移到加粗文字上 B 不亮",订阅 `onSelectionUpdate` 后正常。**环境层面**另有三处记录在 §9.9:本机 pnpm 装完**缺符号链接**(应用层 + store 内层,且是**传递**的:`lowlight → devlop → dequal`)而 `pnpm install` 报 "Already up to date",处置脚本 `scripts/fix-pnpm-store-links.mjs` **以 package.json 为准**逐个核对(手工列包名漏一个就表现为 `Cannot find module`,看起来像代码写错了);我写的"顺手清理"曾**误删 7 条合法链接**(把 `@tiptap/` 作用域目录里的其它包当成垃圾),所幸 junction 只摘链接不动实体 —— 教训是**清理逻辑的删除条件必须能从"正确状态"推导,不能从"看起来多余"推导**,该脚本现已只建不删;以及验证脚本只在 `finally` 里 `process.exit(0)`,**把一次真失败变成了"日志停在半截但退出码 0"**。**验收**:新增 17 项单测(web 35 → 52,含语言清单/注册表一致性与地址归一化);端到端 160 项仍全通过;实渲染 + 驱动交互逐项确认 —— 链接气泡两个输入框且点外面会关、落库的 mark 为 `href: https://wiki.internal/规范`(自动补协议)、表格 4×4 插入后插行 5→6 行插列 → 5 列且落库为 `6 行 × 5 列`、代码块 `language-javascript` 产出 `hljs-keyword/hljs-number/hljs-comment` 三个 token 且切到 python 后属性与类名同步变化、控制台零异常。**代价**:打包体积约 600KB → **871KB(压缩后 275KB)**,已在 §11.3 记下"按需加载语法"这条优化方向。 |
-| 2026-09-27 | v2.11 | **文档与代码对账,并把检查固化成 `pnpm audit:docs`(新增 §0.5)。** 触发点是用户一句「现在文档和代码功能是否对齐了?」—— 这个问题不该靠印象回答,所以做了一次实际对账,查出 **7 处真实漂移**:①**§9.1 自相矛盾** —— 同一段里既写「`pnpm verify:m4m5`(已删除)」又写「验收脚本在仓库里…可以自己复现」,后半句是 v1.x 的说法,留着一份**声称能复现但实际复现不了**的数字是最坏的一种文档状态;现改为明确说明「脚本已删,这些数字现在无法复现,只能当存档看」。②**§10 的"硬约束"用着 v1.x 的表名** —— 约束 1 写 `page_id`、§10.1 写 `page_contents.ydoc_snapshot`,而这两张表在 v2.0 已分别改名 `node_id` / `node_contents`。这一节开头写着"违反任何一条阶段二都要返工",名字指向不存在的表比措辞过时严重得多。③**§7.4 的 `pages.version`** 同理改为 `nodes.version`(理由那一段是现行的,只有表名是旧的)。④**`.env.example` 里两个"假开关"**:`POSTGRES_PORT` 与 `VITE_API_BASE` —— 声明了但**没有任何一处读**(postgres 不对宿主机暴露端口;前端把 `/api/v1` 写死在 `lib/api.ts`)。"填了不生效的开关"比"没有这个开关"更坏:有人会改了它然后等一个永远不来的效果。两处都改成了**说明为什么没有这个开关**,并给出正确的做法(`docker compose exec postgres psql`)。⑤**`APP_VERSION` 被代码读取却没声明** —— 它出现在 `/api/v1/health` 的响应里,运维靠它确认"跑的是哪一版镜像",现补进 `.env.example`。⑥**`/health` 与 `/health/ready` 没进接口清单** —— 它们是**唯一**不需要登录的非认证接口(探针不带凭证),`@Public()` 放行的理由值得写下来,现单列「运维探针」一张表并说明存活/就绪的分工(存活刻意不查依赖,否则数据库一挂容器会被反复重启)。⑦**§7.2 路由表缺 404 兜底行**,并补上「前五条不需要登录外壳、`/admin/*` 外面还包了一层只负责体验的 `RequireSuperAdmin`」这两句——判权始终在服务端。**把检查固化下来**:新增 `scripts/audit-docs.mjs` 接进 `pnpm check`,双向比对四件事 —— 接口(§6.2 表格 ↔ 控制器实际注册的路由,**文档多写与少写都报**)、环境变量(`process.env.X` ↔ `.env.example`,**两个方向都报**,包括"声明了没人读")、文件路径(文档提到的仓库路径是否真的存在)、版本号(文档头 = 变更记录最新一行)。两个刻意的设计:**双向比对**(只查一侧,另一侧会慢慢烂掉)、**例外必须写理由**(有意为之的进脚本里的名单,每条带一句话;没有理由的名单迟早会变成"把报错塞进去就完事"的地方,那时这个检查就死了)。**检查器自身的三个假漂移也一并修掉**:`PLANNED_ONLY` 用原始字符串导致 `WS /collab?nodeId=&token=` 匹配不上 `/collab`;搜索根目录漏了各 `src/` 导致 `lib/typography.ts`、`org/import.core.ts`、`audit/record.ts` 这类"从 src 写起"的引用全被判为不存在(一次报 6 个假漂移);占位符写法(`<包>`)被当成真路径。**并验证了它真的会失败** —— 往 `.env.example` 里塞一个假开关,退出码 1 且指名道姓;删掉后恢复通过(一个从不失败的检查等于没有检查)。另给 §9 的 M1~M6 清单补了一句"这是 v1.x 时代的执行记录,不是待办,未标注的条目里也有表名已改的"。 |
-| 2026-09-27 | v2.12 | **两条由用户直接指定的改动:移除回收站、给登录加限流。**①**回收站整体移除。** 用户原话:「不该有回收站这个概念,删除就应该直接删除」。删掉的路由:`GET /trash`、`GET /trash/policy`、`POST /admin/maintenance/trash-purge`、`POST /nodes/:id/restore`、`DELETE /nodes/:id/purge`;`DELETE /nodes/:id` 变成**物理删除整棵子树**。连带删掉:`nodes.deleted_at` / `deleted_by` 两列、部分索引 `nodes_alive_idx`、`RetentionService`、环境变量 `TRASH_RETENTION_DAYS` / `TRASH_PURGE_INTERVAL_HOURS`、审计动作 `node.restore` / `node.purge` /`node.purge.auto`、共享类型 `TrashItem` / `TrashPolicy` / `TrashPurgeResult`、前端 TrashPage 与 `/trash` 路由。`NodeService.purgeSubtree` 改名 `deleteSubtree`,`PermissionService` 整套 `allowDeleted` 参数一并去掉(不存在"已删除但仍存在"的节点,那个开关就没有意义了)。**唯一的权限收紧**:删除的门槛由 `canEdit` 提到 `canManage` —— 删除不可逆之后,"能改"与"能销毁"必须分开,被授权者仍然能改但不能删。迁移 `20260927120000_drop_trash` 有个**顺序要求**:必须先物理删掉所有软删子树再删列,反了会让已删除的节点静默复活(它们的 materialized_path 还指向可能已不存在的父节点)。②**登录限流与账号锁定**(新增 `apps/api/src/auth/login-throttle.ts`)。在此之前 `POST /auth/login` **没有任何次数限制**,而初始密码是统一内置的 `123456`、工号可枚举 ——"猜到工号 + 试 123456 + 拿一次性凭证设新密码"是一条不限次数的账号接管路径,这是阶段一最实际的缺口。两道闸:**按账号**连续 5 次失败锁 15 分钟(到期自动解锁)、**按来源 IP** 限失败总数(默认 100/15 分钟)。三个刻意的设计:计数键用工号**且不区分该工号是否存在**(否则"你被锁了"这个响应本身就是账号枚举器,会把 §6.1 用假 bcrypt + 时序对齐堵上的口子重新捅开);限流检查排在 **bcrypt 之前**,锁定期间根本不校验密码;内网常多人共用一个出口 IP,所以 IP 那道闸**只数失败、不数成功**,否则早上集体登录会把整个办公室挡在门外。Redis 不可用时降级放行并只警告一次 —— 与权限缓存同一个立场(Redis 不作为唯一数据源),**要清楚这意味着 Redis 挂掉期间锁定失效**,这是明确接受的降级。`RATE_LIMITED`(429)此前只定义了错误码、没有任何地方产出它,现在真的会返回,并在 `details.retryAfterSeconds` 里给等待秒数;新增审计动作 `auth.login.locked`(actor 为空),且**只在账号真实存在时写** —— 否则未登录的人能往只写不删的审计表里灌数据。登录页**不再打印默认密码 123456**,改为"初始密码由管理员告知",并在锁定期间显示倒计时而不是让用户反复点。③**顺带修掉四处一致性问题**(都是"不会立刻报错"的类型):权限缓存的世代号原来在 `writeCache` 里**又读了一次**,`compute()` 期间的 INCR 会把失效前算出的结果写进新世代、躲过这次失效并存活满 30 秒 —— 表现为"权限改了但某人还能改"的**静默越权**,现在世代号读一次、贯穿读写两端;`replaceGrants` 的乐观锁原来在事务外比 version、事务内无条件 +1(TOCTOU,两个管理员同时改会互相覆盖),改为事务内"带 version 条件 + 检查影响行数"的 CAS;正文保存的冲突检查原来也是"先查再写、两步无保护",而它要防的正是"后写的静默吃掉前一个",已并入 Serializable 事务,并且 `baseUpdatedAt` 解析失败不再降级成强制覆盖;审计接口的 `?cursor=` 原来未校验就拼进 `::bigint`,一个 `?cursor=abc` 会让任何登录用户拿到 500,现在明确 400。④**死代码与缺失接线。** 删掉只被自己的测试引用的 `buildSnippet`(真正在用的是 `search.service` 的 `snippetOf`,两处半径还不一样 60 / 50)、零引用的 `auditActionLabel`;共享包里的 `isExportFormat` / `EXPORT_FORMATS` 从死代码变成导出接口的实际校验依据 —— `?format=` 此前被**完全忽略**(传 `?format=pdf` 会静静返回 Markdown),现在只接受 `md`,其它值明确 400。`SessionService.purgeExpired` 一直"提供能力、不接线",于是 `sessions` 表只增不减 ——现在由 `onModuleInit` 的六小时定时器驱动(用裸 `setInterval` + `unref()`,不为一个清理任务引 `@nestjs/schedule`)。⑤**导出 PDF 的路线定稿**:走**前端打印样式 + `window.print()`**,不在服务端渲染 ——无头 Chrome 会给镜像加 300~400MB,与"构建机 2GB 内存"的现状冲突。⑥**验收与文档**:`pnpm audit:docs` 的接口双向比对在这轮**真的拦住了** 5 条已删除的路由(证明这个检查是有用的);单测 240 → 249 项;`seed-dev` / `DEPLOY` / 端到端验收脚本中与回收站相关的段落一并改写。 |
-| 2026-09-27 | v2.13 | **保密能力(用户要求「保密手段可以加上」)。** 这是权限模型级的加法,不是小功能。①**新增 `nodes.visibility`(public / restricted,默认 public)与 `node_readers` 表。**默认 public 意味着**存量数据行为完全不变** —— 没有人会突然看不见东西。读者名单**刻意不复用 `node_grants`**(用户原话「创建者单独授权,不复用」):那张表管"能改",这张管"能读";合并会让两条路径共用同一次误操作的机会,而误加一次就是一次泄露。②**`canRead` 从恒真变成真的会返回 false。** v2.0 起这个函数一直返回 true,并留了一句「将来若真要做保密,改动点集中在这里」—— 这一版就是那个"将来",改动确实只集中在一处。判定规则与四处刻意的决定见 §5.6。其中两条值得在这里重复:**读不到回 404 而不是 403**(403 等于确认"这里有个你看不见的东西"),以及**必须逐个受限节点都放行、不能只看最近的那个**。③**每一条读取路径都收了口**,共 7 处:整棵树(受限节点**连同子树**摘掉,只摘自己会让子节点标题泄露)、节点详情、正文、**导出**(最容易漏的一条 —— 漏了就能整篇下载走)、检索、评论、授权视图。检索是其中最要紧的:树、详情、导出、评论都挡住却忘了检索的话,受限文档的标题与正文片段会直接出现在全公司的搜索结果里,而保密功能**看起来完全正常**。④**权限缓存多了一个 `canRead` 字段**,并且读取时要求三个字段都是布尔 ——少了这一条,升级前写进去的旧缓存会被当成有效,于是受限节点被当成可读,一次静默的泄露。⑤**管理读者名单的门槛是「创建者 或 所有者链」。** 认创建者是用户的要求;认所有者链是因为少了它,创建者一旦离职,那个节点的名单就永久冻结。⑥**候选读者刻意不按组织范围过滤**(与授权候选相反):受限节点的读者常常就是外部门的人,否则"保密"没有意义。这是取舍,不是漏写。名单上限 200 人 —— 要全公司可见应该用 public,而不是把所有人一个个加进来。⑦**顺带修掉一个测试基础设施的洞**:`packages/shared` 的 tsconfig 把 `test/` 排除在外,于是共享包的测试文件**从来没有被类型检查过**。这一版给加了 `tsconfig.test.json` 并接进 `typecheck`,立刻暴露出我上一版写的 3 条断言用的是"其实在链上的人"当无关者 —— 那几条测的是假东西。端到端脚本与前端界面**尚未跟上这一版**(见 §11.3)。 |
-| 2026-09-27 | v2.14 | **人员列表的静默截断(功能残缺 + 正确性)。** ①`GET /admin/users` 此前是 `take: 200` 一截了事,而且**直接返回数组** —— 全公司 320 人时管理员只看到 200 个,界面上没有任何迹象。表现是「某某人的账号不见了」,而他会去翻工号、以为自己记错了。根因是响应里没有 `total`:前端拿到的是一份看起来完整的数组,无从判断自己是不是看到了全部。②改成**游标分页**,返回 `{ users, total, nextCursor }`。游标用 `employeeNo`(唯一且有索引)而不是 offset —— 按工号排序时,offset 分页在有人新建账号之后会**跳过或重复**记录。游标与搜索条件用 `AND` 组合:写成"有游标就覆盖 where"会让第二页悄悄丢掉搜索条件,于是搜「张」之后翻页,出现的是一整页无关的人。③前端:管理表格用 `useInfiniteQuery` + 「加载更多(还有 N 人)」+ 「共 X 人」;`/admin/org` 那个**负责人下拉**一次要 500 条(它没法翻页),被截断时**显式说出来** —— 静默少人时管理员会得出"这个人不在系统里"的结论,然后去重复建号,而工号唯一,他会撞库。④验收脚本同步:`verify-org.mjs` 里有 6 处按数组解析这个响应,不改的话会静默失效。顺带补了 3 条分页断言(limit 生效 / 游标不重复 / total 不受 limit 影响),134 → 138 项。 |⑦**把三块「错了不会报错」的逻辑搬进可测的纯函数,并补齐单测(285 → 323 项)。** 用户第 8 条要求补测试盲区。这一轮没有再堆集成测试,而是**先把逻辑从方法体里搬出来** —— 因为测不到的东西等于没测,而这三块的共同点是:错了不抛异常,只静默地多给或少给权限。· **树的保密过滤**(`readableNodeIds`)从 `NodeService.tree` 搬进 `packages/shared/src/visibility.ts`,  **并让服务真的调它**(不是留一份副本 —— 测副本等于没测)。新增 16 条用例,其中两条最要紧:  受限父节点下的 public 子节点同样不可读(子树继承,漏了它保密形同虚设)、  与受限节点无关的兄弟分支不受影响(用前缀匹配代替祖先链就会在这里出错)。· **物化路径工具**(`apps/api/src/common/node-path.ts`)从 v2.0 起**一行测试都没有**,  而它是整个权限模型的地基:祖先链、防环、面包屑、缓存世代号分片全经过它。新增 22 条用例,  其中「末尾斜杠不能省」那条是本仓库唯一被实测抓到过的路径坑。· **写测试时又抓到我自己的一个错判断**:我断言「外层所有者看不到内层受限节点」,  跑出来才想通 —— 内层节点的祖先链上有外层,所以外层所有者**本来就在它的所有者链上**。  这不是缺陷,而是必须让用户知道的**语义边界**:受限防的是平级与下级,不防上级;  想对部长本人保密,现有的 `visibility` 做不到。我把这条写进了用例注释。⑧**验收脚本补上保密场景(13 条断言,138 → 152 项)。** v2.13 加了保密能力,但端到端脚本里一条受限节点的用例都没有 —— 「读不到的七条路径」全靠单测与人工,而这类漏判的特点是表面上一切正常。现在覆盖:默认公开、改成受限、无关者在树(连子节点一起)/ 详情 / 正文 / 导出 / 检索五处都读不到(且读不到时是 **404 不是 403**)、所有者链仍然看得见、无关者改不了可见范围、加进名单后立刻能读到、以及改回公开后名单不再是门槛。整段自己复原,避免「验收脚本把演示数据弄脏」那个老毛病。⑨**错误提示 + 骨架屏(用户第 11 条)。** 此前错误提示只是一条静态红字,用户唯一的出路是**刷新整个页面** —— 而那会丢掉他正在写的东西。`ErrorNote` 现在接受可选的 `onRetry`,只在真的能重发那一个请求时渲染「重试」按钮(检索 / 审计 / 人员三处已接上)。「加载中…」也换成了骨架屏:它不跳布局,而且至少告诉你将要出现的是几行东西。 |⑩**最近浏览 / 收藏,以及个人视图的存放原则(用户第 11 条)。** 这两个功能都做在**浏览器本地**(`localStorage`),不进数据库:它们是**个人视图**,不是共享事实 —— 我最近看过什么对别人没有意义。放进库里要新增表、新增接口、再加一轮权限判定,而价值完全不值这些。代价说清楚:换电脑就没了,清浏览器数据也没了 —— 对「最近看过什么」可接受;收藏若将来要跨设备,那时再挪进库。⚠️ 一个**安全相关的细节**,不是顺手写的:首页渲染这两份列表时,**一律先用组织树过滤**。因为本地列表是旧的 —— 那篇文档可能已经被删掉(点进去 404,用户以为系统坏了),也可能**已经改成受限而他不在名单里**。后者更要紧:树上已经挡住了,本地那个陈旧的标题再显示一次就等于白挡。树是服务端算过可见性的,拿它当准绳,两件事一起解决。⑪**写这段时被 lint 抓到一个真 bug,值得记下来。** 我最初把两个 `usePersonal` 写在「算 recents」那里 —— 而那里在所有早退 **之后**。那是 hooks 规则违例:首次渲染(数据没回来)时这两个 hook 不执行,数据回来后才执行,调用顺序变了,React 会直接抛错。`react-hooks/rules-of-hooks` 在跑 lint 时拦下了它。这类错误**手测很容易漏**(要等加载态切到有数据才触发),而它每次都会崩 —— 这正是把 lint 当门的价值。⑫**纯逻辑与 localStorage 分开,前者可测(323 → 339 项)。** 去重 / 置顶 / 截断 / 坏数据兜底都写成了 `personal-lists.ts` 里的纯函数,16 条用例覆盖。其中两条对应真实会踩的坑:**按 id 去重而不是按标题**(不同部门可以有同名「周报」,按标题去重会把另一篇悄悄吃掉)、**localStorage 里的坏数据必须退化成空列表**(那里面用户能改,一个坏字符串不该让首页白屏)。 |⑬**检索历史接进搜索页 + 命中词高亮(第 11 条收尾)。** 历史用 submit 时记录(不是每次按键——否则历史里全是被删掉的半截词),只在没有结果时展示。高亮抽成纯函数 `splitByQuery`,12 条用例。其中最要紧的一条是**不变量**:片段拼回来必须逐字等于原文——高亮只是视觉加工,任何「少显示几个字」的实现都是缺陷,而用户不会察觉,他只会觉得这段话读起来有点怪。另外三条对应真实会踩的坑:大小写不敏感(服务端是 ILIKE,前端区分大小写就会「搜到了但没高亮」)、**正则元字符当普通字符**(搜 a.b 不能把 aXb 也高亮)、空查询不切(否则会在每个字符间插空片段)。⑭**★★ 修掉一个会让检索接口完全不可用的真 bug,并把它变成机械可查。** `search.service.ts` 的**裸 SQL** 里一直留着 `WHERE n.deleted_at IS NULL`,而 v2.12 的迁移已经 `DROP COLUMN deleted_at` —— 真跑起来是 500(`column does not exist`),**检索功能整个不可用**。它躲过了 typecheck / lint / 单测,因为裸 SQL 不参与类型检查。更值得记的是**为什么原来的守卫没拦住**:仓库里其实已经有一条检查 ——`verify-db.mjs` 的 `FORBIDDEN_NODE_COLUMNS`,而且那条注释恰好写着「代码里会重新出现 deleted_at 过滤,但没有任何地方会报错」。问题是那个脚本**要连数据库**才能跑,日常门禁里根本不会执行它 —— 守卫写在了最需要它的时候到不了的地方。现在把它搬进 `audit-docs.mjs`(每次门禁都跑):直接扫源码文本,针对「数据库里已删、代码里再出现就是 bug」的名字(`deleted_at` / `deleted_by` / `nodes_alive_idx`),允许同一行用 `audit-docs:allow` 显式豁免。**并且做了反向验证** ——把 bug 临时放回去,确认它能在正确的文件、正确的行号上报错,再撤掉。一个不会失败的检查等于没有检查。 |⑮**审计:按动作筛选 + 表头 scope(把第 11 条与第 12 条的尾巴收掉)。** 筛选做在**服务端**(`?action=`,SQL 里多一个 `IS NULL OR` 条件)—— 这一页是游标分页,在客户端过滤已加载的那几页会在「当前页没有匹配项」时显示「没有记录」,而更早的页里其实有。**审计页恰恰最不能给错结论。** 同时给表头补了 `scope="col"`:没有它,屏幕阅读器不会把表头与单元格关联,念数据时只说「技术部, 2026/9/27, 修改可见范围」,而不说哪一列是什么 —— 一张五列的表等于没法读。⑯**顺手修掉验收脚本里一条永远失败的断言。** `verify-org.mjs` 断言审计里存在 `node.restore` —— 而回收站移除之后那个动作**再也不会发生**,所以那条 `check` 必然失败。我没有把它「换成一个还能发生的动作」来凑数(那只是把红的改成绿的,不解决问题),而是删掉它,并让接替它的 `visibility.replace` 在保密场景那一段单独受验(那时它才真的发生)。检查项 152 → **153**。 |⑰**审计导出 CSV(清单里最后两项之一)。** 新增 `GET /audit-logs/export`,共享包新增纯函数 `toCsv`(15 条用例)。三处设计是刻意的:· **与列表共用同一个查询** —— 我把 WHERE 抽成了 `queryRows`,导出不再写第二份范围条件。  可见范围那四条 OR 是审计的**唯一**访问控制,复制一份出去迟早分叉,  而分叉的表现是「导出的文件里出现了他在页面上看不到的记录」,也就是**一次越权读取**,还不报错。· **导出受行数上限(5000)**,超了用响应头 `X-Audit-Capped` 告知。审计表只增不减,  不加限制就是一次全表扫描加几百 MB 的响应。**审计数据的静默截断比没有导出更糟** ——  他会以为那就是全部。· **CSV 写了公式注入防护**。这是安全问题、不是洁癖:审计导出里的「目标标题」是**用户可控的**  (谁都能把文档命名成 `=1+1`,更极端的形式在旧版 Excel 上能拉起外部程序),  而 Excel / WPS 会把以 `= + - @` 开头的单元格**当公式执行**。现在这类字段前缀一个单引号  (Excel 里不显示,只表示「这格是文本」)。导出文件是**发出去**的,只在服务端假设「用户不会那么坏」不成立。  另外加了 BOM —— 不加的话 Excel 按本地代码页解码,中文全乱,而这份导出的用途恰恰是发给别人。⑱**验收脚本补 3 条导出断言,检查项 153 → 156。** 其中一条是**跨身份**的:换成一个范围小得多的人导出,断言文件里**不该出现**超管那条记录 ——这正是「导出绕过范围」这种缺陷唯一能被抓住的方式(它不会自己报错)。 |①**再加一层机械守卫:前端调用 与 后端路由(v2.14)。** 与上一条同源 —— 又一类「静态三件套都抓不到、而它让功能整个不可用」的 bug:前端用字符串路径调后端,后端路由是装饰器里的字符串,两边在类型上没有任何联系。于是「后端删了一条路由,前端还在调」不会报错,表现是用户点下去得到 404,而开发者以为改动是干净的。这类错在本仓库真实发生过:回收站移除时删掉了 /nodes/:id/restore 与 /trash,前端那几个 hook 是同一次改动里手工清掉的 —— 靠的是「记得」。而「记得」不是机制。现在 audit:docs 每次都会把前端 44 处调用与后端路由表比对(三种写法都认:纯字面量、模板字符串、字符串拼接 —— 拼接那条最容易在删路由时被忘掉)。同样做了反向验证:造一条对已删路由的调用,确认它在正确的文件上报错,再撤掉。两条新守卫加起来,audit:docs 从查文档漂移变成了「查文档 + 查那些只有真跑才暴露的错」。 |⑨**批量移动(v2.14)—— 清单里最后一项功能。** 新增 `POST /nodes/bulk/move`,8 条校验用例。**只做移动,不做批量删除。** 移动可逆(再移回去就行),而删除 v2.12 起不可恢复 ——两者的风险差一个量级,不该共用一个入口。真要清理一整块旧内容,删那个组本身就够了。三条为了「结果可预测」而加的限制,每条都对应一种会静默出错的情形:· **成环**:不能移到它自己或它的子孙下。漏了的话物化路径会变成自引用,  之后前缀查询既找不到祖先、又把自己算成自己的后代 —— 而权限判定也走物化路径,会被一起带偏。· **批量里互为祖先**:选了 A 又选它里面的 B 时,结果取决于执行顺序  (先移 A 把 B 一起带走,再移 B 又把它拽出来),直接拒绝比"猜用户想要什么"清楚。· **校验全部通过后才写,且一个事务里全做或全不做**。不做「部分成功 + 失败清单」——  那会留下一个用户没预期过的中间状态,而他要自己去核对哪几个动了。实现上有一处是刻意的:**把单节点移动的写入抽成了 `applyMoveTo`**,两个入口共用同一份路径重写(§9.4「凡是写数据的逻辑,只允许存在一份」)。抄一份的代价是某天有人只修了其中一份,而物化路径写错的表现是「某棵子树的祖先链错了」,不报任何错。⚠️ 路由写成 `nodes/bulk/move` 而不是 `nodes/bulk-move`,并且**注册在 `nodes/:nodeId/...` 之前**:Express 按注册顺序匹配,否则 `bulk` 会被当成一个 nodeId、被 ParseUUIDPipe 以 400 拒掉 ——表现是这条接口「不管怎么调都说参数不对」。**前端界面尚未跟上**(§11.3):目前只能通过接口调用,树上的多选入口在下一轮。 |⑪**批量移动的前端入口(v2.14)—— 上一轮那个缺口的收尾。** 新增「批量移动」按钮(只在组 / 部门节点上出现)与一个弹窗,13 条纯逻辑用例。**刻意做成弹窗,而不是在组织树上做多选。** 树上多选要改 OrgTreePanel ——那是 660 行、承载着整套键盘导航与 ARIA 的组件;为一个低频操作去动它,风险与收益不成比例。而「把一个组里的几篇挪到另一个组」这个真实需求,在弹窗里反而更清楚:勾选是列表式的,目标是有路径的下拉,没有「拖到哪儿去了」的歧义。两处把「服务端规则」提前变成「界面语言」:· 选了 A 又选它里面的 B 时,弹窗明说「『接口规范』不会单独移动 —— 它已经在『后端组』里面了」,  而不是等提交后被服务端打回。静默缩小用户的选择是最糟的处理方式(他会以为系统自作主张)。· 目标下拉里不出现选中项自己与它的子孙 —— 那些目标必然成环、必然被拒,  让用户能选中一个注定失败的目标,等于把错误推到最后一步才告诉他。⚠️ 写这段时测试抓到了我自己的一个真 bug:tidySelection 第一版只拿「已保留的那几个」去比,于是先勾里面的、再勾外面的时,外面的进来不会反查「我是它的祖先吗」——结果两个都留下,而且取决于勾选顺序。这正是这个函数存在的理由(顺序无关),却被我写反了。用例「顺序无关」把它抓出来了。服务端那条规则本来就防这个,但前端如果也算错,用户看到的是「提示说会移动 2 个、实际动了 1 个」这种更难查的不一致。 |⑫**把组织树的键盘导航也搬进可测的纯函数(用户第 8 条收尾)。** 新增 lib/tree-nav.ts(treeOrder / resolveTreeKey)+ 15 条用例,并让 OrgTreePanel **真的调它**(内联的那份 switch 已删除 —— 测副本等于没测)。这件事第 6 轮试过一次、失败了:文件写进去就消失(那个间歇性的写入丢失)。这轮一次成功。⚠️ 写用例时又抓到我两个错,而且**方向相反**,都值得记:· 第一个是**用例错、实现对**:我 `...base` 展开后只改了 nodeId,于是给"根节点"传了它的  子节点的 childIds,还给 doc-api 传了 dept-tech 当父节点 —— 实现**忠实地**返回了我给的  那个错误父节点。这类错误(松散的 fixture)我这轮之前已经犯过三次:  第 6 轮拿了"其实在链上的人"当无关者、第 11 轮拿了父子当兄弟。· 第二个是**我按想当然写了断言,而规范不是那样**:我断言"根节点按 ← 什么都不做",  但 W3C APG 里 Left 的第一件事就是"若展开则折叠"—— 实现是对的,断言是错的。  真正危险的那一格是**已折叠的根节点**按 ←(没有父节点可回,也没有可折叠的东西),  那会返回 none;现在测的是这一格。⑬**CommentService 补上测试(此前零测试)。** 挑了它,是因为它有两条写错了都不报错的规则:`canEdit` 与 `canDelete` 是两件事(所有者能删别人的评论,但**不能改** —— 改别人的话是篡改言论;代码注释里记着这里曾经出过错,表现是"所有者看得到「编辑」、点了却 403"),以及删除的门槛是 `canManage` 而不是 `canEdit`。10 条用例,钉的就是这两条。测试总数 366 → **412**。 |⑭**OrgService 与 AuditService 补上测试 —— 测试盲区清零。** 两个服务此前都是零测试,各挑"错了后果很重"的部分,共 20 条用例。`AuditService`(10 条):· **游标校验**。原实现把查询串原样拼进 `::bigint`,于是 `?cursor=abc` 让 PostgreSQL 抛 22P02、  再被全局过滤器兜成 **500 INTERNAL_ERROR** —— 一个纯客户端的参数错误显示成"服务器内部错误",  任何登录用户都能触发,还在日志里留下假的故障记录。· **可见范围前缀必须带末尾斜杠**,否则 `/p-1` 会被当成 `/p-10` 的祖先 ——  也就是**一号部门的部长能看到十号部门的审计记录**。· **导出与列表共用同一份范围**(分叉就是一次越权读取,且不报错)。`OrgService`(10 条):· **不能把最后一个在职管理员停用 / 离职**。这条写错的后果比"某个操作不好用"严重得多:  **没有界面能把它改回来**(要连数据库改)。· **不能重置自己的密码**(能点这个按钮说明他正登着,允许它只会制造一次手滑),  以及**不能重置一个登不进来的人的密码** —— 那是白做工,而且要说清真正的原因。· 停用 / 离职要**立刻吊销会话**,而只改名**不要**动会话。⚠️ 写 `OrgService` 用例时我的桩犯了一个**很隐蔽的错**:我让 `findUnique` 固定返回`status: active`,于是"已离职的人不该能重置密码"那条守卫**根本没被触发**,用例红了而实现是对的。**桩把被测逻辑的输入改掉,是最难发现的一类自欺** —— 它比"断言写错"更危险,因为它让测试**看起来在测某件事,实际上没测**。修好之后两条守卫用例一次通过。测试总数 412 → **432**;服务级测试的盲区到此清零(12 个服务全部有覆盖)。 |④**第一次真机部署(v2.15)—— 13 轮改动全部上容器验证。** 两个迁移 `drop_trash` / `node_visibility` 自动应用成功,存量 10 个节点与 21 条评论完好;`verify-db` 8/8 表、7/7 索引、3/3 CHECK 全过;`verify-org` 156 项端到端。**这一步的价值几乎全在"计划外"的部分。**① **compose 里的两个死开关**:`TRASH_RETENTION_DAYS` / `TRASH_PURGE_INTERVAL_HOURS`在 v2.12 移除回收站后代码再也不读了,而 compose 还在传。填了不生效比没有这个开关更坏。为什么 13 轮都没发现:`audit:docs` 只比对 `process.env.X` 与 `.env.example`,**compose 是第三个地方,没人管**。现已加第 4.7 项检查,并给 compose 补上四个 `LOGIN_*` 可调项。② **登录限流会绊倒验收脚本自己**:脚本登录时依次试候选密码,错的那几次被记成失败,KC004 攒够 5 次被锁 15 分钟 → 后续断言拿到 429/401 被当成 404 报失败。**7 条"失败"没有一条是产品缺陷。** 修法:记住每个账号试成功的密码;拿到 429 就明确报「被限流锁住」并终止,不再让每条断言都变成假失败。③ **一个很危险的脚本缺陷**:登录失败时只 `return false`,而 **52 个调用点里只有 4 个看了返回值**—— 其余 48 处会带着**上一步那个人的会话**发请求。实际后果:脚本想以「无关的人 KC004」去改可见范围,KC004 没登上,请求就带着上一步 **KC005(市场部所有者)** 的会话发出去了 → 200,断言报「★ 无关的人改可见范围 → 200」,**看起来像一次越权漏洞**。实际是脚本自己在冒充另一个人 —— 这类假阳性比漏测更坏,它会让人去修一个不存在的问题。现在登录先清 cookie,登不上直接抛错。④ **两处断言测错了对象**:CSV 断言读 `.body`(JSON 解析结果,对 text/csv 恒为 null),所以"带 BOM 吗"必然为假;改可见范围那条硬编码 `version: 1`,于是版本检查先于权限检查触发、拿到 409 而不是 403 —— 那看起来像"没挡住",实际是断言根本没测到权限。**验证结论(独立复测,不经脚本)**:保密功能四条读取路径(详情/正文/导出/树)**同步跟随名单**,加进去 200、移出去 404,双向都对;超管不在名单里也读不到 —— 与 §4.3「超管不是内容的自动所有者」一致。审计导出实测 1529 行、BOM 正确、RFC 5987 文件名正确,且与列表同一可见范围。检索接口 200 且命中正确(round 8 那个 `deleted_at` 裸 SQL 若不修,这里会 500)。批量移动、导出、限流锁定键(`kc:login:lock:u:kc004`)都在真机上验到了。 |
-| 2026-09-27 | v2.15 | **第一次真机部署 + 一次以"功能为准"的文档对账(用户要求"把文档作为可以彻底相信的材料")。** ①**真机部署**:两个迁移(`drop_trash` / `node_visibility`)自动应用成功,存量 10 节点 / 25 评论 / 5 正文完好; `verify-db` 与 `verify-org` **161 项全通过**(v2.16 又加了 7 条侧信道断言,现为 168 项)。部署中发现六个"静态检查全过、只有真跑才暴露"的问题,记在 §9.10 —— 其中最危险的一条是:**登录失败后脚本继续用上一个人的会话发请求**,让一次"无关的人改可见范围"看起来像越权漏洞(实为假阳性)。 据此给 `audit:docs` 加**第 4.7 项**:compose 传给 api 的环境变量必须是代码真的读的(起因:`TRASH_*` 两个死开关)。 ②**文档对账(以功能为准,错的删、漏的补)**: · **修掉四处与实现直接矛盾的表述**:§8.3 标题「不再做权限过滤」与正文「系统不提供保密能力」(v2.13 起两者都反了); §6.1 的「不存在『存在但读不到』的资源」(v2.13 起读不到回 404 是刻意的); §6.1 的「组织树不做过滤」(实际已按可见性过滤);§1.2 交付清单第 6/7 行「读全员开放 / 不做权限过滤」。 · **补上三节此前零文档的功能**:§6.1.3 登录限流与锁定(含 Redis 降级取舍)、§7.6 v2.12–v2.14 补齐的前端能力 (Modal / Toast / ErrorBoundary、个人视图、骨架与重试、打印 PDF、检索与审计页、对比度修正)、§8.6 批量移动。 · **结构修正**:§5.6 原来排在 §5.5 之前(插入时放错位置),已换回正确顺序。 · **清理失效内容**:§9 开头补一条统一声明(该章的 M1~M6 是 v1.x 快照,含已整体移除的回收站); §9.3 第 1 条与 §9.10 引用闭环;头部「状态」行长期停在 v2.11、并写着早已过期的「端到端 134 项 / 单测 249 项」, 已更新为实测的 **161 / 432**。 ③**纠正一处我自己的错误记录**:§8.3 初稿写成"`LEFT JOIN` 是 v2.14 修的",核对 `git show HEAD` 后确认 **它一直就是 `LEFT JOIN`** —— 已改成"这条一直是对的,别顺手去掉 `LEFT`"的提醒。 **文档里写下一个没发生过的改动,比不写更坏。** |
-| 2026-09-27 | v2.16 | **文档对账时实测出两条漏掉的读取路径 + 一处会把创建者锁死的设计不一致。**
+| 2026-09-27 | v3.0 | **依据实际代码整体重写。** 旧版本 2500 行里大半是历史变更记录与 v1.x 里程碑快照,而**历史与现状混在一起**正是它不可信的原因之一 —— 那些内容已整体删除。新版本的接口 / 数据模型 / 环境变量 / 前端路由四张表**由 `scripts/gen-doc.mjs` 从代码生成**,并由 `pnpm audit:docs` 校验一致性;文档与代码脱节会让门禁失败,而不是靠人去发现。 |
 
-起因是用户要求"把文档作为可以彻底相信的材料" —— 于是逐条核对文档里的**当前态声明**。
-核对到 §5.6「必须在每一条读取路径上收口」时,去**实测**了受限节点上的全部读接口
-(而不是相信文档写的"七条"),结果:
-
-① **`GET /nodes/:id/readers` → 200(泄露保密名单本身)。** 它看起来是"管理界面用的接口",
-  而管理界面只有能管的人才打得开 —— 但接口是公开的,不过读判定的话,
-  任何登录用户都能对任意 nodeId 拿到 200:既确认节点存在,**又把读者名单读走**。
-② **`GET /nodes/:id/members` → 200(泄露成员名单)。** 它直接调 `chainOf`,而 `chainOf` 不判可见性。
-
-  其余五条(详情 / 正文 / 导出 / 评论 / 授权名单)都正确地回 404 —— **只有这两条漏着**。
-  一条不一致的读取路径就是一条侧信道,而"七条收口"是写在文档里的断言,没人验证过。
-  两条都已补 `requireRead`,并给 `verify-org` 加了 **7 条"侧信道"断言**逐条钉住。
-
-③ **修的过程中又撞出一个更严重的:创建者会把自己永久锁死。** 补上读判定之后,
-  「设成受限 + 名单为空」会让**创建者自己也读不到** —— 而 `replaceReaders` 写完要用
-  `readersOverview` 组装响应,那一步 404,于是**改动已生效、界面却报错**;
-  更糟的是他从此打不开那个管理入口,**只能进数据库救**。真机复现过。
-
-  根因是两处判定的口径不一致:`canManageReaders` 认**创建者**,而 `canRead` 只认所有者链 ——
-  于是"**能管一个自己看不见的东西的名单**"。修法是让 `canRead` 与 `readableNodeIds`
-  **都认创建者**(创建者身份**不向上继承**,与所有者的"管理链条"语义不同)。
-  另外把 `readersOverview` 拆出不带读判定的 `buildReadersView`,`replaceReaders` 用它做返回值 ——
-  **写操作的成功与否,不该取决于"写完之后还能不能读"**。
-
-  这是文档对账最实际的收益:**为了让文档可信而去核对,结果核出了代码的缺陷。**
-  `ReadableNode.createdBy` 设为**必填**,漏传会被类型检查拦下(树与详情页必须用同一套判定)。 |

@@ -21,7 +21,8 @@
     "test:e2e": "vitest run --config ./vitest.config.e2e.ts",
     "test:watch": "vitest",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "verify:org": "node scripts/verify-org.mjs"
+    "verify:org": "node scripts/verify-org.mjs",
+    "verify:doc": "node scripts/verify-doc-claims.mjs"
   },
   "dependencies": {
     "@knowledgecool/shared": "workspace:*",
