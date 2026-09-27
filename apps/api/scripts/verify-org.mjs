@@ -1690,6 +1690,32 @@ async function main() {
       String(forbidden.status),
     );
 
+    // 4.5) ★ 侧信道:受限节点上**每一条**读接口都必须回 404,一条都不能漏。
+    //
+    // v2.15 文档对账时实测发现两条漏的:
+    //   · GET /nodes/:id/members  —— 用的是 chainOf,不判可见性,返回 200
+    //   · GET /nodes/:id/readers  —— 直接查名单,**把保密名单本身读走了**
+    // 其余(详情/正文/导出/评论/授权名单)都正确地回 404。
+    // 一条不一致的读路径就是一条侧信道:它确认节点存在,还可能带出内容。
+    {
+      for (const [label, path] of [
+        ["详情", `/nodes/${String(MARKET)}`],
+        ["正文", `/nodes/${String(MARKET)}/content`],
+        ["导出", `/nodes/${String(MARKET)}/export?format=md`],
+        ["评论", `/nodes/${String(MARKET)}/comments`],
+        ["授权名单", `/nodes/${String(MARKET)}/grants`],
+        ["可见范围", `/nodes/${String(MARKET)}/readers`],
+        ["成员列表", `/nodes/${String(MARKET)}/members`],
+      ]) {
+        const probe = await api("GET", path);
+        check(
+          `★ 受限节点的「${label}」对无关的人回 404(不能有侧信道)`,
+          probe.status === 404,
+          `实际 ${String(probe.status)}`,
+        );
+      }
+    }
+
     // 5) 把赵敏加进读者名单 → 她又能看到了
     await login("KC001", [ADMIN_PASSWORD]);
     const nowRestricted = await api("GET", "/nodes/" + String(MARKET) + "/readers");

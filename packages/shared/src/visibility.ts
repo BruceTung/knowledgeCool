@@ -78,6 +78,14 @@ export interface ReadableNode {
   id: string;
   parentId: string | null;
   ownerId: string;
+  /**
+   * 创建者。**受限节点对他自己永远可读**,与 `canManageReaders` 对齐。
+   *
+   * ⚠️ v2.15 补。少了它会出现两件坏事:① 能管一个自己看不见的东西的名单;
+   * ② **把自己永久锁在外面** —— 设成受限且名单为空之后他读不到,
+   * 也就再也调不动那个管理入口(真机上就是这样锁住的,只能进数据库救)。
+   */
+  createdBy: string;
   /** 库里的原始字符串,由本函数收敛(不用调用方先转,免得漏一处) */
   visibility: string;
 }
@@ -90,7 +98,9 @@ export interface ReadableNode {
  * 1. **父节点读不到,子节点一定读不到。** 这就是「子树继承」的实现处。
  *    只摘掉受限节点自己是不够的:那样别人仍然能看到它下面子节点的标题,
  *    而子标题往往就够泄露信息了(父节点叫什么不重要,重要的是「Q4 裁员名单」那个标题)。
- * 2. 受限节点对**所有者链**(自己或任一祖先的所有者)放行。
+ * 2. 受限节点对**所有者链**(自己或任一祖先的所有者)放行,也对**创建者**放行。
+ *    ⚠️ 创建者身份**不向上继承** —— 与所有者不同,它是"谁建的这一篇"。
+ *    向上继承的话,任何建过一次外层节点的人就能读到内层所有受限节点。
  * 3. 受限节点对**名单**放行:读者名单,或者编辑被授权者。
  *    少了后半句会出现「能改但不能看」—— 他打开文档是空白,只会被当成 bug 报上来。
  *
@@ -135,6 +145,8 @@ export function readableNodeIds(
       const lists = listsByNode.get(id);
       ok =
         ownsNodeOrAncestor(node) ||
+        // 创建者放行(不向上继承 —— 只看这一层)
+        node.createdBy === actorId ||
         (lists?.readers.has(actorId) ?? false) ||
         (lists?.grantees.has(actorId) ?? false);
     }

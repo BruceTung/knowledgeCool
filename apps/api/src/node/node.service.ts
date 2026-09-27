@@ -113,6 +113,8 @@ type ChainLookup = {
   ownerId: string;
   depth: number;
   visibility: string;
+  /** 受限节点对创建者可读(v2.15),所以判定要这个字段 */
+  createdBy: string;
 };
 
 @Injectable()
@@ -185,7 +187,14 @@ export class NodeService {
       if (missing.length > 0) {
         const ancestors = await this.prisma.node.findMany({
           where: { id: { in: missing } },
-          select: { id: true, parentId: true, ownerId: true, depth: true, visibility: true },
+          select: {
+            id: true,
+            parentId: true,
+            ownerId: true,
+            depth: true,
+            visibility: true,
+            createdBy: true,
+          },
         });
         for (const ancestor of ancestors) byId.set(ancestor.id, ancestor);
       }
@@ -208,10 +217,14 @@ export class NodeService {
 
     const readable = readableNodeIds(
       operator.id,
+      // createdBy 必须一起传:受限节点对创建者永远可读(与 canManageReaders 对齐)。
+      // 少传的话 TypeScript 会拦(它是必填) —— 这是刻意的,字段漏传的后果是
+      // "创建者在树上看不见自己的节点",而那种不一致只在界面上看得出来。
       [...byId.values()].map((node) => ({
         id: node.id,
         parentId: node.parentId,
         ownerId: node.ownerId,
+        createdBy: node.createdBy,
         visibility: node.visibility,
       })),
       accessLists,

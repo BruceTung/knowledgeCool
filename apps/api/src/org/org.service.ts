@@ -489,6 +489,12 @@ export class OrgService {
    *    应该在后端组那一层做。
    */
   async members(operator: Actor, nodeId: string): Promise<NodeMembersResponse> {
+    // ⚠️ 先过读判定(v2.15 补)。原来直接 `chainOf` 就开工 ——
+    // 而 chainOf 不判可见性,于是**受限节点的成员列表对任何人都返回 200**:
+    // 既确认了节点存在,又把"这个部门有谁"给出去了。
+    // 其余读取路径(详情/正文/导出/评论)都回 404,只有这条漏着 ——
+    // 一致性本身就是安全性质:一条不一致的路径就是一条侧信道。
+    await this.permissions.requireRead(operator, nodeId);
     const { chain, row } = await this.permissions.chainOf(nodeId);
     const prefix = subtreePrefix(row.materializedPath);
 

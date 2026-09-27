@@ -466,6 +466,28 @@ export class PermissionService {
    * 反复尝试改回公开,而那做不到(只能去祖先那一层改)。
    */
   async readersOverview(operator: Actor, nodeId: string): Promise<NodeReadersResponse> {
+    // ⚠️ 先过读判定。**这是最容易漏的一条** —— 它看起来是"管理界面用的",
+    // 而管理界面只有能管的人才打得开。但接口是公开的:不过这一关的话,
+    // 任何登录用户都能对任意 nodeId 拿到 200,等于确认了节点存在,
+    // 并且**把读者名单(保密名单本身)读走** —— 那是最不该泄露的一份数据。
+    // (v2.15 文档对账时实测发现:受限节点上详情/正文/导出/评论全 404,
+    //  而这条返回 200。属于"读取路径收口"漏掉的一条。)
+    await this.requireRead(operator, nodeId);
+    return this.buildReadersView(operator, nodeId);
+  }
+
+  /**
+   * 组装可见性 + 读者名单响应,**不带读判定**。
+   *
+   * ⚠️ 单独分出来是因为 `replaceReaders` 要用它做返回值 ——
+   * 写入方**刚刚**已经通过了 `canManageReaders`(创建者或所有者),
+   * 而它的响应若还要过一次读判定,就会出现**"改动已生效、但接口报错"**:
+   * 真机上就是这样把自己锁住的(设成受限且名单为空 → 响应组装 404 →
+   * 界面报错、而库里已经改了,用户只能进数据库修)。
+   *
+   * **原则:写操作的成功与否,不能取决于"写完之后还能不能读"。**
+   */
+  private async buildReadersView(operator: Actor, nodeId: string): Promise<NodeReadersResponse> {
     const { chain, row } = await this.chainOf(nodeId);
 
     const rows = await this.prisma.nodeReader.findMany({
@@ -557,7 +579,7 @@ export class PermissionService {
       detail: { title: row.title, visibility: nextVisibility, count: targetIds.length },
     });
 
-    return this.readersOverview(operator, nodeId);
+    return this.buildReadersView(operator, nodeId);
   }
 
   /**

@@ -20,8 +20,10 @@ function node(
   parentId: string | null,
   ownerId: string,
   visibility: string = 'public',
+  /** 创建者。默认与 ownerId 不同的人,这样"创建者放行"不会被所有者规则掩盖 */
+  createdBy: string = 'u-creator-default',
 ): ReadableNode {
-  return { id, parentId, ownerId, visibility };
+  return { id, parentId, ownerId, createdBy, visibility };
 }
 
 const NO_LISTS: ReadonlyMap<string, NodeAccessLists> = new Map();
@@ -196,5 +198,54 @@ describe('readableNodeIds —— 边界', () => {
   it('可见性字段是未知值时按 public 处理(脏数据不该让人突然看不见东西)', () => {
     const ids = readableNodeIds('u-x', [node('weird', null, 'u-alice', 'whatever')], NO_LISTS);
     expect(ids.has('weird')).toBe(true);
+  });
+});
+
+describe('readableNodeIds —— 创建者能读(v2.15 补)', () => {
+  it('★ 受限节点的**创建者**能读到它 —— 与 canManageReaders 对齐', () => {
+    // 原来只有"所有者 + 祖先所有者 + 名单"三条路,创建者不在其中。
+    // 后果是**能管一个自己看不见的东西的名单**,而且会把自己永久锁在外面。
+    const ids = readableNodeIds('u-creator', [node('r', null, 'u-alice', 'restricted', 'u-creator')], NO_LISTS);
+    expect(ids.has('r')).toBe(true);
+  });
+
+  it('★★ 创建者把自己关在外面之后,仍然读得到(否则再也改不回来)', () => {
+    // 这条是那个真实事故的直接复现:设成受限 + 名单为空 → 若创建者也读不到,
+    // 他就既看不到、也再也调不动可见范围入口,只能进数据库救。
+    const ids = readableNodeIds('u-creator', [node('r', null, 'u-alice', 'restricted', 'u-creator')], new Map());
+    expect(ids.has('r')).toBe(true);
+  });
+
+  it('创建者与所有者是两个人时,两个人都能读', () => {
+    const tree = [node('r', null, 'u-owner', 'restricted', 'u-creator')];
+    expect(readableNodeIds('u-creator', tree, NO_LISTS).has('r')).toBe(true);
+    expect(readableNodeIds('u-owner', tree, NO_LISTS).has('r')).toBe(true);
+  });
+
+  it('★ 创建者身份**不向上继承** —— 只有这一层节点的创建者才算', () => {
+    // 与所有者不同:所有者是"管理链条",创建者是"谁建的这一篇"。
+    // 若向上继承,任何建过一次外层节点的人都能读到内层所有受限节点。
+    const ids = readableNodeIds('u-creator', [node('r', null, 'u-alice', 'restricted', 'u-creator')], NO_LISTS);
+    expect(ids.has('r')).toBe(true);
+    const other = readableNodeIds('u-creator', [node('r2', null, 'u-alice', 'restricted', 'u-someone')], NO_LISTS);
+    expect(other.has('r2')).toBe(false);
+  });
+
+  it('既不是创建者也不是所有者、又不在名单里的人,仍然读不到', () => {
+    const ids = readableNodeIds('u-nobody', [node('r', null, 'u-alice', 'restricted', 'u-creator')], NO_LISTS);
+    expect(ids.has('r')).toBe(false);
+  });
+
+  it('★ 子树里更内层的受限节点,创建者也必须单独放行', () => {
+    // 逐个受限节点都要放行这条规则不变:创建者是外层的,不代表内层也放行。
+    //
+    // ⚠️ 传的是**扁平数组 + parentId**,不是嵌套 children ——
+    // 第一版我用 children 挂起来,inner 就不在数组里,而"查不到不隐藏"那条
+    // 兜底分支让它返回了 true,于是用例红了。是**用例搭错了**,不是判定错了。
+    const outer = node('outer', null, 'u-alice', 'restricted', 'u-creator');
+    const inner = node('inner', 'outer', 'u-bob', 'restricted', 'u-bob');
+    const ids = readableNodeIds('u-creator', [outer, inner], NO_LISTS);
+    expect(ids.has('outer')).toBe(true);
+    expect(ids.has('inner')).toBe(false);
   });
 });

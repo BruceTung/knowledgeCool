@@ -62,10 +62,18 @@ export interface NodeAccessLists {
  *
  *   1. 链上(自身 + 全部祖先)**没有 restricted** → 可读。这是绝大多数节点。
  *   2. 链上有 restricted → 那些受限节点**每一个**都必须放行,整条链才可读。
- *      放行的三条路(满足任一):
- *        a. 我是它的所有者
- *        b. 我是它某个**祖先**的所有者(越靠上权限越大,与 canEdit 同一方向)
+ *   放行的四条路(满足任一):
+ *        a. 我是它**或它某个祖先**的所有者(越靠上权限越大,与 canEdit 同一方向)
+ *        b. 我是它的**创建者**
  *        c. 我在它的读者名单里,或者本来就是它的编辑被授权者
+ *
+ * ## 三处刻意的决定
+ *   所以创建者**有权管理这个节点的可见范围**。若他反而读不到,会出现两件坏事:
+ *   ① **能管一个自己看不见的东西的名单**;
+ *   ② **永久把自己锁在外面** —— 设成受限且名单为空之后他读不到(404),
+ *      也就再也调不动那个管理入口。真机上正是这样锁住的:
+ *      `replaceReaders` 写完要用 `readersOverview` 组装响应,那一步 404,
+ *      表现是**改动已生效但界面报错**,而修复只能进数据库。
  *
  * ## 两处刻意的决定
  *
@@ -94,6 +102,10 @@ export function canRead(
       node.ownerId === actor.id ||
       lineage.slice(0, index).some((ancestor) => ancestor.ownerId === actor.id);
     if (ownsNodeOrAncestor) continue;
+
+    // 创建者放行 —— 与 canManageReaders 对齐,否则"能管名单但读不到",
+    // 而且他会把自己永久锁在外面(见上方说明)。
+    if (node.createdBy === actor.id) continue;
 
     const lists = listsByNode.get(node.id);
     const listed =
