@@ -245,7 +245,11 @@ export function OrgTreePanel({
             // depth 超过 2 就被钳成 2,于是「第三级组下面的页面」与它的父节点
             // 缩进完全相同,一列看下去看不出谁属于谁(用户 2026-09-27 反馈)。
             // 现在只在一个很深的层级封顶,纯粹是为了防止整行被推到看不见。
-            paddingLeft: `${String(Math.min(node.depth, 8) * 13 + 6)}px`,
+            //
+            // 常数 4 是**跟着箭头宽度走的**(v2.9):箭头 24px 时 `4 + 12 = 16`,
+            // 正好等于下面引导线的落点 —— 所以放大点击区**没有**让整列的
+            // 竖线错位,也没有让徽章、标题往右挪。
+            paddingLeft: `${String(Math.min(node.depth, 8) * 13 + 4)}px`,
           }}
           onClick={() => void navigate(`/n/${node.id}`)}
           onKeyDown={(event) => {
@@ -298,7 +302,7 @@ export function OrgTreePanel({
             Confluence 与 Notion 都用这种细竖线把层级**画**出来,而不是让人去算。
 
             位置:第 i 级祖先的引导线落在 `16 + i*13`。
-            缩进公式是 `depth*13 + 6`,箭头占 20px,**`+10` 正好是箭头的中心** ——
+            缩进公式是 `depth*13 + 4`,箭头占 24px,**`+12` 正好是箭头的中心** ——
             所以竖线看起来是从上一级的展开箭头正中延伸下来的。
             用 `inset-y-0` 让它在相邻行之间连成一条,而不是一段一段的。
           */}
@@ -314,19 +318,51 @@ export function OrgTreePanel({
           {node.children.length > 0 ? (
             <button
               type="button"
-              // 展开箭头:12px 的 ▾/▸。它是"一眼认出"的控件,不是要被读的内容,
-              // 所以留在最小档 —— 但**不再是 9px**(那是用户看到的那版)。
-              className="flex h-5 w-5 flex-none items-center justify-center text-xs text-slate-400 transition-colors hover:text-slate-700"
+              /*
+                展开 / 折叠。
+
+                ⚠️ v2.9 改了两件事,起因是用户一句「把这个展开符号搞大一点,
+                不然鼠标点着太费劲了」:
+
+                1. **字形 12px → 16px 的 SVG 雪佛龙**。
+                   原来是 Unicode 的 `▾` / `▸`,12px 的三角本来就小,而且
+                   这两个字符在大多数字体里**垂直居中偏移**(下缘比上缘空),
+                   所以它看着比实际字号更小。改用 SVG 之后,尺寸与居中都由
+                   自己控制,放大也不会糊,还能加旋转过渡。
+
+                2. **点击区 20×20 → 24×24**(行高 32px,放得下)。
+                   目标尺寸低于 24px 对鼠标就是不友好 —— 这是通用原则,
+                   Apple HIG 与 WCAG 2.2 的目标尺寸下限都是 24px。
+
+                悬停时给一层底色,是为了让"这里可点"这件事**看得见** ——
+                只有字形变色的话,用户仍然不知道该往哪儿瞄准。
+              */
+              className="flex h-6 w-6 flex-none items-center justify-center rounded text-slate-500 transition-colors hover:bg-slate-200/70 hover:text-slate-800 focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:outline-none"
               onClick={(event) => {
                 event.stopPropagation();
                 toggleExpanded(node.id);
               }}
               aria-label={isExpanded ? '折叠' : '展开'}
+              aria-expanded={isExpanded}
             >
-              {isExpanded ? '▾' : '▸'}
+              <svg
+                viewBox="0 0 16 16"
+                aria-hidden
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={2}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className={`h-4 w-4 transition-transform duration-150 ${
+                  isExpanded ? 'rotate-90' : ''
+                }`}
+              >
+                <path d="M6 3.5 10.5 8 6 12.5" />
+              </svg>
             </button>
           ) : (
-            <span className="h-5 w-5 flex-none" />
+            // 没有子节点时占同宽的位,否则同一列的徽章会参差不齐
+            <span className="h-6 w-6 flex-none" />
           )}
 
           <span
