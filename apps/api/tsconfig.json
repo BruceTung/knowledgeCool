@@ -11,8 +11,8 @@
     "incremental": true,
     "declaration": false,
     "declarationMap": false,
-    "types": ["node", "vitest/globals"]
+    "types": ["node"]
   },
-  "include": ["src/**/*.ts", "test/**/*.ts"],
+  "include": ["src/**/*.ts"],
   "exclude": ["node_modules", "dist"]
 }

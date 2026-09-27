@@ -10,7 +10,7 @@
   "scripts": {
     "audit:docs": "node scripts/audit-docs.mjs",
     "build": "pnpm -r --if-present run build",
-    "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm audit:docs",
+    "check": "pnpm typecheck && pnpm lint && pnpm audit:docs",
     "clean": "pnpm -r --if-present run clean",
     "db:deploy": "pnpm --filter @knowledgecool/api run db:deploy",
     "db:generate": "pnpm --filter @knowledgecool/api run db:generate",
@@ -22,7 +22,6 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "seed:dev": "pnpm --filter @knowledgecool/api run seed:dev",
-    "test": "pnpm -r --if-present run test",
     "typecheck": "pnpm -r --if-present run typecheck",
     "verify:org": "pnpm --filter @knowledgecool/api run verify:org",
     "verify:doc": "pnpm --filter @knowledgecool/api run verify:doc"

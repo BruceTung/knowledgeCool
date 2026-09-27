@@ -7,7 +7,7 @@ packages:
 # 不放开这些,安装会以 ERR_PNPM_IGNORED_BUILDS 失败;
 # 即使绕过,也会静默跳过构建步骤,直到运行期才报错。
 #   - prisma / @prisma/engines: 下载查询引擎二进制
-#   - esbuild / @swc/core: 平台原生二进制(vite / vitest / 测试转译)
+#   - esbuild / @swc/core: 平台原生二进制(vite / nest 构建转译)
 #   - unrs-resolver: eslint 的模块解析器原生依赖
 #   - @parcel/watcher: 文件监听原生依赖(nest --watch / vite)
 # ---------------------------------------------------------------
@@ -30,7 +30,4 @@ minimumReleaseAgeExclude:
   - '@nestjs/cli@12.0.7'
   - '@tanstack/query-core@5.103.3'
   - '@tanstack/react-query@5.103.3'
-  - '@vitest/mocker@5.0.2'
-  - '@vitest/spy@5.0.2'
   - ts-jest@29.4.14
-  - vitest@5.0.2

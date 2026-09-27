@@ -23,7 +23,7 @@
  * 3. **文件路径**:文档里提到的仓库路径是否真的存在
  * 4. **版本号**:文档头写的版本 = 变更记录里最新一行的版本
  * 5. **前端调用 ↔ 后端路由**:前端写的字符串路径必须都能在后端找到。
- *    这类错是「后端删了路由、前端还在调」,三件套都不报,点下去才是 404。
+ *    这类错是「后端删了路由、前端还在调」,静态检查都不报,点下去才是 404。
  * 6. **docker-compose ↔ 代码**:compose 传给 api 的环境变量必须是代码真读的。
  *    填了不生效的开关比没有开关更坏(有人会去调它,然后奇怪为什么没反应)。
  * 7. **弃用结构**:数据库里已删的列与索引不许再出现在源码里
@@ -253,7 +253,7 @@ else if (latest !== undefined && headerVersion !== latest) {
 
   前端调用后端用的是**字符串路径**,后端路由是装饰器里的字符串,
   两边在类型上没有任何联系 —— 于是「后端删了一条路由,前端还在调」这件事,
-  typecheck / lint / 单测**全都不报**,表现是用户点下去得到 404,
+  typecheck / lint**全都不报**,表现是用户点下去得到 404,
   而开发者以为这次改动是干净的。
 
   这类错误在本仓库真实发生过:回收站移除时删掉了 /nodes/:id/restore 与 /trash,
@@ -446,7 +446,7 @@ function normalizeClientPath(raw) {
 
   v2.12 移除了回收站:迁移里 `DROP COLUMN deleted_at / deleted_by`。
   但 `search.service.ts` 的**裸 SQL** 里一直留着 `WHERE n.deleted_at IS NULL` ——
-  而裸 SQL 不参与 TypeScript 检查,所以 typecheck / lint / 单测全都没报。
+  而裸 SQL 不参与 TypeScript 检查,所以 typecheck / lint全都没报。
   真跑起来的表现是:检索接口直接 500(`column n.deleted_at does not exist`)。
 
   更值得记的是**为什么原来的守卫没拦住**:仓库里其实已经有一条检查 ——

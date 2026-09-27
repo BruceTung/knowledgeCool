@@ -1,5 +1,5 @@
 import react from '@vitejs/plugin-react';
-import { defineConfig } from 'vitest/config';
+import { defineConfig } from 'vite';
 
 export default defineConfig({
   plugins: [react()],
@@ -19,11 +19,5 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: true,
-  },
-
-  test: {
-    // 只测纯逻辑(请求封装、后续的权限展示逻辑),不引入 jsdom。
-    environment: 'node',
-    include: ['src/**/*.test.ts'],
   },
 });

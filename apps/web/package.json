@@ -9,8 +9,6 @@
     "dev": "vite",
     "preview": "vite preview",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run",
-    "test:watch": "vitest",
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\""
   },
   "dependencies": {
@@ -40,7 +38,6 @@
     "postcss": "^8.5.28",
     "tailwindcss": "^4.3.3",
     "typescript": "^6.0.3",
-    "vite": "^7.3.6",
-    "vitest": "^5.0.2"
+    "vite": "^7.3.6"
   }
 }

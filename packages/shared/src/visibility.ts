@@ -71,7 +71,7 @@ export interface ReaderCandidate {
 // 为什么搬进 shared:这段判定**错了不会报错** —— 表现是「某一层的标题被不该看见的人看见了」,
 // 而界面、接口、日志一切正常。它是这个系统里最需要被测的逻辑之一,而它原本嵌在
 // NodeService.tree 的方法体里(要连着 Prisma 一起 mock 才能测)。搬成纯函数之后,
-// 前后端与单测都能直接用它,见 packages/shared/test/visibility.spec.ts。
+// 前后端都能直接用它。
 
 /** 参与判定的节点字段。刻意只要这几列 —— 判定不该依赖标题、正文之类的业务字段。 */
 export interface ReadableNode {

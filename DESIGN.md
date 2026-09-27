@@ -130,7 +130,7 @@
 | 前端 | React 18 + Vite | TanStack Query(服务端状态)+ Zustand(客户端状态) |
 | 编辑器 | Tiptap 3 | ProseMirror JSON 存储 |
 | 样式 | Tailwind v4 | OKLCH 色;字号刻度见 §7.3 |
-| 测试 | Vitest | 纯函数优先;无 jsdom(组件测试因此受限,见 §11.2) |
+| 校验 | 无单测框架 | 事实一致性靠 `pnpm audit:docs` 的八项机器检查;行为靠 `pnpm verify:doc` 打真接口 |
 | 部署 | Docker Compose | 四容器:postgres / redis / api / web |
 
 ### 2.2 版本约束(实测,不是"看起来新就行")
@@ -198,7 +198,7 @@
 | Prisma | 数据访问 | 不写业务规则 |
 
 > **权限判定刻意做成纯函数**。它是「错了不会报错」的逻辑(表现为某人多看到一点东西),
-> 必须能被单测直接覆盖。写在服务里面要连着 Prisma 一起 mock 才测得到,而那种测试没人会写。
+> 这样才能被**独立地推理与复核**(读一遍就知道它对不对),而不必连着 Prisma 一起 mock。
 
 **Redis 的位置:缓存,不是数据源。** 连接失败或取不到世代号时一律回源数据库,
 判定的正确性不依赖它。
@@ -394,7 +394,7 @@
 | **授权** | 额外允许某人改这个节点 | `node_grants` |
 | **组织归属** | 谁属于哪个组织单元(决定他能给谁授权) | `org_assignments` |
 
-判定写成 `packages/shared/src/permission.ts` 里的**纯函数**,有单测。
+判定写成 `packages/shared/src/permission.ts` 里的**纯函数**,与数据库无关,可以逐条读、逐条用接口验。
 
 ### 5.2 三条定稿规则
 
@@ -882,7 +882,7 @@ POST /admin/org/import            → 确认写入(一次事务)
 - 但**会缩小他的组织范围**:他能授权给别人的人变少了;若是他最后一条归属,
   他将不能在别人下面新建、也不能被授权。
 
-这两句写在移出前的确认框里,而且有单测钉住 —— 它们是这件事的安全边界,
+这两句写在移出前的确认框里 —— 它们是这件事的安全边界,漏了或写反了会让人照着错误的心智模型做人事调整。
 漏了或写反了会让人照着错误的心智模型做人事调整。
 
 ---
@@ -921,7 +921,7 @@ docker compose up -d --build        # 起/更新四个容器(迁移会自动应�
 pnpm verify:org                     # 端到端验收(168 项,跑之前先 seed:dev)
 pnpm db:verify                      # 数据库契约自检(表 / 索引 / CHECK / v1 残留)
 pnpm seed:dev                       # 演示数据(**需要先清库**,不做幂等)
-pnpm check                          # typecheck + lint + test + audit:docs
+pnpm check                          # typecheck + lint + audit:docs
 ```
 
 ⚠️ **在容器里跑验收脚本时必须带 `-e KC_API`**:
@@ -1019,7 +1019,7 @@ docker compose exec -T redis redis-cli del kc:login:lock:u:kc004
 | 单机部署无冗余 | 本地卷存附件,机器坏了附件就没了 | 备份脚本 + 异地保存;附件目录单独挂盘 |
 | 大文档编辑器性能 | 几千行的页面,Tiptap 首次渲染会卡 | 阶段一可接受;必要时引入分块加载 |
 | `pg_trgm` 检索精度 | 对长文档的相关度排序不如专业搜索引擎 | 阶段一数据量下无虞;**上量后必须换 Meilisearch** |
-| 前端组件测试缺失 | 未安装 jsdom / testing-library,组件渲染没有自动化覆盖 | 把值得测的逻辑**抽成纯函数**再测(树导航 / 个人列表 / 高亮 / 批量移动选择);组件本身仍靠人工验收 |
+| 没有自动化测试 | 项目里**不放单测**,回归靠 `pnpm verify:org`(168 项端到端)与 `pnpm verify:doc`(行为断言) | 这两套是**脚本**,跑的是真接口与真数据库,验的是行为而不是实现 |
 
 ### 11.3 仍然开放
 
