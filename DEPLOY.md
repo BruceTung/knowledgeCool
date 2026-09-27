@@ -328,7 +328,7 @@ docker compose exec -T api node scripts/verify-db.mjs   # 数据库契约自检
 ```
 
 ```bash
-# 端到端验收(161 项)。⚠️ 必须带 KC_API —— 见下面那条注。
+# 端到端验收(168 项)。⚠️ 必须带 KC_API —— 见下面那条注。
 docker compose exec -T -e KC_API=http://web/api/v1 -e KC_ROOT=http://web \
   api node scripts/verify-org.mjs
 ```
