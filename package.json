@@ -8,8 +8,9 @@
     "node": ">=22.12.0"
   },
   "scripts": {
+    "audit:docs": "node scripts/audit-docs.mjs",
     "build": "pnpm -r --if-present run build",
-    "check": "pnpm typecheck && pnpm lint && pnpm test",
+    "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm audit:docs",
     "clean": "pnpm -r --if-present run clean",
     "db:deploy": "pnpm --filter @knowledgecool/api run db:deploy",
     "db:generate": "pnpm --filter @knowledgecool/api run db:generate",
