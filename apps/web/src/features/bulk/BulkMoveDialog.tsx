@@ -82,13 +82,20 @@ export function BulkMoveDialog({
         </>
       }
     >
+      {/*
+        ⚠️ v2.16 改文案:原来写「勾选这个节点下的内容」,而下面列的是
+        `children` —— **只有直接子节点**,孙节点一个都不出现。
+        用户会以为"内容不全"是 bug(而它其实是刻意的:批量移动一步一层,
+        要动孙节点就进到它父节点那一层去操作)。文案现在如实说明这一点。
+      */}
       <p className="text-sm leading-relaxed text-slate-500">
-        勾选这个节点下的内容,再选一个目标。同一批里**只取最外层** ——
+        勾选要移动的内容,再选一个目标。这里列的是<b>直接子节点</b> ——
+        孙节点请进它父节点那一层再移动。同一批里**只取最外层**:
         选了 A 又选它里面的 B 时,结果会取决于执行顺序,所以服务端会拒绝那种选法。
       </p>
 
       {children.length === 0 && (
-        <p className="text-sm text-slate-500">这个节点下面还没有内容。</p>
+        <p className="text-sm text-slate-500">这个节点下面还没有直接子节点。</p>
       )}
 
       <div className="max-h-64 overflow-y-auto rounded-md border border-slate-200">

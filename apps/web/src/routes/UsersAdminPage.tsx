@@ -141,6 +141,42 @@ export function UsersAdminPage() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
 
+  /**
+   * 提交一次改名。
+   *
+   * ⚠️ v2.16 修的一处缺陷:原来 Enter 与 onBlur 两个分支各自
+   * `updateUser.mutate(...)` 然后**无条件** `setRenamingId(null)`,
+   * 而且 mutation 没有 `onError`。于是改名失败时(工号/姓名的唯一性与校验、
+   * 网络断开、403)会发生:
+   *   ① 输入框消失、新名字没写进去,用户以为改成功了;
+   *   ② 唯一的错误提示在该页**最底部**(几百人的长列表下根本看不到);
+   *   ③ 同一页"改状态"那条路径是有 toast 的 —— 两条路径处理不一致。
+   *
+   * 现在:成功后收起输入框并提示,失败时**留在原地**并把原因弹出来。
+   */
+  function commitRename(user: OrgUserView, raw: string): void {
+    const next = raw.trim();
+    if (next === '' || next === user.name) {
+      setRenamingId(null);
+      return;
+    }
+    updateUser.mutate(
+      { userId: user.id, name: next },
+      {
+        onSuccess: () => {
+          setRenamingId(null);
+          toast(`已把姓名改为「${next}」`, 'success');
+        },
+        onError: (error: unknown) => {
+          toast(
+            error instanceof Error ? `改名失败:${error.message}` : '改名失败,请重试。',
+            'error',
+          );
+        },
+      },
+    );
+  }
+
   return (
     /*
       这一页比其他页宽(`max-w-6xl`,别处是 3xl / 4xl)。
@@ -255,21 +291,11 @@ export function UsersAdminPage() {
                     defaultValue={user.name}
                     className="w-32 rounded border border-blue-400 px-1 py-0.5 text-sm outline-none"
                     onKeyDown={(event) => {
-                      if (event.key === 'Enter') {
-                        const next = event.currentTarget.value.trim();
-                        if (next !== '' && next !== user.name) {
-                          updateUser.mutate({ userId: user.id, name: next });
-                        }
-                        setRenamingId(null);
-                      }
+                      if (event.key === 'Enter') commitRename(user, event.currentTarget.value);
                       if (event.key === 'Escape') setRenamingId(null);
                     }}
                     onBlur={(event) => {
-                      const next = event.target.value.trim();
-                      if (next !== '' && next !== user.name) {
-                        updateUser.mutate({ userId: user.id, name: next });
-                      }
-                      setRenamingId(null);
+                      commitRename(user, event.target.value);
                     }}
                   />
                 ) : (

@@ -245,33 +245,18 @@ export class CommentService {
     });
   }
 
-  /**
-   * 一批节点的**评论总数** —— 节点树角标用。
-   *
-   * 数的是"有几条评论",不是"有几个待解决问题":这个系统里没有"问题"这个概念。
-   * (原来这里带 `status: 'open'` 过滤,那套语义已整体移除。)
-   */
-  async commentCounts(nodeIds: readonly string[]): Promise<Record<string, number>> {
-    if (nodeIds.length === 0) return {};
+  /*
+    ⚠️ v2.16 删掉了两个**已经没有调用方**的方法:
 
-    const rows = await this.prisma.comment.groupBy({
-      by: ['nodeId'],
-      where: { nodeId: { in: [...nodeIds] } },
-      _count: { _all: true },
-    });
+      · `commentCounts()` —— 它只服务于那条已被删除的 `GET /comment-counts`。
+        树上的角标现在由 `NodeService` 自己 `groupBy` 算(那里本来就要为
+        可见性过滤把节点查一遍,顺带算一次比再发一轮请求便宜),
+        所以这里这份是第二实现 —— 而"同一件事两处实现"正是会分叉的东西。
+      · `assertReadable()` —— 它只是 `permissions.requireRead` 的一层包装,
+        而三个调用点都直接调了后者。留着它只会让人以为这里多了一道闸。
 
-    return Object.fromEntries(rows.map((row) => [row.nodeId, row._count._all]));
-  }
-
-  /**
-   * 确认节点存在**且读得到**。
-   *
-   * v2.12 起改成走 PermissionService —— 少了这一步,受限节点会通过评论接口
-   * 暴露"它存在"这件事(以及它的评论内容)。
-   */
-  private async assertReadable(operator: Actor, nodeId: string): Promise<void> {
-    await this.permissions.requireRead(operator, nodeId);
-  }
+    两者都是 public/private 方法,lint 抓不到"没人调用" —— 只能靠人删。
+  */
 
   /**
    * 单条评论的视图。

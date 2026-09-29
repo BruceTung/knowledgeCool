@@ -9,7 +9,6 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
-  Query,
 } from '@nestjs/common';
 import type { AuthUser, CommentListResponse, CommentView } from '@knowledgecool/shared';
 
@@ -24,9 +23,11 @@ import { CreateCommentDto, UpdateCommentDto } from './dto/comment.dto.js';
  * (`/comments/:id`)。一条评论属于哪个节点由**服务端查出来**,
  * 不让客户端指定 —— 否则可以拿别人的评论 id 去打一个自己有权访问的节点。
  *
- * v2.0 变化:`/pages/:id/comments` → `/nodes/:id/comments`;
- * 角标从 `/spaces/:id/comment-counts` → `GET /comment-counts?ids=a,b,c`
- * (树现在一次返回全公司,角标跟着节点列表走,而不是跟着空间走)。
+ * v2.0 变化:`/pages/:id/comments` → `/nodes/:id/comments`。
+ *
+ * ⚠️ v2.16:全局的 `GET /comment-counts` 已删除 —— 角标由 `/org/tree`
+ * 随节点一起返回,那条接口既没有调用方、又没有权限判定(见下方的说明)。
+ * 所以本文件的接口**全部以节点或评论为界**,没有任何"跨节点批量取数"的入口。
  */
 @Controller()
 export class CommentController {
@@ -70,32 +71,21 @@ export class CommentController {
     return this.comments.remove(user, commentId);
   }
 
-  /**
-   * 一批节点的**评论总数** —— 节点树角标。
-   *
-   * 用查询串而不是路径参数,是因为调用方(树)手里**本来就有**这批 id,
-   * 不必为了取角标再要求它按某个"空间"去分组。
-   */
-  @Get('comment-counts')
-  @HttpCode(HttpStatus.OK)
-  counts(@Query('ids') ids: string | undefined): Promise<Record<string, number>> {
-    return this.comments.commentCounts(parseIdList(ids));
-  }
-}
+  /*
+    ⚠️ v2.16 删掉了 `GET /comment-counts?ids=a,b,c`。
 
-/**
- * 解析 `?ids=a,b,c`。
- *
- * **按 UUID 形状过滤**而不是"原样透传再让数据库报错":一个畸形 id 会让
- * 整个 `in (...)` 查询抛 22P02(类型转换失败),连带把整棵树的角标都打没 ——
- * 而这不是用户能理解的错误。丢掉畸形项、返回其余的,才是合理的降级。
- */
-function parseIdList(raw: string | undefined): string[] {
-  if (raw === undefined) return [];
-  return raw
-    .split(',')
-    .map((segment) => segment.trim())
-    .filter((segment) => UUID_PATTERN.test(segment));
-}
+    它有两个问题,而且是同一个根:**它是 v2.0 的形状的遗留物。**
 
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      1. **没有任何权限判定。** 它直接把任意 nodeId 的评论数返回给任何登录用户。
+         对受限节点来说,这既确认了"这个节点存在",又交出了"它上面有多少条评论" ——
+         而其余读取路径(详情 / 正文 / 导出 / 评论列表 / 成员)都回 404。
+         一条不一致的路径就是一条侧信道(§5.6)。
+      2. **它是死接口。** 角标早就不走它了:树在 `/org/tree` 里
+         一并返回 `commentCount`(见 `NodeService.tree`),因为树本来就要
+         为可见性过滤把节点查一遍,顺带 `groupBy` 一次比再发一轮请求便宜。
+         全仓库(前端、脚本、文档)没有任何调用点。
+
+    修法只有一种:**删掉它**。给它补上读判定也行,但那等于花代价维护一条
+    没有调用方的接口 —— 而"没人调用但能被调用"的路径正是最容易漏掉守卫的地方。
+  */
+}

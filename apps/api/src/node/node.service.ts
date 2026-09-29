@@ -19,7 +19,7 @@ import {
 } from '@knowledgecool/shared';
 
 import { recordAudit } from '../audit/record.js';
-import { runSerializable } from '../common/db/serializable.js';
+import { hasPrismaCode, runSerializable } from '../common/db/serializable.js';
 import { AppError } from '../common/errors/app-error.js';
 import { idsOfPath, pathOfChild, pathOfRoot, rootIdOfPath, subtreePrefix } from '../common/node-path.js';
 import { Prisma } from '../generated/prisma/client.js';
@@ -36,7 +36,7 @@ import {
  * 因此与旧版 PageService 的三处结构性差别:
  *   1. 不再有 `spaceId` —— 树是全公司一棵,一级节点就是部门
  *   2. 鉴权全部改走 `PermissionService` 的**关系判定**(不再有角色等级)
- *   3. `tree()` 一次性返回**整棵树**(读全员开放),并附带"我哪些能改/能管"
+ *   3. `tree()` 一次性返回**整棵树**(按可见性过滤后),并附带"我哪些能改/能管"
  *
  * ## 物化路径
  *
@@ -131,8 +131,12 @@ export class NodeService {
   /**
    * 整棵树。给 `rootId` 时只返回**那棵子树**。
    *
-   * **不做权限过滤** —— 所有节点对所有登录用户可见(§5.3 规则一)。
-   * 但会额外算出「我哪些能改、我哪些能管」交给前端**隐藏按钮**。
+   * **会做可见性过滤**(v2.12)。默认 public 的节点人人可见(§5.3 规则一),
+   * 但 `restricted` 的节点及其子树只对授权的人可见 —— 被摘掉的节点
+   * **根本不会出现在响应里**,所以它下面的 public 子节点也一并看不到。
+   * 判定本身在 shared 的 `readableNodeIds`(纯函数,见下面的说明)。
+   *
+   * 另外会算出「我哪些能改、我哪些能管」交给前端**隐藏按钮**。
    * ⚠️ 那只是体验,服务端仍是唯一裁判。
    *
    * 权限标记是**在内存里算的**:逐节点调 `permissions.access()` 会退化成
@@ -458,11 +462,50 @@ export class NodeService {
     }
 
     await runSerializable(this.prisma, async (tx) => {
+      /*
+        ⚠️⚠️ v2.16:**目标父节点的路径必须在事务内重读。**
+
+        上面那次 `pluck`/`requireEdit` 都是在事务**外**做的,拿到的
+        `newParentPath` 只是个快照。若另一个请求在这两步之间把目标父节点
+        移到了别处,而这次执行又用**过期的路径**去重写子树 ——
+        被移动的那棵子树的 `materialized_path` 会指向一个**父节点已经不在的位置**。
+
+        后果不是报错,而是**永久性的静默损坏**:`PermissionService.chainOf`
+        靠 `prefixPathsOf(自身路径)` 反查祖先链,路径一旦对不上真实父子关系,
+        链就断了 —— `canEdit`/`canManage` 从此对那棵子树判错(既可能失权,
+        也可能越权),而且不会自愈。
+
+        为什么依赖 Serializable 隔离级别救不了它:PostgreSQL 的谓词锁
+        **只覆盖事务内实际访问过的数据**。这里的事务从未读过目标父节点那一行,
+        于是 SSI 看不见"这次读"与"另一个事务的移动"之间的依赖;
+        而本事务又只写自己那棵子树、不写父节点,连写冲突都不会有 —— 两边都能提交。
+
+        读进来之后就重新做一次防环判定(目标可能已经**变成**了自己的子孙),
+        再做路径重写。这是本文件里唯一一处"读必须在事务内"的地方;
+        `deleteSubtree` 每轮重查剩余行,遵循的是同一条原则。
+      */
+      let effectiveNewParentPath = newParentPath;
+      if (input.newParentId !== null) {
+        const fresh = await tx.node.findUnique({
+          where: { id: input.newParentId },
+          select: { materializedPath: true },
+        });
+        // 目标在事务内消失了:并发把它删了。此时继续写会造出孤儿路径。
+        if (fresh === null) throw AppError.notFound();
+        if (
+          input.newParentId === nodeId ||
+          fresh.materializedPath.startsWith(subtreePrefix(row.materializedPath))
+        ) {
+          throw AppError.validation('不能把节点移动到它自己或它的子节点下');
+        }
+        effectiveNewParentPath = fresh.materializedPath;
+      }
+
       await applyMoveTo(tx, {
         nodeId,
         row,
         newParentId: input.newParentId,
-        newParentPath,
+        newParentPath: effectiveNewParentPath,
         actorId: operator.id,
         version: input.version,
         position: input.newPosition,
@@ -546,18 +589,37 @@ export class NodeService {
       }
     }
 
-    const newParentPath = parentRow.materializedPath;
-
     // ---- 执行阶段:一个事务,全做或全不做 ----
+    //
+    // ⚠️ 这里**不留** parentRow.materializedPath 的快照:目标路径必须在事务内
+    // 重读(见下面那段说明)。校验阶段用过的 parentRow 只用于防环判定,
+    // 而那次判定也会在事务内按新路径重做一遍。
     await runSerializable(this.prisma, async (tx) => {
+      /*
+        ⚠️ v2.16:目标路径在事务内**重读**。理由与 `move` 里那段完全一样 ——
+        `newParentPath` 是校验阶段(事务外)的快照,并发把目标移走之后
+        再拿它重写子树,会造出一棵指向"父节点已不在的位置"的子树;
+        而权限判定靠物化路径取祖先链,链断之后是**静默判权错误**。
+        (Serializable 救不了它:本事务从未读过目标那一行,谓词锁无从建立。)
+      */
+      const freshTarget = await tx.node.findUnique({
+        where: { id: target },
+        select: { materializedPath: true },
+      });
+      if (freshTarget === null) throw AppError.notFound();
+
       for (const id of ids) {
         const row = rows.get(id);
         if (row === undefined) continue;
+        // 防环也要按**新**路径重判一次:目标可能已经被移进了某个选中节点的子树
+        if (target === id || freshTarget.materializedPath.startsWith(subtreePrefix(row.materializedPath))) {
+          throw AppError.validation(`「${row.title}」不能移动到它自己或它的子节点下`);
+        }
         await applyMoveTo(tx, {
           nodeId: id,
           row,
           newParentId: target,
-          newParentPath,
+          newParentPath: freshTarget.materializedPath,
           actorId: operator.id,
           // 批量移动一律**追加到末尾**。让每个节点都能指定位置的话,
           // 用户要在脑子里模拟一次完整的排序,而那是拖拽该做的事。
@@ -648,7 +710,30 @@ export class NodeService {
         }
 
         const ids = remaining.filter((item) => item.depth === maxDepth).map((item) => item.id);
-        await tx.node.deleteMany({ where: { id: { in: ids } } });
+        /*
+          ⚠️ v2.16:把外键冲突翻译成一句人话。
+
+          正常情况下这一层不可能还有子节点(depth 最大的层必然无子),
+          所以 `onDelete: Restrict` 不该被触发。真触发只有一种原因:
+          **`depth` 与实际父子关系对不上**(数据损坏 —— 例如历史遗留的行、
+          或某次路径重写没把 depth 一起改对)。此时删父行会撞约束。
+
+          原来撞上去就是裸的 Postgres 错误 → 全局过滤器兜成 **500**
+          「服务器内部错误」,而下面那句"节点层级异常"**永远走不到** ——
+          它描述的是真正的原因,却对不上用户实际看到的错误。
+          现在先接住 FK 错误并说明它,再抛那句兜底。
+        (不损坏数据:整个事务回滚,一个节点都不会被删掉。)
+        */
+        try {
+          await tx.node.deleteMany({ where: { id: { in: ids } } });
+        } catch (error: unknown) {
+          if (hasPrismaCode(error, 'P2003') || hasPrismaCode(error, 'P2014')) {
+            throw AppError.validation(
+              '这棵子树的数据不一致(有节点的层级与实际父子关系对不上),删除已中止,未删除任何内容。请联系管理员用 verify-db 检查。',
+            );
+          }
+          throw error;
+        }
         removed += ids.length;
       }
       throw AppError.validation('节点层级异常,彻底删除已中止');
@@ -737,7 +822,7 @@ function defaultTitleFor(kind: NodeKind): string {
  * ⚠️ 抽出来是因为 `move` 与 `bulkMove` 必须走**同一份**路径重写逻辑。
  * 抄一份出来的代价:某天有人只修了其中一份,另一份就开始悄悄出错 ——
  * 而物化路径写错的表现是「某棵子树的祖先链错了」,那会连带把权限判定也带偏,
- * 且不报任何错(§9.4:凡是写数据的逻辑,只允许存在一份)。
+ * 且不报任何错(§12:凡是写数据的逻辑,只允许存在一份)。
  *
  * 三件事:乐观锁、子树路径重写、位置。顺序不能换 ——
  * 位置要在路径改好之后再算(否则算的是旧父节点下的兄弟)。

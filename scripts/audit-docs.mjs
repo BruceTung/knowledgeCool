@@ -15,7 +15,7 @@
  *     —— 填了不生效的开关比没有开关更坏
  *   · `/health` 与 `/health/ready` 两个接口根本没进接口清单
  *
- * ## 检查八件事
+ * ## 检查九件事
  *
  * 1. **接口**:`DESIGN.md` §6.2 的表格 ↔ 控制器里实际注册的路由,双向比对
  *    (文档少的、多的都报 —— 单向比对会漏掉「代码里有、文档没写」)
@@ -31,6 +31,11 @@
  * 8. **生成块**:`DESIGN.md` 里由 `scripts/gen-doc.mjs` 生成的四张事实表
  *    (接口 / 数据模型 / 环境变量 / 前端路由)必须与代码一致。
  *    这一条是"文档可信"的**机制保证**:表格是生成的,不是手抄的。
+ * 9. **章节引用**:文档与全部源码注释里的每一个 `§x.y` 都必须指得到真实的标题。
+ *    ⚠️ 这一条是被旧文档的真实缺陷逼出来的:它把「§5.6」引用了 8 次
+ *    (保密能力的说明散落在六处),而 **§5.6 那一节根本不存在** ——
+ *    文档只写到 §5.3。源码注释里同样引用了它十几处。
+ *    两头都在"看起来正常"的范围内,而**没有任何一处会去核对那个号存不存在**。
  *
  * 用法:`pnpm audit:docs`(退出码非 0 表示有漂移);`node scripts/gen-doc.mjs` 重新生成表格。
  */
@@ -514,6 +519,72 @@ function walkSource(dir, out) {
     }
   }
   notes.push(`弃用结构:扫描 ${String(scanned)} 个源文件,命中 ${String(hits)} 处`);
+}
+
+// ============================================================
+// 4.95) 章节引用必须指得到真章节(v4.0 新增)
+// ============================================================
+
+/*
+  ⚠️ 这一条是被**旧文档的真实缺陷**逼出来的。
+
+  旧版 DESIGN.md 把「§5.6」引用了 8 次(保密能力散落在 §1.2 / §5.2 / §5.3 /
+  §6.1 / §6.3 / §9.6 各处),而 **§5.6 那一节根本不存在** —— 文档只写到 §5.3。
+  源码注释里也引用了它(permission.ts、visibility.ts、search.service.ts、
+  VisibilityDialog.tsx 等十余处)。
+
+  这种漂移**检查不出来**是因为它两头都在"看起来正常"的范围内:
+  文档读起来有节号,代码注释读起来有出处,而**没有任何一处会去核对那个号存不存在**。
+  于是"保密能力"这件事在全仓库里没有一段集中的说明,只能在别处的只言片语里拼 ——
+  而那正是用户说的「文档和实际功能仅仅是部分对齐」。
+
+  所以这条检查同时对**文档自己**与**全部源码注释**核对:
+  每一个 `§x.y` 都必须能在文档的标题里找到。加一节、删一节、重排节号,
+  都会立刻在这里报出来,而不是等某天有人按着节号去翻却发现翻不到。
+*/
+
+/**
+ * 文档里所有标题的编号。`## 5. 权限模型` → "5";`### 5.6 保密…` → "5.6"。
+ */
+const headingNumbers = new Set(
+  [...designText.matchAll(/^#{2,4}\s+(\d+(?:\.\d+)*)/gm)].map((m) => m[1]),
+);
+
+{
+  const dangling = [];
+
+  const checkRefs = (label, text, lineOf) => {
+    text.split(/\r?\n/).forEach((line, index) => {
+      for (const m of line.matchAll(/§\s*(\d+(?:\.\d+)*)/g)) {
+        if (headingNumbers.has(m[1])) continue;
+        dangling.push(`${label}${lineOf(index + 1)} 引用了 §${m[1]},但文档里没有这一节`);
+      }
+    });
+  };
+
+  checkRefs('DESIGN.md:', designText, (n) => `:${String(n)}`);
+
+  let scanned = 0;
+  for (const root of FORBIDDEN_SCAN_ROOTS) {
+    for (const file of walkSource(path.join(ROOT, root), [])) {
+      scanned += 1;
+      const rel = path.relative(ROOT, file).replaceAll(path.sep, '/');
+      for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+        for (const m of line.matchAll(/§\s*(\d+(?:\.\d+)*)/g)) {
+          if (headingNumbers.has(m[1])) continue;
+          dangling.push(`${rel} 引用了 §${m[1]},但文档里没有这一节`);
+        }
+      }
+    }
+  }
+
+  for (const item of dangling) {
+    fail(`章节引用漂移:${item}; 要么补上那一节,要么把引用改成真实存在的节号`);
+  }
+  notes.push(
+    `章节引用:文档 ${String(headingNumbers.size)} 个标题 / 扫描 ${String(scanned)} 个源文件,` +
+      `悬空引用 ${String(dangling.length)} 处`,
+  );
 }
 
 // ============================================================

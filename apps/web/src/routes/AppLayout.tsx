@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 
-import { Button } from '../components/ui';
+import { Button, ErrorNote } from '../components/ui';
 import { useLogout, useMe } from '../features/auth/queries';
 import { GrantDialog } from '../features/grants/GrantDialog';
 import { useGrantDialog } from '../features/grants/dialog-store';
@@ -27,7 +27,8 @@ function activeNodeIdOf(pathname: string): string | undefined {
  *
  * ⚠️ v2.0 有两处与旧版不同:
  *   1. **左侧常驻整棵组织树** —— 不再有"先选空间再看树"这一步。
- *      登录进来就看到公司有哪些部门(读对所有登录用户开放,§5.3 规则一)。
+ *      登录进来就看到公司有哪些部门(默认读对所有登录用户开放,§5.3 规则一;
+ *      受限节点的整棵子树由服务端摘掉,前端拿不到也就画不出来)。
  *   2. **权限弹窗挂在这里** —— 它由树上的齿轮按钮打开,而树就在这一层,
  *      所以状态放在这一层。放到路由页面里会导致"从树点开的弹窗
  *      要等页面切过去才出现"。
@@ -98,7 +99,15 @@ export function AppLayout() {
 
   return (
     <div className="flex h-full flex-col bg-white">
-      <header className="flex flex-none items-center gap-4 border-b border-slate-200 px-4 py-2.5">
+      {/*
+        `data-print='hide'` 是**打印时必须有的**(v2.16):打印样式不再靠
+        `header` 标签名猜"这是不是框架"(文档页的页头也是 <header>,那要印)。
+        少了这个标记,打印稿的第一行会是顶栏。
+      */}
+      <header
+        data-print="hide"
+        className="flex flex-none items-center gap-4 border-b border-slate-200 px-4 py-2.5"
+      >
         <button
           type="button"
           className="flex items-center gap-2"
@@ -193,10 +202,21 @@ export function AppLayout() {
             onOpenMembers={openMembers}
           />
         ) : (
-          <div className="hidden h-full w-72 flex-none items-center justify-center border-r border-slate-200 bg-slate-50 md:flex xl:w-80">
-            <span className="text-sm text-slate-500">
-              {tree.isError ? '组织结构加载失败' : '加载中…'}
-            </span>
+          <div className="hidden h-full w-72 flex-none flex-col items-center justify-center gap-2 border-r border-slate-200 bg-slate-50 p-4 md:flex xl:w-80">
+            {tree.isError ? (
+              /*
+                ⚠️ v2.16:原来这里只有一句「组织结构加载失败」—— 既没有原因,
+                也没有重试入口。而**全站导航都依赖这棵树**,用户唯一的出路是刷新整页。
+                SearchPage / AuditPage / NodeDetailPage 三处都给了 ErrorNote + 重试,
+                只有这条最关键的路没有 —— 不一致本身就是 bug。
+              */
+              <>
+                <span className="text-sm text-slate-500">组织结构加载失败</span>
+                <ErrorNote error={tree.error} onRetry={() => void tree.refetch()} />
+              </>
+            ) : (
+              <span className="text-sm text-slate-500">加载中…</span>
+            )}
           </div>
         )}
 

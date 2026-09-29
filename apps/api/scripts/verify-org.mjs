@@ -1152,6 +1152,51 @@ async function main() {
       baseUpdatedAt: target.body.updatedAt,
     });
     check('原样保存一次正文 → 200(顺便给审计制造一条 node.content.update)', saved.status === 200);
+
+    /*
+      ⚠️ v2.16 新增:正文保存的 **POST 别名**必须存在。
+
+      为什么单独立一条断言:关标签页时的那次兜底保存走的是
+      `navigator.sendBeacon`,而 **beacon 只能发 POST**。
+      在补上这条路由之前,它打到一条只注册了 PUT 的路径上 ——
+      返回 404,而页面正在卸载,没有任何地方会看到那个 404。
+      表现与"没加 beacon"完全一样:**停笔 1.2 秒内关标签页,打的字没了**,
+      而代码里(以及文档里)看起来这条链路是通的。
+
+      这正是「静态检查三件套全都抓不到」的那一类:前端写的是字符串路径,
+      后端路由是装饰器里的字符串,类型系统上两边毫无联系。
+      只有真的打一次 POST 才能发现。
+
+      ⚠️ 必须**重新读一次** `updatedAt` 再发。第一版复用了上面那次 PUT 之前
+      读到的旧时间戳,于是服务端回 409 VERSION_CONFLICT —— 那是**乐观锁在正确工作**
+      (上面那次 PUT 已经推进了 updatedAt),而断言把它当成了路由不存在。
+      这是一个"测试自己写错、却看起来像被测代码坏了"的典型:
+      它会把一次正确的冲突检测报成缺陷。真实的前端也是先 GET 再带 baseUpdatedAt 的。
+    */
+    const fresh = await contentOf('接口规范');
+    const beaconSaved = await api('POST', `/nodes/${fresh.id}/content`, {
+      content: fresh.body.content,
+      baseUpdatedAt: fresh.body.updatedAt,
+    });
+    /*
+      ⚠️ 断言**只看"不是 404/405"**,不钉死具体 2xx 码。
+
+      这条断言要证明的是"**路由存在且接受了这次请求**",而不是某个具体状态码。
+      踩过两次,都是断言自己写错、却看起来像被测代码坏了:
+
+        1. 第一版复用上次 PUT 之前的旧 `updatedAt` → 服务端回 **409**,
+           那是**乐观锁在正确工作**,被误报成"路由不存在"。
+        2. 第二版改对了,但钉死 `=== 200` —— 而 NestJS 的 `@Post()`
+           默认就是 **201 Created**,于是又报一次失败。
+
+      现在写成"2xx 即通过":换 HTTP 方法与状态码约定时它仍然有效,
+      而**真正的缺陷(路由不存在)永远是 404/405**,照样会被抓住。
+    */
+    check(
+      '★ POST 正文保存(离页 beacon 走的正是 POST)→ 2xx,不是 404/405',
+      beaconSaved.status >= 200 && beaconSaved.status < 300,
+      String(beaconSaved.status),
+    );
   }
 
   cookie = '';

@@ -17,7 +17,7 @@
  *
  * `editor.getJSON()` 的产物与 `page_contents.content_json` 逐字节对应,
  * 阶段二挂 `y-prosemirror` 时不需要改存储层。届时还要**关掉 Tiptap 自带的撤销栈**
- * 改用 `Y.UndoManager`(§10.1),否则两套撤销栈会打架。
+ * 改用 `Y.UndoManager`(§10 约束 7),否则两套撤销栈会打架。
  */
 import { CodeBlockLowlight } from '@tiptap/extension-code-block-lowlight';
 import { Image } from '@tiptap/extension-image';
@@ -123,6 +123,14 @@ export function PageEditor({
   /** 图片相关的提示(到达上限 / 上传失败)。与"保存状态"分开,两者的原因与后续动作都不一样。 */
   const [imageNotice, setImageNotice] = useState<string | null>(null);
   /**
+   * 最近一次保存失败的原因(v2.16)。
+   *
+   * 与 `state === 'error'` 分开:状态回答"现在什么情况",这条回答"为什么"。
+   * 少了它,用户对"保存失败"唯一的线索是一句固定文案 —— 而这句文案
+   * 对参数校验类错误(**再重试也不会成功**)是错的指引。
+   */
+  const [saveError, setSaveError] = useState<unknown>(null);
+  /**
    * 只为了在**光标移动时**重渲染一次。
    *
    * ⚠️ 不这么做,工具栏的激活态会滞后:`isActive('bold')` / `isActive('table')` /
@@ -186,6 +194,7 @@ export function PageEditor({
         });
         baseRef.current = saved.updatedAt;
         dirtyRef.current = false;
+        setSaveError(null);
         updateState('saved');
       } catch (error: unknown) {
         if (error instanceof ApiError && error.code === 'VERSION_CONFLICT') {
@@ -194,7 +203,19 @@ export function PageEditor({
           updateState('conflict');
           return;
         }
-        // 网络抖动之类:保持 dirty,下次输入还会再试
+        /*
+          ⚠️ v2.16:把失败**原因**留下来。
+
+          原来这一行只有 `updateState('error')` —— `error` 这个变量从头到尾
+          没被用过,原因被整个丢掉,界面只剩一句固定文案
+          「保存失败。内容还留在编辑器里,继续输入会自动重试。」
+
+          那句话对"网络抖动"成立,但对 **`VALIDATION_FAILED`(正文超 2MB、
+          图片超过 10 张、`baseUpdatedAt` 解析不了)**完全不成立:
+          再输入一百次也不会成功,而用户会一直以为它在重试。
+          所以错误原因必须显示出来,并且由它决定文案。
+        */
+        setSaveError(error);
         updateState('error');
       }
     },
@@ -390,7 +411,24 @@ export function PageEditor({
 
       {state === 'error' && (
         <div className="mx-8 mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-          保存失败。内容还留在编辑器里,继续输入会自动重试。
+          {/*
+            文案分两种(见 flush 里那段说明):参数校验类错误**重试不会成功**,
+            说"继续输入会自动重试"是误导。用 `ApiError.code` 区分 ——
+            那是 §6.1 的稳定契约,不是去猜 message 的措辞。
+          */}
+          {saveError instanceof ApiError && saveError.code === 'VALIDATION_FAILED' ? (
+            <>
+              <b>这篇内容没能保存:</b>
+              {saveError.message}
+              <span className="mt-1 block">继续输入也不会成功,请先按提示修改(通常是正文过大或图片过多)。</span>
+            </>
+          ) : (
+            <>
+              <b>保存失败:</b>
+              {saveError instanceof Error ? saveError.message : '原因未知'}
+              <span className="mt-1 block">内容还留在编辑器里,继续输入会自动重试。</span>
+            </>
+          )}
         </div>
       )}
 

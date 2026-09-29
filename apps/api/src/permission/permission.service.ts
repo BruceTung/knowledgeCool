@@ -225,7 +225,7 @@ export class PermissionService {
   }
 
   /**
-   * 能否在 `parentId` 下新建(§5.4)。
+   * 能否在 `parentId` 下新建(§5.3 能力对照)。
    *
    * ⚠️ 与 `canEdit` 是**两件事**:一个组员对「后端组」本身没有 `canEdit`,
    * 但他有权在它下面新建 —— 新建出来的节点归他所有。
@@ -589,6 +589,12 @@ export class PermissionService {
    * 受限节点的读者本来就可能是外部门的人。
    */
   async readerCandidates(operator: Actor, nodeId: string): Promise<ReaderCandidate[]> {
+    // ⚠️ v2.16 补读判定。`canManageReadersPure` 是**纯判定**,不过这一关的话
+    // 受限节点的读者候选会对任何登录用户返回 200 —— 与 readersOverview 是同一类漏,
+    // 只是它漏的是"候选"而不是"名单本身"。
+    // 先在控制器层挡住会更一致(见 permission.controller.ts 的两条 GET),
+    // 但服务层也补一道:**判定属于服务,不能只靠路由那一层记得加**。
+    await this.requireRead(operator, nodeId);
     const { chain } = await this.chainOf(nodeId);
     if (!canManageReadersPure(operator, chain)) return [];
 

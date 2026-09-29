@@ -76,13 +76,19 @@ export class AllExceptionsFilter implements ExceptionFilter {
       const code = STATUS_TO_CODE[status] ?? (status >= 500 ? 'INTERNAL_ERROR' : 'VALIDATION_FAILED');
       const details = code === 'VALIDATION_FAILED' ? extractValidationDetails(exception) : undefined;
 
-      // 5xx 不泄露原文,其余用 §6.1 的默认文案。
-      const message =
-        code === 'VALIDATION_FAILED' || code === 'INTERNAL_ERROR'
-          ? DEFAULT_ERROR_MESSAGES[code]
-          : DEFAULT_ERROR_MESSAGES[code];
-
-      return { status, body: buildErrorBody(code, message, details) };
+      // ⚠️ 一律用 §6.1 的默认文案,**不透传** exception.message。
+      //
+      // 原写法是一个三段式:
+      //     code === 'VALIDATION_FAILED' || code === 'INTERNAL_ERROR'
+      //       ? DEFAULT_ERROR_MESSAGES[code] : DEFAULT_ERROR_MESSAGES[code]
+      // 两个分支**一模一样** —— 条件与整个三元表达式都是死代码。
+      // 它的注释写着「5xx 不泄露原文,其余用默认文案」,但"其余"那个分支
+      // 用的也是默认文案,所以那个"泄露"从来没发生过;真正的问题是它让人
+      // 以为这里有一处需要留意的分流,而实际上没有。
+      //
+      // 想要的行为(与类注释第 2 条一致):框架抛的 HttpException 一律
+      // 替换成中文默认文案 —— Nest 的英文原文只进日志。
+      return { status, body: buildErrorBody(code, DEFAULT_ERROR_MESSAGES[code], details) };
     }
 
     // 3) body-parser / raw-body 抛的解析错误。

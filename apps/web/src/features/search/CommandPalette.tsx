@@ -109,10 +109,22 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
             <p className="px-4 py-6 text-center text-sm text-slate-500">
               输入关键词开始搜索。
               <br />
-              全公司可读的内容都会出现在这里 —— 系统不区分"能搜到"与"能打开"。
+              你能读到的内容都会出现在这里(受限节点里读不到的部分不会出现)。
             </p>
           ) : search.isPending ? (
             <p className="px-4 py-6 text-center text-sm text-slate-500">搜索中…</p>
+          ) : search.isError ? (
+            /*
+              ⚠️ v2.16:`isError` 必须排在 `hits.length === 0` **前面**。
+              故障(500 / 网络断开)时 hits 也是空的,原来的分支顺序会把
+              "搜索坏了"显示成「没有匹配的内容」—— 与结果页(`SearchPage`
+              给的是 ErrorNote + 重试按钮)对同一件事给出两个相反结论,
+              而用户会照着"没搜到"这个结论去换关键词继续试。
+            */
+            <div className="px-4 py-6 text-center text-sm text-slate-500">
+              <p>搜索失败了,不是"没有匹配的内容"。</p>
+              <p className="mt-1">{search.error instanceof Error ? search.error.message : '请稍后重试。'}</p>
+            </div>
           ) : hits.length === 0 ? (
             <p className="px-4 py-6 text-center text-sm text-slate-500">没有匹配的内容</p>
           ) : (

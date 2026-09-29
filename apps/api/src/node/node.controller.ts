@@ -92,6 +92,30 @@ export class NodeController {
   }
 
   /**
+   * 保存正文的 **POST 别名** —— 只为 `navigator.sendBeacon` 存在(§7.5)。
+   *
+   * ⚠️ 这条路由不是"顺手多开一个入口",是**必须的**:
+   * `navigator.sendBeacon` **只能发 POST**,而正文原本只有 PUT。
+   * 于是关标签页时那次兜底保存会打到一条不存在的路由上,
+   * 被丢掉的是一个 404 —— 而页面已经在卸载,没有任何地方会看到它。
+   *
+   * 这正是 §7.5 那个 P0 事故的第二半:卸载清理函数确实补了保存,
+   * 但"关标签页"那条路(beacon)从来没送达过,而它看起来是送达的。
+   * 表现是"停笔 1.2 秒内关掉标签页,打的字没了",与没加 beacon 时一模一样。
+   *
+   * 与 PUT 走**同一个 service 方法、同一份校验、同一套乐观锁** ——
+   * 两个入口只差一个 HTTP 方法,不允许有任何行为差异。
+   */
+  @Post('nodes/:nodeId/content')
+  saveContentByBeacon(
+    @CurrentUser() user: AuthUser,
+    @Param('nodeId', ParseUUIDPipe) nodeId: string,
+    @Body() body: SaveContentDto,
+  ): Promise<NodeContentResponse> {
+    return this.contents.save(user, nodeId, body);
+  }
+
+  /**
    * 导出。以 `text/markdown` 直接下载,不经 JSON 包装。
    *
    * `?format=` 只支持 `md`(省略也行);**其它值一律 400**。

@@ -28,6 +28,21 @@
  * ⚠️ 它**只读** —— 不改任何数据(登录除外,登录会清掉自己的失败计数)。
  */
 const BASE = process.env.KC_API ?? 'http://127.0.0.1:8080/api/v1';
+/**
+ * 站点根(给"后端不参与、由 Nginx 直出"的那几条断言用,例如 SPA 路由)。
+ *
+ * ⚠️ v2.16 修的一处真实缺陷:下面那条 SPA 断言原本**硬编码**
+ * `http://127.0.0.1:8080/search`,完全绕过了上面这个 `KC_API`。
+ * 于是在**容器内**跑脚本时它必然 `ECONNREFUSED` ——
+ * 因为 api 容器里 `127.0.0.1:8080` 是它自己的回环,那里没有 Nginx。
+ *
+ * 而这正是文件头(与 DESIGN §9.2)反复提醒的那个坑:文档教人用
+ * `-e KC_API=http://web/api/v1 -e KC_ROOT=http://web`,脚本却把一个地址写死了。
+ * 表现是"照文档做,脚本仍然连不上",而人会去怀疑容器或网络。
+ *
+ * 现在两个地址都从环境变量取,且与 `verify-org.mjs` 的 `KC_ROOT` 同名同义。
+ */
+const ROOT = process.env.KC_ROOT ?? 'http://127.0.0.1:8080';
 const ADMIN_PASSWORD = process.env.KC_ADMIN_PASSWORD ?? 'Kc-admin-2026';
 let cookie = "";
 function sync(res) {
@@ -99,7 +114,7 @@ const bulk = await api("POST", "/nodes/bulk/move", {});
 ck("§6.2 POST /nodes/bulk/move 存在(不是 404)", bulk.status !== 404, "status=" + bulk.status);
 
 // §7.1: SPA serves index for /search
-const spa = await fetch("http://127.0.0.1:8080/search");
+const spa = await fetch(ROOT + "/search");
 const html = await spa.text();
 ck("§7.1 前端路由 /search 由 SPA 接管", spa.status === 200 && html.includes("<div id="), "status=" + spa.status);
 

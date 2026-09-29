@@ -5,7 +5,7 @@
  * 权限判定的纯函数、错误码、DTO 类型只定义一次,前后端同时受益。
  *
  * 模块制式:**ESM**(`package.json` 里 `"type": "module"` + tsconfig `module: nodenext`)。
- * 与后端一致 —— NestJS 12 是 ESM-only(DESIGN.md §2.5 结论一),全链路统一 ESM,
+ * 与后端一致 —— NestJS 12 是 ESM-only(见 DESIGN.md §2.1 的选型表),全链路统一 ESM,
  * 不必依赖 `require(esm)` 互操作。
  *
  * 副作用是这个包不能有 Node 专有依赖 —— 它必须保持**纯逻辑、零 IO**,

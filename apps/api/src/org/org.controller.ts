@@ -51,7 +51,7 @@ const MAX_IMPORT_BYTES = 8 * 1024 * 1024;
  *   - **建部门 / 人员维护 / 设归属** → 超管(组织架构是管理层的事)
  *   - **建组 / 任命组长** → 该部门的祖先所有者(即部长),见 `OrgService`
  *
- * ⚠️ 这里没有"邀请成员" —— 人是**预置**的,不是邀请进来的(§1.5)。
+ * ⚠️ 这里没有"邀请成员" —— 人是**预置**的,不是邀请进来的(§1.2)。
  * 也没有"空间成员角色" —— 新模型里没有角色,只有所有者/祖先链/显式授权。
  */
 @Controller()
@@ -66,8 +66,8 @@ export class OrgController {
    * 给「设置归属」与「建组」两个界面共用。
    */
   @Get('org/scopes')
-  scopes(): Promise<OrgScopeOption[]> {
-    return this.org.scopeOptions();
+  scopes(@CurrentUser() user: AuthUser): Promise<OrgScopeOption[]> {
+    return this.org.scopeOptions(user);
   }
 
   /** 建部门(一级节点,仅超管)或建组(二级节点,部长)。 */
@@ -110,8 +110,11 @@ export class OrgController {
   /**
    * 这个节点下都有谁。
    *
-   * **读全员开放** —— 与整棵树一致(§5.3 规则一):组织架构本来就是公开的。
+   * **默认读全员开放** —— 与整棵树一致(§5.3 规则一):组织架构本来就是公开的。
    * 写操作才需要 `canManage`,`canManage` 也在响应里给前端。
+   *
+   * ⚠️ 受限节点**除外**:服务端先过 `requireRead`,读不到一律 404。
+   * (树从 v2.12 起做可见性过滤,这一组接口当时漏了收口 —— v2.16 补齐。)
    */
   @Get('nodes/:nodeId/members')
   members(

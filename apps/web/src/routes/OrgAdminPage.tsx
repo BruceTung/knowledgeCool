@@ -53,9 +53,23 @@ export function OrgAdminPage() {
           "这个人不在系统里"的结论,然后去重复建号 —— 而工号是唯一的,他会撞库。
         */}
         {users.truncated && (
+          /*
+            ⚠️ v2.16 修的两个数字。
+
+            原来写的是「前 `users.users.length` 位在职账号(共 `users.total` 位)」,
+            两个数字都不对:
+              · `users.users` 是接口按 `limit=500` 返回的**全部**账号(**没有**按在职过滤),
+                而真正进下拉的是下面那个 `activeUsers`;
+              · `users.total` 是"符合搜索条件的总人数",同样不分状态。
+
+            于是提示里的数比下拉里实际能选的条数**大**,恰好是这段注释想避免的
+            「静默少人」的另一种形式 —— 管理员会去找一个其实不在下拉里的人。
+            现在两个数都取自真正渲染的那个集合(`activeUsers`),
+            "总共多少"用接口的 `total` 并明说它是**账号总数**(含离职/停用)。
+          */
           <p className="mt-2 rounded-md bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">
-            下拉里只列出了前 {users.users.length} 位在职账号(共 {users.total} 位)。
-            人数超过 500 时请到「人员管理」页按姓名或工号搜索。
+            下拉里只列出了前 {activeUsers.length} 位在职账号(系统内账号总数 {users.total} 位,
+            含已离职 / 已停用)。人数超过 500 时请到「人员管理」页按姓名或工号搜索。
           </p>
         )}
 

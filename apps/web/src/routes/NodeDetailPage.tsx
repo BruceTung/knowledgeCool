@@ -232,11 +232,33 @@ function NodeDetailView({ nodeId }: { nodeId: string }) {
   const node = detail.data;
   const canEdit = node.canEdit;
 
+  /**
+   * 提交改名。
+   *
+   * ⚠️ 原实现第一行就 `setTitleDraft(null)` —— **无条件**关掉输入框。
+   * 于是改名失败时(409 乐观锁冲突、403、网络断开)会发生两件坏事:
+   * ① 用户刚敲进去的新标题**直接没了**(输入框已经卸载,值只存在于 DOM 里);
+   * ② 他看到的只有标题下方那条「该内容已被他人修改」—— 对一次网络抖动来说
+   *    这句把排查方向引到了错误的地方。
+   *
+   * 现在:**失败就把草稿留着**,让人还能改一改重试;成功才收起来。
+   * (成功路径由 `invalidate` 重取详情,标题会自然更新。)
+   */
   function commitTitle(value: string) {
-    setTitleDraft(null);
     const next = value.trim();
-    if (next === '' || next === node.title) return;
-    updateNode.mutate({ nodeId: node.id, title: next, version: node.version });
+    if (next === '' || next === node.title) {
+      setTitleDraft(null);
+      return;
+    }
+    updateNode.mutate(
+      { nodeId: node.id, title: next, version: node.version },
+      {
+        onSuccess: () => {
+          setTitleDraft(null);
+        },
+        // 失败**不**清草稿:输入框留在原地,用户能直接重试
+      },
+    );
   }
 
   function scrollToHeading(index: number) {

@@ -5,7 +5,7 @@
 //   - 作废:`spaces` / `space_members` / `page_permissions`
 //   - 改名:`pages` → `nodes`(加 `kind` / `owner_id`),`page_contents` → `node_contents`
 //   - 新增:`org_assignments`(组织归属)、`node_grants`(授权名单)
-//   理由见 DESIGN.md §1.5;权限判定见 §5.2。
+//   理由见 DESIGN.md §1.1 与 §4.1;权限判定见 §5.2。
 //
 // ⚠️ v2.2(2026-09-26)—— 登录标识由邮箱改为**工号**:
 //   - `users.email`(citext) → `users.employee_no`(text)
@@ -102,7 +102,13 @@ model Session {
 // ---------------- 节点树(空间与页面合并,v2.0 核心表) ----------------
 model Node {
   id       String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  /// 刻意用 onDelete: Restrict —— 不允许物理删除有子节点的节点,强制走软删除流程
+  /// onDelete: Restrict —— 数据库不允许"父行还在、子行被删"。
+  ///
+  /// ⚠️ v2.12 起**没有软删除**了(回收站已整体移除),所以这条约束的作用
+  /// 变成了另一件事:它逼着**应用层按「深度从叶子往根」逐层删**
+  /// (见 `NodeService.deleteSubtree`)。这也正是 v2.12 的迁移脚本要绕那么大
+  /// 一圈的原因 —— DELETE 不支持 ORDER BY,一条语句删整棵子树会撞外键。
+  /// 原文写"强制走软删除流程",那句在回收站移除之后已经不成立。
   parentId String? @map("parent_id") @db.Uuid
 
   /// space | document —— **纯展示用途,权限判定不区分 kind**。
@@ -130,10 +136,19 @@ model Node {
   /// 变成需要逐节点推理的事,而漏判一次就是一次信息泄露。
   visibility String @default("public")
   /// 乐观锁。**哪些操作校验它、哪些不校验,如实写在这里**(别以为写了这行就都受保护):
-  ///   - **校验**:改名、移动、替换授权名单 —— 三处都是"带 version 条件 +
-  ///     检查影响行数"的比较并交换(CAS),抢不到就 409
-  ///   - **不校验**:删除、变更所有者 —— 这两条的 DTO 里没有 version 字段,
-  ///     属于**已知的欠账**(并发下不会损坏数据,但"后写覆盖前写"是可能的)
+  ///   - **校验并递增**:改名(`NodeService.update`)、单节点移动(`move`)、
+  ///     替换授权名单(`replaceGrants`)、替换读者名单(`replaceReaders`) ——
+  ///     都是"带 version 条件 + 检查影响行数"的比较并交换(CAS),抢不到就 409
+  ///   - **校验但不递增**:无
+  ///   - **不校验、也不递增**:删除(`remove`)、变更所有者(`setOwner`)、
+  ///     **批量移动(`bulkMove`)** —— 这三条的 DTO 里没有 version 字段。
+  ///
+  ///     ⚠️ 原文把"移动"整体写成"校验",那句对**批量移动**是错的:
+  ///     `BulkMoveNodesInput` 根本没有 version 字段,而 `applyMoveTo` 在
+  ///     version 省略时只更新 `updatedBy`。行为与 DTO 自洽,错的是这句注释。
+  ///     实际后果:批量移动之后,前端手里的 version 仍是旧的 ——
+  ///     乐观锁察觉不到这次改动。这是**已知的欠账**,不是漏洞
+  ///     (并发下不会损坏数据,但"后写覆盖前写"是可能的)。
   version Int    @default(1)
 
   createdBy String  @map("created_by") @db.Uuid
@@ -277,7 +292,10 @@ model Comment {
 model AuditLog {
   id         BigInt   @id @default(autoincrement())
   actorId    String?  @map("actor_id") @db.Uuid
-  /// node.create / node.move / grant.add / org.import / auth.login ...
+  /// 取值见 `packages/shared/src/audit.ts` 的 AUDIT_ACTIONS —— 那是唯一清单:
+  /// node.create / node.move / node.delete / grant.replace / visibility.replace /
+  /// org.import / comment.create / auth.login ...
+  /// (原文举例里的 `grant.add` 是 v2.0 之前的动作名,现在叫 grant.replace。)
   action     String
   targetType String   @map("target_type")
   targetId   String   @map("target_id")

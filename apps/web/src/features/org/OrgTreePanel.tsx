@@ -255,6 +255,21 @@ export function OrgTreePanel({
     });
   }
 
+  /**
+   * 新建节点,并**就地**进入重命名态。
+   *
+   * ⚠️ v2.16 修的一处真实缺陷:原实现在 `onSuccess` 里同时
+   * `setRenamingId(created.id)` 和 `navigate('/n/' + created.id)`。
+   * 可是 `renamingId` 要生效必须等树刷新、那个 id 出现在 `tree.nodes` 里;
+   * 而导航立刻切走路由,本组件(连同这份本地 state)当场被卸载 ——
+   * 重命名态**从来没有被渲染过**。
+   *
+   * 表现:节点以服务端的默认名(`未命名页面` / `未命名空间`)留在库里,
+   * 而用户以为自己刚才"命名过了" —— 回到树上只看到一排未命名项。
+   *
+   * 现在**不导航**:留在树上把名字改好。想打开它,点一下就是了
+   * (重命名完成后用户本来也多半还要再建下一个)。
+   */
   function handleCreate(parentId: string | null, kind: 'space' | 'document'): void {
     createNode.mutate(
       { parentId, kind },
@@ -262,8 +277,8 @@ export function OrgTreePanel({
         onSuccess: (created) => {
           // 新建后保证父节点是展开的,否则新节点看不见
           if (parentId !== null) setExpandedState(parentId, true);
+          // 只进重命名态,**不 navigate** —— 见上面的说明
           setRenamingId(created.id);
-          void navigate(`/n/${created.id}`);
         },
       },
     );
@@ -649,7 +664,14 @@ export function OrgTreePanel({
       支持范围内(§1.3 明确不做移动端适配),但"不支持"与"溢出"是两回事:
       后者会让每一页都多一条横向滚动条,而且正文被压成一条细缝。
     */
-    <div className="hidden h-full w-72 flex-none flex-col border-r border-slate-200 bg-slate-50 md:flex xl:w-80">
+    /*
+      data-print="hide":左树是**框架**不是内容,打印时必须隐藏 ——
+      见 styles.css 的 @media print(v2.16 起打印不再靠标签名猜框架)。
+    */
+    <div
+      data-print="hide"
+      className="hidden h-full w-72 flex-none flex-col border-r border-slate-200 bg-slate-50 md:flex xl:w-80"
+    >
       <div className="flex flex-none items-center justify-between gap-2 border-b border-slate-200 px-4 py-3">
         <span className={`text-slate-500 ${T_LABEL}`}>组织结构 · {countNodes(nodes)}</span>
         <button

@@ -479,9 +479,13 @@ export class OrgService {
    *
    * ## 两条刻意的设计
    *
-   * 1. **读全员开放** —— 与整棵树一致(§5.3 规则一)。组织架构本来就是公开的,
+   * 1. **默认读全员开放** —— 与整棵树一致(§5.3 规则一)。组织架构本来就是公开的,
    *    把"这个部门有谁"藏起来在这个系统里没有意义(树本身就全员可见)。
    *    写操作才需要 `canManage`。
+   *
+   *    ⚠️ 上面那句"与整棵树一致"里藏着一个坑:树从 v2.12 起**会做可见性过滤**,
+   *    而这条接口当时没跟着收口 —— 于是受限节点的成员列表对任何登录用户
+   *    返回 200,而树、详情、正文、导出全回 404。见方法体第一行的说明。
    *
    * 2. **分成 `direct` / `inherited` 两段** —— 只有**直接**归属在这个节点上的人
    *    能从这里移出;归属在子孙节点上的人要移出,得到对应子孙上去操作。
@@ -585,6 +589,11 @@ export class OrgService {
    * 规则与 `ownerCandidates` 一致:门槛用同一套,候选人用同一套过滤。
    */
   async memberCandidates(operator: Actor, nodeId: string): Promise<GrantCandidate[]> {
+    // ⚠️ v2.16 补读判定。`requireManageMember` 是**纯判定**,它不查节点、
+    // 也不看可见性 —— 于是受限节点的候选人名单(以及"这个节点存在"这件事)
+    // 会对任何登录用户返回 200,而其余读取路径都回 404。
+    // 一条不一致的路径就是一条侧信道(§5.6)。
+    await this.permissions.requireRead(operator, nodeId);
     const { chain } = await this.permissions.chainOf(nodeId);
     this.requireManageMember(operator, chain);
 
@@ -720,8 +729,21 @@ export class OrgService {
   // 辅助
   // ================================================================
 
-  /** 组织范围下拉用:一级 / 二级节点的路径 + 该范围内的人数。 */
-  async scopeOptions(): Promise<OrgScopeOption[]> {
+  /**
+   * 组织范围下拉用:一级 / 二级节点的路径 + 该范围内的人数。
+   *
+   * ⚠️ v2.16 补权限判定。此前这条接口**根本没有判权** —— 任何登录用户
+   * 都能拿到全公司的部门 / 组清单与人数。它唯一的调用方是
+   * 「人员管理 → 设置归属」与「建组」两个**超管界面**(见 `useOrgScopes`),
+   * 而文档 §5.3 一直把这个能力写在 `is_super_admin` 名下。
+   *
+   * 判成超管而不是"按可见性过滤"的理由:它返回的是**组织架构的全貌**
+   * (含每个部门的人数),而组织架构本就归超管维护;按可见性过滤反而会
+   * 造出一份"缺了几行"的架构图,让设置归属的人给出错误的归属。
+   */
+  async scopeOptions(operator: Actor): Promise<OrgScopeOption[]> {
+    this.requireSuperAdmin(operator);
+
     const nodes = await this.prisma.node.findMany({
       where: { depth: { lte: 1 } },
       select: { id: true, title: true, depth: true, materializedPath: true },
@@ -754,6 +776,10 @@ export class OrgService {
   async ownerCandidates(operator: Actor, nodeId: string): Promise<GrantCandidate[]> {
     // ⚠️ 与 `setOwner` 必须用**同一套规则**,否则会出现「看得到候选人但改不了」
     // (或反过来),而超管换部长正是靠这两条一起工作的。
+    //
+    // v2.16:先过读判定。这条与 memberCandidates 是同一处漏收口 ——
+    // 受限节点的 owner 是谁、候选人有哪些,对未授权的人都不该可见。
+    await this.permissions.requireRead(operator, nodeId);
     const { chain } = await this.permissions.chainOf(nodeId);
     if (chain.ancestors.length === 0) {
       this.requireSuperAdmin(operator);

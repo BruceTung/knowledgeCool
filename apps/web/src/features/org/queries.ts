@@ -129,11 +129,24 @@ export function useBulkMoveNodes() {
 
 export function useDeleteNode() {
   const invalidate = useInvalidateTree();
+  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (nodeId: string) =>
       apiSend<{ removedCount: number }>('DELETE', `/nodes/${nodeId}`),
     onSuccess: (_result, nodeId) => {
       invalidate(nodeId);
+      /*
+        ⚠️ v2.16:删除后要**移除**这个节点的查询缓存,不能只 invalidate。
+
+        两个原因:
+          · 后端是**物理删除**(§8.2),这个 id 不会再出现,留着必然是垃圾;
+          · 正文那条查询的 `staleTime` 是 `Infinity`(为了不打断正在打字的人),
+            单纯 invalidate 不会让一条"永不陈旧"的缓存消失 ——
+            它要一直留到刷新页面为止。用浏览器后退回到那个路径时,
+            详情会 404 挡住(所以看不出错),但缓存本身就那么挂着。
+        删除是少数几个**明确知道数据不会再回来**的时机,这时移除是对的。
+      */
+      queryClient.removeQueries({ queryKey: ['node', nodeId] });
     },
   });
 }
