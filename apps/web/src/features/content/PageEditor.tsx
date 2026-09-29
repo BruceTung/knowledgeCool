@@ -46,6 +46,7 @@ import { ApiError, sendBeaconJson } from '../../lib/api';
 import { Button } from '../../components/ui';
 import { useSaveContent } from '../org/queries';
 import { DEFAULT_CODE_LANGUAGE, createLowlighter } from './code-languages';
+import { TabKeymap } from './editor/tab-keymap';
 import { EditorToolbar } from './editor/Toolbar';
 import { useImageUpload } from './queries';
 
@@ -249,6 +250,12 @@ export function PageEditor({
       TableHeader,
       TableCell,
       Placeholder.configure({ placeholder: '开始写点什么…(支持 Markdown 快捷输入,如 # 加空格)' }),
+      /*
+        Tab 键(v2.17)。**必须放在表格扩展之后**不是硬要求(每个扩展各自拥有
+        一个 keymap 插件,不是合并成一张表),但放在后面读起来更清楚:
+        "表格先认领,其余的交给这个"。见 `tab-keymap.ts` 的说明。
+      */
+      TabKeymap,
     ],
     [],
   );
