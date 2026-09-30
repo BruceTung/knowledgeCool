@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 
-import { Button, ErrorNote } from '../components/ui';
+import { ErrorNote } from '../components/ui';
 import { useLogout, useMe } from '../features/auth/queries';
 import { GrantDialog } from '../features/grants/GrantDialog';
 import { useGrantDialog } from '../features/grants/dialog-store';
@@ -14,7 +14,26 @@ import { useOrgTree } from '../features/org/queries';
 import { CommandPalette } from '../features/search/CommandPalette';
 import { hasOpenModal } from '../lib/modal-store';
 import { useDocumentTitle } from '../lib/use-document-title';
-import { T_LABEL, T_META } from '../lib/typography';
+import { T_META } from '../lib/typography';
+
+/**
+ * 深色顶栏上的按钮规格(v2.17)。
+ *
+ * 收敛成常量而不是每处各写一遍 —— 顶栏上有四个按钮(组织架构 / 人员 / 改密 / 登出),
+ * 各写一遍的代价是它们迟早长得不一样(这正是"图标、字号、字样都不对称"
+ * 那类反馈的来源)。
+ *
+ * ⚠️ 高度 36px(`h-9`)而不是原来的"内边距撑出来":
+ * 用户此前反馈过"点着太费劲",而 24px 只是**下限**(Apple HIG / WCAG 2.2);
+ * 顶栏这种一眼就要点的位置给到 36px 更稳。
+ *
+ * `CHROME_BTN_ON` 是"当前所在页"的高亮:青色描边 + 半透明底。
+ */
+const CHROME_BTN =
+  'inline-flex h-9 flex-none items-center justify-center rounded-lg px-3 text-sm font-medium transition-colors';
+const CHROME_BTN_OFF =
+  'border border-sky-400/20 text-slate-300 hover:border-sky-400/40 hover:bg-white/10 hover:text-white';
+const CHROME_BTN_ON = 'bg-sky-500/20 text-sky-100 ring-1 ring-sky-400/50';
 
 /** 从路径里取出当前节点 id(`/n/:nodeId`)。 */
 function activeNodeIdOf(pathname: string): string | undefined {
@@ -106,32 +125,42 @@ export function AppLayout() {
       */}
       <header
         data-print="hide"
-        className="flex flex-none items-center gap-4 border-b border-slate-200 px-4 py-2.5"
+        /*
+          `kc-chrome` = 深色"控制台"底面(CSS 里定义了网格 + 光晕 + 渐变,
+          见 styles.css 的「科技感外壳」一节)。
+        */
+        className="kc-chrome flex flex-none items-center gap-4 border-b border-sky-500/15 px-4 py-2.5"
       >
         <button
           type="button"
-          className="flex items-center gap-2"
+          className="flex flex-none items-center gap-2.5"
           onClick={() => void navigate('/')}
         >
-          <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-600 text-sm font-semibold text-white">
+          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-sky-400 to-blue-600 text-base font-semibold text-white shadow-lg shadow-sky-500/25">
             知
           </span>
-          <span className="text-sm font-semibold tracking-tight text-slate-900">知源知识库</span>
+          <span className="text-base font-semibold tracking-tight text-white">知源知识库</span>
         </button>
 
         {/*
-          搜索框:文字用 `text-sm`(14px)—— 它是**组件级文字**(Atlassian `font.body`),
-          不是细字印刷。上一轮把它放在 12px 那一档,是"看起来小"的直接来源之一。
+          搜索框:文字用 `text-sm`(14px)—— 它是**组件级文字**(Atlassian `font.body`)。
           只有 `Ctrl K` 这个快捷键提示留在 12px(它就是给人扫一眼的)。
+
+          深色底面之后三处跟着改:边框改成半透明青色(纯灰边在深底上会"脏"),
+          底色用 `white/5` 而不是纯白(纯白块在深底上过于抢眼,压过正文)。
         */}
         <button
           type="button"
           onClick={() => setPaletteOpen(true)}
-          className="flex w-80 items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-left text-slate-500 transition-colors hover:border-slate-300 hover:bg-white"
+          className="flex w-80 flex-none items-center gap-2 rounded-lg border border-sky-400/20 bg-white/5 px-3 py-2 text-left text-slate-400 transition-colors hover:border-sky-400/40 hover:bg-white/10"
         >
+          <svg viewBox="0 0 16 16" aria-hidden className="h-4 w-4 flex-none" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round">
+            <circle cx="7" cy="7" r="4.5" />
+            <path d="M10.5 10.5 14 14" />
+          </svg>
           <span className="flex-1 text-sm">搜索全公司内容…</span>
           <kbd
-            className={`rounded border border-slate-200 bg-white px-1.5 py-0.5 font-sans text-slate-500 ${T_META}`}
+            className={`rounded border border-sky-400/20 bg-white/5 px-1.5 py-0.5 font-sans text-slate-400 ${T_META}`}
           >
             Ctrl K
           </kbd>
@@ -145,31 +174,58 @@ export function AppLayout() {
               当前所在页要有**明确的高亮**。此前这两个按钮永远一个样子 ——
               点进「组织架构」之后,顶栏上看不出自己在哪里(只有标签页标题变了)。
             */}
-            <Button
-              variant={pathname.startsWith('/admin/org') ? 'primary' : 'secondary'}
+            <button
+              type="button"
+              className={`${CHROME_BTN} ${pathname.startsWith('/admin/org') ? CHROME_BTN_ON : CHROME_BTN_OFF}`}
               onClick={() => void navigate('/admin/org')}
             >
               组织架构
-            </Button>
-            <Button
-              variant={pathname.startsWith('/admin/users') ? 'primary' : 'secondary'}
+            </button>
+            <button
+              type="button"
+              className={`${CHROME_BTN} ${pathname.startsWith('/admin/users') ? CHROME_BTN_ON : CHROME_BTN_OFF}`}
               onClick={() => void navigate('/admin/users')}
             >
               人员
-            </Button>
+            </button>
           </>
         )}
 
         {user !== undefined && (
-          <div className="flex items-center gap-3 border-l border-slate-200 pl-4">
-            <div className="text-right leading-tight">
-              <div className={`text-slate-800 ${T_LABEL}`}>{user.name}</div>
-              <div className={`font-mono text-slate-500 ${T_META}`}>{user.employeeNo}</div>
+          /*
+            ⚠️ 用户区是用户明确圈出来"太小"的两处之一,所以这一版一次改到位:
+
+            · **加了头像**。原来只有两行小字,在一片灰里既小又认不出是"我的账号";
+              有了圆形徽标之后它是**一个块**,一眼就能定位。
+            · **姓名 14 → 16px、工号 12 → 14px 并保留等宽**
+              (工号是标识符,等宽字体让 KC003 这种串更好认)。
+            · **改密 / 登出 从"两个没有边界的文字"变成两个按钮**。
+              原来它们是裸文字,底色透明 —— 用户看不出那里可以点,
+              而且点击区只有文字本身那么大。现在是 36px 高、带边框的按钮。
+            · **管理员徽章**:超管在顶栏就能看出自己的身份,
+              不用去人员页确认。
+          */
+          <div className="flex flex-none items-center gap-3 border-l border-sky-400/15 pl-4">
+            <div className="flex items-center gap-2.5">
+              <span className="flex h-10 w-10 flex-none items-center justify-center rounded-full bg-gradient-to-br from-sky-400/25 to-blue-600/25 text-base font-semibold text-sky-200 ring-1 ring-sky-400/40">
+                {user.name.slice(0, 1)}
+              </span>
+              <div className="leading-tight">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-base font-medium text-white">{user.name}</span>
+                  {user.isSuperAdmin && (
+                    <span className="rounded bg-sky-500/20 px-1.5 py-0.5 text-xs font-medium text-sky-200 ring-1 ring-sky-400/30">
+                      管理员
+                    </span>
+                  )}
+                </div>
+                <div className="font-mono text-sm text-slate-400">{user.employeeNo}</div>
+              </div>
             </div>
-            <div className="flex gap-0.5">
+            <div className="flex flex-none items-center gap-1.5">
               <button
                 type="button"
-                className="rounded-md px-2 py-1.5 text-sm text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900"
+                className={`${CHROME_BTN} ${CHROME_BTN_OFF}`}
                 onClick={() => void navigate('/change-password')}
               >
                 改密
@@ -177,7 +233,7 @@ export function AppLayout() {
               <button
                 type="button"
                 disabled={logout.isPending}
-                className="rounded-md px-2 py-1.5 text-sm text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 disabled:opacity-50"
+                className={`${CHROME_BTN} ${CHROME_BTN_OFF} disabled:opacity-50`}
                 onClick={() => {
                   logout.mutate(undefined, {
                     onSettled: () => void navigate('/login', { replace: true }),

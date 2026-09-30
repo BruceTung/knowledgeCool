@@ -14,6 +14,21 @@
 # ============================================================
 set -euo pipefail
 
+# ⚠️ Windows(Git Bash / MSYS)必须关掉**路径自动翻译**,否则整套备份/恢复在 Windows 上跑不通。
+#
+# 实测:Git Bash 会把**独立出现的**绝对路径参数当成 Windows 路径来"翻译":
+#     docker compose exec -T api tar -C /data/uploads .
+#   → tar: can't change directory to 'D:/git/Git/data/uploads': No such file or directory
+# 注意它**不是**无条件翻译 —— 藏在引号里的一整条命令(如 sh -c 'ls /data/uploads')没事,
+# 所以这个坑只在个别行上爆,看起来像"那个命令有问题"而不是"环境有问题"。
+#
+# 后果很隐蔽:数据库那一步成功、附件那一步失败 —— 而附件正是最容易被忽略、
+# 又最不可能从别处重建的东西。
+#
+# 这两个变量让 MSYS 不做转换;在 Linux 上它们根本不存在,等于无操作。
+export MSYS_NO_PATHCONV=1
+export MSYS2_ARG_CONV_EXCL='*'
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 

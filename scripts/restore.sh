@@ -14,6 +14,21 @@
 # ============================================================
 set -euo pipefail
 
+# ⚠️ Windows(Git Bash / MSYS)必须关掉**路径自动翻译**,否则整套备份/恢复在 Windows 上跑不通。
+#
+# 实测:Git Bash 会把**独立出现的**绝对路径参数当成 Windows 路径来"翻译":
+#     docker compose exec -T api tar -C /data/uploads .
+#   → tar: can't change directory to 'D:/git/Git/data/uploads': No such file or directory
+# 注意它**不是**无条件翻译 —— 藏在引号里的一整条命令(如 sh -c 'ls /data/uploads')没事,
+# 所以这个坑只在个别行上爆,看起来像"那个命令有问题"而不是"环境有问题"。
+#
+# 后果很隐蔽:数据库那一步成功、附件那一步失败 —— 而附件正是最容易被忽略、
+# 又最不可能从别处重建的东西。
+#
+# 这两个变量让 MSYS 不做转换;在 Linux 上它们根本不存在,等于无操作。
+export MSYS_NO_PATHCONV=1
+export MSYS2_ARG_CONV_EXCL='*'
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
@@ -67,7 +82,20 @@ docker compose exec -T postgres \
   < "$SRC/db.dump" >/dev/null 2>&1 || true
 
 echo "==> 恢复附件"
-docker compose exec -T api sh -c 'rm -rf /data/uploads/* && tar -xzf - -C /data/uploads' \
+# ⚠️ 这里**不能用 `docker compose exec`** —— 上面刚把 api 停掉了,exec 进不去
+# 一个已停止的容器,会以 "service \"api\" is not running" 失败。
+#
+# 这不是理论问题:第一版就是 exec,实测**恢复链路真的断在这里**,
+# 而且断在最坏的位置 —— 库已经被 drop 重建、数据也导进去了,只有附件没恢复、
+# api 也没起来。也就是说"演练能过、真恢复会挂":
+# restore-drill 只校验附件包能不能解(在宿主机上 tar -tzf),
+# 从来不真的往容器里写,所以它看不到这个错。
+#
+# `compose run` 会**另起一个一次性容器**(挂同一批卷),不要求服务正在运行,
+# 正好适合"在服务停着的时候往它的卷里写东西"。`--no-deps` 免得它再等一遍
+# postgres/redis 的健康检查 —— 那两位此时本来就好好跑着。
+docker compose run --rm -T --no-deps api \
+  sh -c 'rm -rf /data/uploads/* && tar -xzf - -C /data/uploads' \
   < "$SRC/uploads.tar.gz"
 
 echo "==> 重新应用迁移(保证 schema 与当前代码一致)"

@@ -16,7 +16,7 @@ import { useNavigate } from 'react-router-dom';
 
 import { ErrorNote } from '../../components/ui';
 import { resolveTreeKey, treeOrder } from '../../lib/tree-nav';
-import { T_BODY, T_LABEL, T_META } from '../../lib/typography';
+import { T_META, T_NAV } from '../../lib/typography';
 import { useCreateNode, useDeleteNode, useMoveNode, useUpdateNode } from './queries';
 import {
   buildTree,
@@ -63,12 +63,17 @@ function kindBadge(node: OrgTreeNode): string {
  * (于是继承父级的字号),于是一行里 6 个按钮出现两种字号。
  * 这就是「图标、字体大小、字样都不对称」最直接的来源(用户 2026-09-27 反馈)。
  *
- * v2.8:点击区 24px、字形跟着内容档(14px)。Atlassian 的规范里
+ * v2.8:点击区 24px、字形跟着内容档。Atlassian 的规范里
  * "配合图标时用 Medium 字重",所以这里也给 `font-medium` —— 字形小、
  * 又细的时候,图标会显得脏。
+ *
+ * ⚠️ v2.17:点击区 24 → **28px**(`h-7 w-7`),并换成深底上的配色。
+ * 24px 只是**下限**,而行本身已经从 36px 放到 44px —— 按钮也跟着长一点,
+ * 行内才不会显得"大行小按钮"。悬停底色从 `slate-200` 换成 `white/10`:
+ * 浅灰的半透明块压在深底上会发灰发脏。
  */
-const ROW_ACTION_CLASS = `flex h-6 w-6 flex-none items-center justify-center rounded text-sm font-medium text-slate-500 transition-colors hover:bg-slate-200/70 hover:text-slate-700`;
-const ROW_ACTION_DANGER_CLASS = `flex h-6 w-6 flex-none items-center justify-center rounded text-sm font-medium text-slate-500 transition-colors hover:bg-red-50 hover:text-red-600`;
+const ROW_ACTION_CLASS = `flex h-7 w-7 flex-none items-center justify-center rounded-md text-sm font-medium text-slate-400 transition-colors hover:bg-white/15 hover:text-white`;
+const ROW_ACTION_DANGER_CLASS = `flex h-7 w-7 flex-none items-center justify-center rounded-md text-sm font-medium text-slate-400 transition-colors hover:bg-red-500/20 hover:text-red-300`;
 
 export function OrgTreePanel({
   tree,
@@ -308,13 +313,20 @@ export function OrgTreePanel({
     const nodeEditable = editable.has(node.id);
     const nodeManageable = manageable.has(node.id) || (isSuperAdmin && node.depth === 0);
 
+    /*
+      ⚠️ v2.17:行高 36 → **44px**,字号 14 → 16px(`T_NAV`),底色改成深色壳。
+
+      只放大字号而不放开行高,汉字会挤在一起反而更难读 —— 两者必须一起动。
+      44px 与"点击目标 ≥ 24px"那条下限不冲突(它只是下限),
+      而"在一条 44px 的行里鼠标不容易点偏"正是用户要的"更直观"。
+    */
     const rowClass = [
-      // `h-9`(36px)配 14px 内容。Atlassian 的 `font.body` = 14/20,
-      // 20px 行高的文字放进 36px 的行里,上下各留 8px —— 这是列表项的常规留白。
-      `group relative flex h-9 items-center gap-1.5 rounded-md pr-1.5 ${T_BODY} transition-colors`,
-      isActive ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:bg-white',
+      `group relative flex h-11 items-center gap-2 rounded-lg pr-2 ${T_NAV} transition-colors`,
+      // 选中行用 CSS 类(青色指示条 + 由内向外渐隐的底色),不用纯色块 ——
+      // 纯 `bg-white` 在深底上是一块刺眼的白砖,把整列的层次全压平了。
+      isActive ? 'kc-tree-active' : 'text-slate-300 hover:bg-white/10',
       forbidden && dragId !== null ? 'opacity-40' : '',
-      target === 'into' ? 'ring-2 ring-blue-400' : '',
+      target === 'into' ? 'ring-2 ring-sky-400' : '',
     ].join(' ');
 
     return (
@@ -358,10 +370,15 @@ export function OrgTreePanel({
             // 缩进完全相同,一列看下去看不出谁属于谁(用户 2026-09-27 反馈)。
             // 现在只在一个很深的层级封顶,纯粹是为了防止整行被推到看不见。
             //
-            // 常数 4 是**跟着箭头宽度走的**(v2.9):箭头 24px 时 `4 + 12 = 16`,
-            // 正好等于下面引导线的落点 —— 所以放大点击区**没有**让整列的
-            // 竖线错位,也没有让徽章、标题往右挪。
-            paddingLeft: `${String(Math.min(node.depth, 8) * 13 + 4)}px`,
+            // ⚠️ 缩进步长与"箭头中心"是**一组数**,改一个必须改另一个(v2.17)。
+            //
+            // 步长 13 → 16px,因为箭头从 24px 放大到了 28px(`h-7 w-7`)。
+            // 算式:缩进 = depth*16 + 4;箭头中心 = 缩进 + 14(箭头宽的一半)
+            //                     = depth*16 + 18。
+            // 下面的引导线落在 `18 + level*16` —— 正好是**上一级箭头的中点**,
+            // 所以竖线看起来是从父节点的展开箭头正中延伸下来的。
+            // 两者若不同步,表现是整列竖线系统性偏几像素,而且没人知道该改哪边。
+            paddingLeft: `${String(Math.min(node.depth, 8) * 16 + 4)}px`,
           }}
           onClick={() => void navigate(`/n/${node.id}`)}
           onDragStart={(event) => {
@@ -410,17 +427,17 @@ export function OrgTreePanel({
             用户在最早的反馈里就说过「第三级组下面的页面没有缩进了,这样看不到递进关系」。
             Confluence 与 Notion 都用这种细竖线把层级**画**出来,而不是让人去算。
 
-            位置:第 i 级祖先的引导线落在 `16 + i*13`。
-            缩进公式是 `depth*13 + 4`,箭头占 24px,**`+12` 正好是箭头的中心** ——
-            所以竖线看起来是从上一级的展开箭头正中延伸下来的。
+            位置:第 i 级祖先的引导线落在 `18 + i*16`(与上面的缩进算式配套,见那里的说明)。
             用 `inset-y-0` 让它在相邻行之间连成一条,而不是一段一段的。
+            颜色走 `.kc-tree-guide` 类而不是写死 `bg-slate-200`:深底上浅灰竖线
+            会**比内容还显眼**,需要单独压淡(见 styles.css)。
           */}
           {Array.from({ length: Math.min(node.depth, 8) }, (_, level) => (
             <span
               key={`guide-${String(level)}`}
               aria-hidden
-              className="pointer-events-none absolute inset-y-0 w-px bg-slate-200"
-              style={{ left: `${String(16 + level * 13)}px` }}
+              className="kc-tree-guide pointer-events-none absolute inset-y-0 w-px"
+              style={{ left: `${String(18 + level * 16)}px` }}
             />
           ))}
 
@@ -454,11 +471,13 @@ export function OrgTreePanel({
                 2. **点击区 20×20 → 24×24**(行高 32px,放得下)。
                    目标尺寸低于 24px 对鼠标就是不友好 —— 这是通用原则,
                    Apple HIG 与 WCAG 2.2 的目标尺寸下限都是 24px。
+                   ⚠️ v2.17 再放到 **28×28**(行高 44px):用户这次说"还是太小",
+                   那就不要卡着下限给 —— 下限是"别低于",不是"就按这个来"。
 
                 悬停时给一层底色,是为了让"这里可点"这件事**看得见** ——
                 只有字形变色的话,用户仍然不知道该往哪儿瞄准。
               */
-              className="flex h-6 w-6 flex-none cursor-pointer items-center justify-center rounded text-slate-500 transition-colors hover:bg-slate-200/70 hover:text-slate-800"
+              className="flex h-7 w-7 flex-none cursor-pointer items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-white/15 hover:text-white"
               onClick={(event) => {
                 event.stopPropagation();
                 toggleExpanded(node.id);
@@ -472,7 +491,8 @@ export function OrgTreePanel({
                 strokeWidth={2}
                 strokeLinecap="round"
                 strokeLinejoin="round"
-                className={`h-4 w-4 transition-transform duration-150 ${
+                /* 16 → 20px:与行内 16px 的文字同高,视觉上才配得上 */
+                className={`h-5 w-5 transition-transform duration-150 ${
                   isExpanded ? 'rotate-90' : ''
                 }`}
               >
@@ -481,16 +501,23 @@ export function OrgTreePanel({
             </span>
           ) : (
             // 没有子节点时占同宽的位,否则同一列的徽章会参差不齐
-            <span className="h-6 w-6 flex-none" />
+            // ⚠️ 必须与上面那个箭头的尺寸**同步**(v2.17 起是 28px),
+            // 否则叶子节点的徽章会比有子节点的往左错 4px,整列看起来是歪的。
+            <span className="h-7 w-7 flex-none" />
           )}
 
+          {/*
+            类型徽章(部 / 组 / 页)。v2.17:20×20 → **24×24**,字号 12 → 14px。
+            深底上的配色改成"半透明底 + 浅色字 + 细描边"——
+            原来那种 `bg-blue-50`(接近纯白)在深色树里是一块刺眼的小白点。
+          */}
           <span
-            className={`flex h-5 w-5 flex-none items-center justify-center rounded text-xs font-medium ${
+            className={`flex h-6 w-6 flex-none items-center justify-center rounded-md text-sm font-medium ${
               node.depth === 0
-                ? 'bg-blue-50 text-blue-700'
+                ? 'bg-sky-500/20 text-sky-200 ring-1 ring-sky-400/30'
                 : node.kind === 'space'
-                  ? 'bg-teal-50 text-teal-700'
-                  : 'bg-slate-100 text-slate-500'
+                  ? 'bg-teal-500/20 text-teal-200 ring-1 ring-teal-400/30'
+                  : 'bg-white/10 text-slate-300'
             }`}
           >
             {kindBadge(node)}
@@ -500,7 +527,7 @@ export function OrgTreePanel({
             <input
               autoFocus
               defaultValue={node.title}
-              className="min-w-0 flex-1 rounded border border-blue-400 px-1 py-0.5 text-sm outline-none"
+              className="min-w-0 flex-1 rounded-md border border-sky-400/60 bg-white/10 px-2 py-1 text-base text-white outline-none"
               onClick={(event) => event.stopPropagation()}
               onKeyDown={(event) => {
                 if (event.key === 'Enter') handleRename(node, event.currentTarget.value);
@@ -519,7 +546,7 @@ export function OrgTreePanel({
               // ⚠️ 颜色刻意是**中性灰**,不是琥珀色。
               // 琥珀色等于暗示"有待处理的事",而评论只是评论 ——
               // 这个角标数的是"有几条评论",不是"有几个待解决问题"。
-              className="flex-none rounded-full bg-slate-100 px-1.5 py-0.5 text-xs font-medium tabular-nums text-slate-500"
+              className="flex-none rounded-full bg-white/10 px-2 py-0.5 text-xs font-medium tabular-nums text-slate-300"
               title={`${String(node.commentCount)} 条评论`}
             >
               {node.commentCount}
@@ -527,7 +554,7 @@ export function OrgTreePanel({
           )}
 
           {node.status !== 'published' && (
-            <span className="flex-none rounded bg-slate-100 px-1.5 py-0.5 text-xs font-medium text-slate-500">
+            <span className="flex-none rounded bg-amber-500/20 px-2 py-0.5 text-xs font-medium text-amber-200 ring-1 ring-amber-400/30">
               {node.status === 'draft' ? '草稿' : '归档'}
             </span>
           )}
@@ -670,15 +697,28 @@ export function OrgTreePanel({
     */
     <div
       data-print="hide"
-      className="hidden h-full w-72 flex-none flex-col border-r border-slate-200 bg-slate-50 md:flex xl:w-80"
+      /*
+        ⚠️ 宽度**刻意保持 320px**,不吃更多横向空间(v2.17)。
+
+        本来想跟着字号一起加宽到 384px,试过之后**退回了**:实测 1440px 的窗口下
+        正文列会从 806px 掉到 720px,而编辑器工具栏的固有宽度在 720 里放不下 ——
+        它会折成两行。用户在 v2.8 已经因为"按钮文字过长折行"提过一次,
+        所以这里宁可让个别长标题多截一点,也不把工具栏挤折。
+
+        字号大了之后确实更容易截断,这一点用 **44px 行高 + 16px 字号**带来的
+        可读性提升来补,而不是靠抢正文的宽度。真要加宽,得先解决工具栏折行。
+      */
+      className="kc-chrome hidden h-full w-80 flex-none flex-col border-r border-sky-500/15 md:flex"
     >
-      <div className="flex flex-none items-center justify-between gap-2 border-b border-slate-200 px-4 py-3">
-        <span className={`text-slate-500 ${T_LABEL}`}>组织结构 · {countNodes(nodes)}</span>
+      <div className="flex flex-none items-center justify-between gap-2 border-b border-sky-500/15 px-4 py-3">
+        <span className="text-sm font-medium text-slate-300">
+          组织结构 · <span className="tabular-nums">{countNodes(nodes)}</span>
+        </span>
         <button
           type="button"
           title="新建页面(不挂在任何部门下,只有管理员可以)"
           disabled={createNode.isPending}
-          className="rounded-md px-2 py-1 text-sm text-slate-500 transition-colors hover:bg-white hover:text-slate-900 disabled:opacity-50"
+          className="rounded-md border border-sky-400/20 px-2.5 py-1 text-sm font-medium text-slate-300 transition-colors hover:border-sky-400/40 hover:bg-white/10 hover:text-white disabled:opacity-50"
           onClick={() => handleCreate(null, 'document')}
         >
           + 顶层
@@ -699,8 +739,8 @@ export function OrgTreePanel({
             <div
               className={`rounded-md border border-dashed px-2 py-1.5 text-center text-xs transition-colors ${
                 rootDropActive
-                  ? 'border-blue-400 bg-blue-50 text-blue-700'
-                  : 'border-slate-300 text-slate-500'
+                  ? 'border-sky-400 bg-sky-500/20 text-sky-100'
+                  : 'border-slate-500/60 text-slate-400'
               }`}
               onDragOver={(event) => {
                 event.preventDefault();
@@ -724,14 +764,14 @@ export function OrgTreePanel({
             >
               放到这里 → 移到顶层
             </div>
-            <p className={`px-1 text-slate-500 ${T_META}`}>
+            <p className={`kc-chrome-muted px-1 ${T_META}`}>
               上 / 下四分之一排到前 / 后,中间成为子节点。
             </p>
           </div>
         )}
 
         {nodes.length === 0 ? (
-          <p className={`px-3 py-8 text-center leading-relaxed text-slate-500 ${T_BODY}`}>
+          <p className={`px-3 py-8 text-center leading-relaxed text-slate-400 ${T_NAV}`}>
             组织架构还是空的。
             <br />
             管理员可以到「组织架构」里建部门,或用 Excel 一次性导入全员名单。
@@ -748,10 +788,10 @@ export function OrgTreePanel({
           · 悬停能看到什么 → 是按钮的 `title` 该回答的事,不是侧栏该常驻的字
         一个侧栏的底部塞满小字说明,是"信息架构没做、用说明书补"的典型味道。
       */}
-      <div className="flex-none space-y-0.5 border-t border-slate-200 p-2">
+      <div className="flex-none space-y-0.5 border-t border-sky-500/15 p-2">
         <button
           type="button"
-          className={`block w-full rounded-md px-3 py-2 text-left text-slate-500 transition-colors hover:bg-white hover:text-slate-900 ${T_BODY}`}
+          className={`block w-full rounded-md px-3 py-2.5 text-left text-slate-300 transition-colors hover:bg-white/10 hover:text-white ${T_NAV}`}
           onClick={() => void navigate('/audit')}
         >
           审计日志 →
