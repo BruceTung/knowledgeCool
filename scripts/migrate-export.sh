@@ -13,7 +13,7 @@
 #   <时间戳>/db.dump            数据库自定义格式导出(pg_restore 可恢复)
 #   <时间戳>/uploads.tar.gz     附件目录
 #   <时间戳>/manifest.txt       逐表行数快照(导入后用来对账)
-#   <时间戳>/env.from-source    来源机的 .env **原样一份**(含密钥,见下方 ⚠️)
+#   <时间戳>/env.snapshot       来源机的 .env **原样一份**(由 backup.sh 写入,含密钥)
 #   <时间戳>/source-info.txt    来源机的 git commit / 镜像 / compose 项目名
 #   <时间戳>/RESTORE.md         目标机上怎么用这个包
 #   <时间戳>/SHA256SUMS         上面几个文件的校验和
@@ -60,8 +60,10 @@ if [[ -z "$STAMP" || ! -f "$SRC/db.dump" ]]; then
 fi
 echo "    备份:$STAMP"
 
-echo "==> 2/5 采集配置与来源信息"
-cp .env "$SRC/env.from-source"
+echo "==> 2/5 采集来源信息"
+# ⚠️ 配置快照不在这里复制 —— `backup.sh` 已经写了 `env.snapshot`。
+#    两处都写就会出现同一个文件的两个名字(而其中只有一个进了校验和),
+#    正是 §12 要避免的那种重复。
 
 {
   echo "exported_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -84,7 +86,7 @@ cat > "$SRC/RESTORE.md" <<'RESTORE_EOF'
 前提:目标机已经装好 Docker,并且 **clone 了同一版代码**(见 source-info.txt 的 repo_commit)。
 
     git checkout <repo_commit>
-    cp <这个包>/env.from-source .env      # ⚠️ 这一步会把来源机的密钥一起带过来
+    cp <这个包>/env.snapshot .env         # ⚠️ 这一步会把来源机的密钥一起带过来
 
 > 想让"迁移完大家都无感"(没人需要重新登录),就用来源机的 .env。
 > 想在新环境用新的数据库密码/会话密钥,就自己改 .env 里的
@@ -100,7 +102,7 @@ cat > "$SRC/RESTORE.md" <<'RESTORE_EOF'
 RESTORE_EOF
 
 echo "==> 3/5 计算校验和"
-( cd "$SRC" && sha256sum db.dump uploads.tar.gz manifest.txt env.from-source source-info.txt RESTORE.md > SHA256SUMS )
+( cd "$SRC" && sha256sum db.dump uploads.tar.gz manifest.txt env.snapshot source-info.txt RESTORE.md > SHA256SUMS )
 cat "$SRC/SHA256SUMS" | sed 's/^/    /'
 
 echo "==> 4/5 打包成单文件"

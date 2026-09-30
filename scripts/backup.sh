@@ -50,6 +50,23 @@ DEST="$BACKUP_ROOT/$STAMP"
 
 mkdir -p "$DEST"
 
+# ⚠️ 失败时把这个目录删掉,别把"半成品"留在 backups/ 里。
+#
+# 为什么值得专门写一段:备份目录一旦存在,后面的逻辑——保留期清理、
+# `restore-drill` 取"最近一份"、定时任务——**都会把它当成一份正常备份**。
+# 于是最坏的情况不是"没有备份",而是"以为有备份":磁盘满了导致 dump 被截断时,
+# 文件非空、目录也在,一切看起来都成功,直到真的需要恢复的那一天。
+#
+# 失败原因在上面的输出里,排查靠那段输出,不靠残缺的文件。
+FINISHED=0
+cleanup() {
+  if [[ "$FINISHED" -ne 1 ]]; then
+    echo "❌ 备份未完成,已清理半成品目录:$DEST"
+    rm -rf "$DEST"
+  fi
+}
+trap cleanup EXIT
+
 echo "==> 备份目标:$DEST"
 
 # ---------- 1. 数据库 ----------
@@ -76,11 +93,32 @@ if [[ ! -s "$DEST/uploads.tar.gz" ]]; then
   exit 1
 fi
 
-# ---------- 3. manifest ----------
+# ---------- 3. 配置快照 ----------
+# 备份不能**只有数据**。库导出来了,但"连上这个库"所需要的密钥(SESSION_SECRET、
+# POSTGRES_PASSWORD)既不在 dump 里,也不在仓库里(.env 是 gitignore 的)。
+# 服务器整个没了的时候,只拿着一份 db.dump 是重建不出一套能用的部署的 ——
+# 而那一刻你才发现缺的是哪两个值,已经太晚。
+#
+# 代价:这个目录从此含密钥。所以目录权限收到 700、快照文件 600。
+echo "==> 记录配置快照"
+ENV_STATE="ok"
+if [[ -f .env ]]; then
+  cp .env "$DEST/env.snapshot"
+  chmod 600 "$DEST/env.snapshot"
+else
+  # 不因此中止:没有 .env 也可能是把变量从别处注入的合法部署,
+  # 而数据本身仍然是好的。但必须**响亮地**记下来,不能让它静默缺失。
+  ENV_STATE="missing"
+  echo "⚠️ 找不到 .env —— 这份备份不含配置快照,只靠它重建不出完整部署"
+fi
+chmod 700 "$DEST"
+
+# ---------- 4. manifest ----------
 echo "==> 记录对账快照"
 {
   echo "stamp=$STAMP"
   echo "database=$PG_DB"
+  echo "env_snapshot=$ENV_STATE"
   echo "db_bytes=$(wc -c < "$DEST/db.dump")"
   echo "uploads_bytes=$(wc -c < "$DEST/uploads.tar.gz")"
   echo "counts:"
@@ -98,6 +136,9 @@ echo "==> 记录对账快照"
 } > "$DEST/manifest.txt"
 
 cat "$DEST/manifest.txt"
+
+# 到这里才算真的完成 —— 上面那个 trap 放行
+FINISHED=1
 
 echo
 echo "✅ 备份完成:$DEST"

@@ -34,7 +34,7 @@ fi
 BUNDLE="$(cd "$(dirname "$BUNDLE")" && pwd)/$(basename "$BUNDLE")"
 
 if [[ ! -f .env ]]; then
-  echo "❌ 找不到 .env。请先 `cp env.from-source .env`(从包里拿),再跑本脚本。"
+  echo "❌ 找不到 .env。请先从包里取出配置快照:`cp <包内>/env.snapshot .env`,再跑本脚本。"
   exit 1
 fi
 
