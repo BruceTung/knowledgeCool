@@ -91,7 +91,9 @@ export function LinkPopover({
       chain.setLink({ href }).run();
     } else if (keepOriginalText) {
       // 空选区 + 没有现成链接:插入一段以地址为文字的链接
-      chain.insertContent({ type: 'text', text: href, marks: [{ type: 'link', attrs: { href } }] }).run();
+      chain
+        .insertContent({ type: 'text', text: href, marks: [{ type: 'link', attrs: { href } }] })
+        .run();
     } else {
       // 文字被改过:整段替换(没有选区时 deleteSelection 是空操作)
       chain

@@ -137,11 +137,7 @@ export function canManageReaders(actor: Actor, chain: Chain): boolean {
  * ⚠️ 与旧模型正好相反:旧模型是「越靠下越具体,就近覆盖」,
  * 新模型是「**越靠上权限越大**」。这是个容易写反的地方。
  */
-export function canEdit(
-  actor: Actor,
-  chain: Chain,
-  grantedUserIds: ReadonlySet<string>,
-): boolean {
+export function canEdit(actor: Actor, chain: Chain, grantedUserIds: ReadonlySet<string>): boolean {
   if (actor.id === chain.self.ownerId) return true;
   if (chain.ancestors.some((node) => node.ownerId === actor.id)) return true;
   return grantedUserIds.has(actor.id);

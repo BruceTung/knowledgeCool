@@ -1,6 +1,10 @@
 import { ArrayMaxSize, IsArray, IsIn, IsInt, IsOptional, IsUUID, Min } from 'class-validator';
 
-import { NODE_VISIBILITIES, type NodeVisibility, type SaveNodeReadersInput } from '@knowledgecool/shared';
+import {
+  NODE_VISIBILITIES,
+  type NodeVisibility,
+  type SaveNodeReadersInput,
+} from '@knowledgecool/shared';
 
 /**
  * 保存可见性与读者名单(v2.12)。**整表替换**,与授权名单同一套约定。

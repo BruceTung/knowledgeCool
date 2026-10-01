@@ -13,9 +13,15 @@
  * 那时**不自动覆盖**,而是显示横幅让用户自己决定重新加载 ——
  * 阶段一没有协同,两个人同时编辑时,静默覆盖别人的编辑是最糟的结果。
  *
+ * ⚠️ 但**写入必须串行**(同一时刻只允许一次在飞)。并行发两次,第二次会带着尚未
+ * 推进的 `baseUpdatedAt` 出去,被服务端判成 409 —— 那是**我们自己造出来的冲突**,
+ * 而横幅会去怪一个并不存在的"其他人"。同时,"有没有未落库的改动"必须用
+ * **编辑计数差**判断,不能用"上一次保存成不成功":后者会在保存期间把新输入的字
+ * 静默丢掉。两件事的完整说明见 `flush` 与 `editSeqRef`。
+ *
  * ## 为阶段二留的地基
  *
- * `editor.getJSON()` 的产物与 `page_contents.content_json` 逐字节对应,
+ * `editor.getJSON()` 的产物与 `node_contents.content_json` 逐字节对应,
  * 阶段二挂 `y-prosemirror` 时不需要改存储层。届时还要**关掉 Tiptap 自带的撤销栈**
  * 改用 `Y.UndoManager`(§10 约束 7),否则两套撤销栈会打架。
  */
@@ -25,14 +31,7 @@ import { Table, TableCell, TableHeader, TableRow } from '@tiptap/extension-table
 import { Placeholder } from '@tiptap/extensions';
 import { EditorContent, useEditor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useReducer,
-  useRef,
-  useState,
-} from 'react';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 
 import type { Editor, EditorEvents } from '@tiptap/core';
 import {
@@ -143,8 +142,35 @@ export function PageEditor({
   /** 我读到的那一版。每次保存成功后推进 —— 这就是正文的乐观锁基线。 */
   const baseRef = useRef(initial.updatedAt);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  /** 有没有"还没落库"的改动。卸载时用它决定要不要补一次保存。 */
-  const dirtyRef = useRef(false);
+  /**
+   * 编辑计数:每次输入 +1。**它取代了原来那一个布尔 `dirtyRef`。**
+   *
+   * ⚠️ 那个布尔同时承担了两件事 ——「有没有未落库的改动」与「上一次保存成功了」——
+   * 而在**保存进行中又来了新输入**时这两件事会分叉,后果是**静默丢字**:
+   *
+   *   1. 输入 → 防抖 1.2s → 发出保存 #1(慢网络下可能要好几秒才回来);
+   *   2. 保存 #1 还没回来时用户又输入 → `dirtyRef = true`,又排一个定时器;
+   *   3. 保存 #1 成功 → `dirtyRef = false` —— **把第 2 步那次改动也一起"清干净"了**,
+   *      界面显示「已自动保存」;
+   *   4. 第 2 步那个定时器到点 → `flush` 在 `if (!dirtyRef.current) return` 处
+   *      直接返回,**一个字节都没写**;而状态还停在「已自动保存」;
+   *   5. 用户离开 → 卸载补保存与 `beforeunload` 看的是同一个 `dirtyRef`,
+   *      它仍是 false → **既不补写、也不弹确认**。全程无任何提示。
+   *
+   * 计数器把这两件事彻底拆开:`editSeq > savedSeq` 才叫"有未落库的改动",
+   * 而"上一次保存成功"只推进 `savedSeq` —— 它永远追不上之后的编辑。
+   */
+  const editSeqRef = useRef(0);
+  /** **已经成功落库**的那个编辑计数。 */
+  const savedSeqRef = useRef(0);
+  /**
+   * 正在飞的那一次保存。
+   *
+   * ⚠️ 同一时刻只允许一次写入。并行写会用**同一个 `baseUpdatedAt`** 发两次,
+   * 服务端按乐观锁把后一次判成 409 —— 于是横幅弹出"这篇文档在你编辑期间被其他人
+   * 改过了",而实际上**这个冲突是我们自己造出来的**,根本没有第二个人。
+   */
+  const inFlightRef = useRef<Promise<void> | null>(null);
   /**
    * 内容的最新快照。
    *
@@ -161,7 +187,7 @@ export function PageEditor({
    * 写进去 —— 那样闭包会拿到第一次渲染时那一份,里面的 `save` 还是旧的 nodeId。
    * 用 ref 把最新的一份递过去。
    */
-  const flushRef = useRef<((content: ProseMirrorNode) => void) | null>(null);
+  const flushRef = useRef<((content: ProseMirrorNode, seq: number) => void) | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const updateState = useCallback(
@@ -179,45 +205,81 @@ export function PageEditor({
    * `useEditor` 的销毁排在我们的清理函数之前,那一刻实例已经不可靠。
    * 现在快照在每次输入时就算好(反正 `onOutline` 本来也要算)。
    *
+   * ⚠️ `seq` 是**产生这份快照的那次编辑**的计数,必须一路带着 ——
+   * 只有它能让"这份内容落库了"与"之后又输入的内容还没落库"分开。
+   * 少了它就会退回成"保存成功即认为全部干净"(旧实现的那个 bug)。
+   *
    * ⚠️ 必须存结构化文档树,不能存任何序列化后的字符串 ——
    * §10 约束 2:正文存结构化文档树,绝不存 Markdown 字符串。
    */
   const flush = useCallback(
-    async (content: ProseMirrorNode) => {
+    async (content: ProseMirrorNode, seq: number) => {
       if (!canEdit) return;
-      if (!dirtyRef.current) return;
+      // 这一次要写的改动已经落库了(例如上一次 flush 顺手把它一起写了)
+      if (seq <= savedSeqRef.current) return;
+
+      /*
+        ⚠️ 先等上一次写完再发。并行发两次会用**同一个 `baseUpdatedAt`**,
+        服务端按乐观锁把后一次判成 409 —— 于是界面去怪"其他人改过了",
+        而那是我们自己造的冲突。(这也是"编辑期间出现假冲突"的根因。)
+      */
+      const flying = inFlightRef.current;
+      if (flying !== null) await flying;
+      if (!canEdit || seq <= savedSeqRef.current) return;
 
       updateState('saving');
-      try {
-        const saved = await save.mutateAsync({
-          content: content as NodeContentResponse['content'],
-          baseUpdatedAt: baseRef.current,
-        });
-        baseRef.current = saved.updatedAt;
-        dirtyRef.current = false;
-        setSaveError(null);
-        updateState('saved');
-      } catch (error: unknown) {
-        if (error instanceof ApiError && error.code === 'VERSION_CONFLICT') {
-          // 不自动覆盖:让别人写的版本留在库里,由用户决定怎么办
-          dirtyRef.current = false;
-          updateState('conflict');
-          return;
+
+      const task = (async () => {
+        try {
+          const saved = await save.mutateAsync({
+            content: content as NodeContentResponse['content'],
+            baseUpdatedAt: baseRef.current,
+          });
+          baseRef.current = saved.updatedAt;
+          /*
+            ⚠️ 只把 `savedSeq` 推到**这一次真正写上去的那个计数**,而不是 `editSeq`。
+            请求飞行期间用户可能又输入了 —— 那些字并没有进库,
+            不能跟着一起被标成"已保存"。
+          */
+          savedSeqRef.current = Math.max(savedSeqRef.current, seq);
+          setSaveError(null);
+          // 落库之后又输入过 → 回到「未保存」,绝不显示「已自动保存」
+          updateState(editSeqRef.current > savedSeqRef.current ? 'dirty' : 'saved');
+        } catch (error: unknown) {
+          if (error instanceof ApiError && error.code === 'VERSION_CONFLICT') {
+            /*
+              不自动覆盖:让别人写的版本留在库里,由用户决定怎么办。
+
+              ⚠️ 这里**刻意不推进 `savedSeq`**(旧实现是清掉那个"未保存"标记)。
+              这些改动确实没进库,清了就等于宣布"干净了" —— 于是
+              「重新加载」成了一次**没有任何确认的丢弃**,连刷新时浏览器那句
+              确认也不会再弹(那个钩子看的就是这个标记)。
+            */
+            updateState('conflict');
+            return;
+          }
+          /*
+            ⚠️ v2.16:把失败**原因**留下来。
+
+            原来这一行只有 `updateState('error')` —— `error` 这个变量从头到尾
+            没被用过,原因被整个丢掉,界面只剩一句固定文案
+            「保存失败。内容还留在编辑器里,继续输入会自动重试。」
+
+            那句话对"网络抖动"成立,但对 **`VALIDATION_FAILED`(正文超 2MB、
+            图片超过 10 张、`baseUpdatedAt` 解析不了)**完全不成立:
+            再输入一百次也不会成功,而用户会一直以为它在重试。
+            所以错误原因必须显示出来,并且由它决定文案。
+          */
+          setSaveError(error);
+          updateState('error');
         }
-        /*
-          ⚠️ v2.16:把失败**原因**留下来。
+      })();
 
-          原来这一行只有 `updateState('error')` —— `error` 这个变量从头到尾
-          没被用过,原因被整个丢掉,界面只剩一句固定文案
-          「保存失败。内容还留在编辑器里,继续输入会自动重试。」
-
-          那句话对"网络抖动"成立,但对 **`VALIDATION_FAILED`(正文超 2MB、
-          图片超过 10 张、`baseUpdatedAt` 解析不了)**完全不成立:
-          再输入一百次也不会成功,而用户会一直以为它在重试。
-          所以错误原因必须显示出来,并且由它决定文案。
-        */
-        setSaveError(error);
-        updateState('error');
+      inFlightRef.current = task;
+      try {
+        await task;
+      } finally {
+        if (inFlightRef.current === task) inFlightRef.current = null;
       }
     },
     [canEdit, save, updateState],
@@ -275,14 +337,20 @@ export function PageEditor({
       // 先把快照留下 —— 卸载或关页面时,这是唯一还能拿到内容的来源
       const doc = instance.getJSON() as ProseMirrorNode;
       snapshotRef.current = doc;
-      dirtyRef.current = true;
+      /*
+        ⚠️ 计数与快照必须**同时**取,并把这一对一起交给 `flush`。
+        分开取的话(flush 里现读 `editSeq`),请求飞行期间新输入的字会被
+        误当成"已经写进去了"。
+      */
+      editSeqRef.current += 1;
+      const seq = editSeqRef.current;
       updateState('dirty');
       onOutline(extractOutline(doc));
       setImageCount(countImages(doc));
 
       if (timerRef.current !== null) clearTimeout(timerRef.current);
       timerRef.current = setTimeout(() => {
-        void flushRef.current?.(doc);
+        void flushRef.current?.(doc, seq);
       }, AUTOSAVE_DELAY_MS);
     },
     onCreate: ({ editor: instance }: EditorEvents['create']) => {
@@ -309,8 +377,10 @@ export function PageEditor({
     return () => {
       if (timerRef.current !== null) clearTimeout(timerRef.current);
       const pending = snapshotRef.current;
-      if (pending !== null && dirtyRef.current) {
-        void flushRef.current?.(pending);
+      // ⚠️ 判据是**计数差**,不是"上一次保存成不成功"。用后者的话,
+      // "保存 #1 成功之后又输入的字"会被判成不需要补写 → 静默丢字。
+      if (pending !== null && editSeqRef.current > savedSeqRef.current) {
+        void flushRef.current?.(pending, editSeqRef.current);
       }
     };
   }, []);
@@ -329,7 +399,9 @@ export function PageEditor({
    */
   useEffect(() => {
     function onBeforeUnload(event: BeforeUnloadEvent): void {
-      if (!dirtyRef.current) return;
+      // ⚠️ 判据是**计数差**。用旧的那个布尔时,"保存 #1 成功之后又输入的字"
+      // 会被判成"干净" —— 关页面既不补发 beacon、也不弹确认,直接丢。
+      if (editSeqRef.current <= savedSeqRef.current) return;
       const pending = snapshotRef.current;
       if (pending !== null) {
         sendBeaconJson(`/nodes/${nodeId}/content`, {
@@ -397,9 +469,18 @@ export function PageEditor({
 
       {state === 'conflict' && (
         <div className="mx-8 mt-3 flex items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-          <span>这篇文档在你编辑期间被其他人改过了。为避免覆盖对方的修改,本次内容没有保存。</span>
+          <span>
+            这篇文档在你编辑期间被其他人改过了。为避免覆盖对方的修改,本次内容没有保存;
+            <b>你未保存的改动目前只在这个页面里</b>。
+          </span>
+          {/*
+            ⚠️ 这个按钮会**丢掉本地未保存的内容**,所以文案必须写明后果。
+            浏览器那句"确定要离开吗"靠的是 `beforeunload`,而它只在
+            `editSeq > savedSeq` 时才弹 —— 冲突之后**刻意不再清那个标记**,
+            所以这条路会真的问一次(旧实现把标记清掉了,于是刷新是静默丢弃)。
+          */}
           <Button variant="secondary" onClick={() => window.location.reload()}>
-            重新加载
+            放弃我的改动并重新加载
           </Button>
         </div>
       )}
@@ -427,7 +508,9 @@ export function PageEditor({
             <>
               <b>这篇内容没能保存:</b>
               {saveError.message}
-              <span className="mt-1 block">继续输入也不会成功,请先按提示修改(通常是正文过大或图片过多)。</span>
+              <span className="mt-1 block">
+                继续输入也不会成功,请先按提示修改(通常是正文过大或图片过多)。
+              </span>
             </>
           ) : (
             <>

@@ -1,5 +1,5 @@
 /**
- * 评论服务(DESIGN.md §8.4 / §5.4)。
+ * 评论服务(DESIGN.md §5.4)。
  *
  * ⚠️ **v2.0 的两处变化:**
  *   1. `pageId` → `nodeId` —— 空间与页面已合并为节点树
@@ -129,11 +129,7 @@ export class CommentService {
   }
 
   /** 发表评论或回复。**全员可发。** */
-  async create(
-    operator: Actor,
-    nodeId: string,
-    input: CreateCommentInput,
-  ): Promise<CommentView> {
+  async create(operator: Actor, nodeId: string, input: CreateCommentInput): Promise<CommentView> {
     await this.permissions.requireRead(operator, nodeId);
 
     const body = input.body.trim();

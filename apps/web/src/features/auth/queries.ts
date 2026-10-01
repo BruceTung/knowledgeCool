@@ -65,8 +65,7 @@ export function isUnauthorized(error: unknown): boolean {
 export function useLogin() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (input: CredentialsInput) =>
-      apiSend<LoginResponse>('POST', '/auth/login', input),
+    mutationFn: (input: CredentialsInput) => apiSend<LoginResponse>('POST', '/auth/login', input),
     onSuccess: (result) => {
       if (result.kind === 'password-change-required') return;
 

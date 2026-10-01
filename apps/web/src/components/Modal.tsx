@@ -172,9 +172,7 @@ export function Modal(props: ModalProps) {
           </header>
         )}
 
-        <div
-          className={bodyClassName ?? `${bodyMaxHeightClass} space-y-5 overflow-auto px-5 py-4`}
-        >
+        <div className={bodyClassName ?? `${bodyMaxHeightClass} space-y-5 overflow-auto px-5 py-4`}>
           {children}
         </div>
 

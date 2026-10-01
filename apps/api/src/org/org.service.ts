@@ -102,7 +102,10 @@ export class OrgService {
     this.requireSuperAdmin(operator);
 
     const keyword = query?.trim();
-    const size = Math.min(Math.max(Math.trunc(limit ?? USER_DEFAULT_PAGE_SIZE), 1), USER_MAX_PAGE_SIZE);
+    const size = Math.min(
+      Math.max(Math.trunc(limit ?? USER_DEFAULT_PAGE_SIZE), 1),
+      USER_MAX_PAGE_SIZE,
+    );
 
     const filter: Prisma.UserWhereInput =
       keyword === undefined || keyword === ''
@@ -472,7 +475,7 @@ export class OrgService {
    *
    * ## 为什么需要它
    *
-   * Excel 导入是**增量**语义(§8.5):表格里没写与"要删掉归属"无法区分,
+   * Excel 导入是**增量**语义(§8.4):表格里没写与"要删掉归属"无法区分,
    * 所以调岗必须两步 —— 导入新归属 + 界面移出旧归属。而在 v2.4 之前,
    * 第二步只能到「人员管理 → 设置归属」里整表替换,**看不到"这个节点下都有谁"**。
    * 这个接口就是补上那一步。
@@ -648,7 +651,10 @@ export class OrgService {
 
     await this.assertActiveUser(userId);
 
-    if (!operator.isSuperAdmin && !(await this.permissions.isInOperatorScope(operator.id, userId))) {
+    if (
+      !operator.isSuperAdmin &&
+      !(await this.permissions.isInOperatorScope(operator.id, userId))
+    ) {
       const who = await this.pluckUser(userId);
       throw AppError.forbidden(`不能把「${who.name}」加到这里 —— 他不在你的组织范围内`);
     }
@@ -687,7 +693,11 @@ export class OrgService {
    * 真正会变的是他的**组织范围**:范围缩小后,他能授权的对象变少。
    * 这一点也写在界面的提示里。
    */
-  async removeMember(operator: Actor, nodeId: string, userId: string): Promise<NodeMembersResponse> {
+  async removeMember(
+    operator: Actor,
+    nodeId: string,
+    userId: string,
+  ): Promise<NodeMembersResponse> {
     const { chain, row } = await this.permissions.chainOf(nodeId);
     this.requireManageMember(operator, chain);
 
@@ -899,7 +909,13 @@ export class OrgService {
     const titles = await this.titleMapOf(
       rows.flatMap((row) => row.assignments.map((assignment) => assignment.node.materializedPath)),
     );
-    return rows.map((row) => toView(row, row.assignments.map((a) => a.node), titles));
+    return rows.map((row) =>
+      toView(
+        row,
+        row.assignments.map((a) => a.node),
+        titles,
+      ),
+    );
   }
 
   /**

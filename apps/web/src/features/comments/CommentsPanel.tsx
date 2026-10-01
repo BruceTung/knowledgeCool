@@ -1,5 +1,5 @@
 /**
- * 页面评论面板(DESIGN.md §8.4)。
+ * 页面评论面板(DESIGN.md §5.4)。
  *
  * 阶段一的评论**不锚定到文字** —— 只有"挂在这一页上"这一层。
  * 所以界面上也没有"选中一段再评论"的入口,这不是漏做,是范围。
@@ -76,43 +76,49 @@ export function CommentsPanel({ nodeId }: { nodeId: string }) {
       </div>
 
       <div className="flex-none border-t border-slate-200 p-3">
-          {replyTo !== null && (
-            <div className="mb-2 flex items-center justify-between text-sm text-slate-500">
-              <span>正在回复这条评论</span>
-              <button type="button" className="hover:text-slate-700" onClick={() => setReplyTo(null)}>
-                取消
-              </button>
-            </div>
-          )}
-          <textarea
-            value={draft}
-            onChange={(event) => {
-              setDraft(event.target.value.slice(0, COMMENT_BODY_MAX_LENGTH));
-            }}
-            onKeyDown={(event) => {
-              // Enter 发送、Shift+Enter 换行 —— 评论区约定俗成的行为
-              if (event.key === 'Enter' && !event.shiftKey) {
-                event.preventDefault();
-                submit();
-              }
-            }}
-            rows={3}
-            placeholder="写下你的评论…(Enter 发送,Shift+Enter 换行)"
-            className={`w-full resize-none rounded-md border border-slate-300 px-2 py-1.5 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 ${T_BODY}`}
-          />
-          <div className="mt-2 flex items-center justify-between">
-            <span className={`text-slate-500 ${T_META}`}>
-              {draft.length}/{COMMENT_BODY_MAX_LENGTH}
-            </span>
-            <Button disabled={create.isPending || draft.trim() === ''} onClick={submit}>
-              {create.isPending ? '发送中…' : '发表'}
-            </Button>
+        {replyTo !== null && (
+          <div className="mb-2 flex items-center justify-between text-sm text-slate-500">
+            <span>正在回复这条评论</span>
+            <button type="button" className="hover:text-slate-700" onClick={() => setReplyTo(null)}>
+              取消
+            </button>
           </div>
-          {create.isError && (
-            <div className="mt-2">
-              <ErrorNote error={create.error} />
-            </div>
-          )}
+        )}
+        <textarea
+          value={draft}
+          onChange={(event) => {
+            setDraft(event.target.value.slice(0, COMMENT_BODY_MAX_LENGTH));
+          }}
+          onKeyDown={(event) => {
+            /*
+              ⚠️ **中文输入法组词期间按 Enter 是"选中候选词",不是"发送"。**
+              不判 `isComposing` 的话,每敲一次候选确认就会把半截评论发出去 ——
+              而这是个中文界面,几乎每次输入都会经过组词状态。
+            */
+            if (event.nativeEvent.isComposing) return;
+            // Enter 发送、Shift+Enter 换行 —— 评论区约定俗成的行为
+            if (event.key === 'Enter' && !event.shiftKey) {
+              event.preventDefault();
+              submit();
+            }
+          }}
+          rows={3}
+          placeholder="写下你的评论…(Enter 发送,Shift+Enter 换行)"
+          className={`w-full resize-none rounded-md border border-slate-300 px-2 py-1.5 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 ${T_BODY}`}
+        />
+        <div className="mt-2 flex items-center justify-between">
+          <span className={`text-slate-500 ${T_META}`}>
+            {draft.length}/{COMMENT_BODY_MAX_LENGTH}
+          </span>
+          <Button disabled={create.isPending || draft.trim() === ''} onClick={submit}>
+            {create.isPending ? '发送中…' : '发表'}
+          </Button>
+        </div>
+        {create.isError && (
+          <div className="mt-2">
+            <ErrorNote error={create.error} />
+          </div>
+        )}
       </div>
     </div>
   );
@@ -227,4 +233,3 @@ function CommentCard({
     </div>
   );
 }
-

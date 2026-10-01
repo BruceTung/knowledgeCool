@@ -16,13 +16,17 @@ export const ERROR_CODES = [
   'VALIDATION_FAILED',
   'VERSION_CONFLICT',
   /**
-   * 必须先改密(v2.2)。
+   * ⚠️ 这里曾经有 `PASSWORD_CHANGE_REQUIRED`(v2.2 引入),**已删除**。
    *
-   * 单独一个码而不是复用 FORBIDDEN,是因为前端需要**据此跳转改密页** ——
-   * 如果混在通用 403 里,前端只能显示一句"没有权限",用户会卡死。
-   * 注意:这只是体验;真正的拦截在服务端守卫里(§6.1.2)。
+   * 它的来历:v2.2 的首次登录**先发会话**,再由守卫把业务接口拦成
+   * 「403 请先改密」。v2.4 把首登改成**根本不建立会话**之后,这条路径就不存在了 ——
+   * 未改密的人对任何业务接口而言就是未登录(**401**),
+   * 前端靠登录响应里的 `kind: 'password-change-required'` 跳改密页,不靠错误码。
+   *
+   * 删掉而不是留着,是因为**一个没有生产者的错误码就是死开关**:
+   * 前端完全可以针对它写一条分支,而那条分支永远不会被执行 ——
+   * 这比没有这个码更难查。(`seed-dev.mjs` 里那条守着 403 的旧断言就是这么暴露的。)
    */
-  'PASSWORD_CHANGE_REQUIRED',
   'RATE_LIMITED',
   'INTERNAL_ERROR',
 ] as const;
@@ -36,7 +40,6 @@ export const ERROR_HTTP_STATUS: Readonly<Record<ErrorCode, number>> = Object.fre
   NOT_FOUND: 404,
   VALIDATION_FAILED: 400,
   VERSION_CONFLICT: 409,
-  PASSWORD_CHANGE_REQUIRED: 403,
   RATE_LIMITED: 429,
   INTERNAL_ERROR: 500,
 });
@@ -51,7 +54,6 @@ export const DEFAULT_ERROR_MESSAGES: Readonly<Record<ErrorCode, string>> = Objec
   NOT_FOUND: '内容不存在',
   VALIDATION_FAILED: '请求参数不正确',
   VERSION_CONFLICT: '该内容已被他人修改,请刷新后重试',
-  PASSWORD_CHANGE_REQUIRED: '请先修改初始密码',
   RATE_LIMITED: '操作过于频繁,请稍后再试',
   INTERNAL_ERROR: '服务器内部错误',
 });

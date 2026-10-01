@@ -9,7 +9,11 @@ import {
   Matches,
   MaxLength,
 } from 'class-validator';
-import { USER_STATUSES, type SetUserAssignmentsInput, type UpdateUserInput } from '@knowledgecool/shared';
+import {
+  USER_STATUSES,
+  type SetUserAssignmentsInput,
+  type UpdateUserInput,
+} from '@knowledgecool/shared';
 
 import { EMPLOYEE_NO_PATTERN } from '../../auth/dto/login.dto.js';
 

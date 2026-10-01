@@ -14,6 +14,15 @@ export const AUDIT_ACTIONS = [
   // 认证
   'auth.setup',
   'auth.login',
+  /**
+   * 账号因连续登录失败被临时锁定(v2.12 加限流时就有,但**一直漏在这一行清单外**)。
+   *
+   * ⚠️ 漏登的后果不是"少一条日志",而是审计页的筛选器由本清单生成
+   * (`AUDIT_ACTION_LABELS` 也在这里)—— 于是这些真实存在的锁定记录
+   * 既没有中文标签、也筛不出来,看起来像是不存在的动作。
+   * 任何 `recordAudit` 用到的 action 都必须在这里有位置。
+   */
+  'auth.login.locked',
   'auth.logout',
   'auth.password.change',
   // 节点
@@ -52,6 +61,7 @@ export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 export const AUDIT_ACTION_LABELS: Readonly<Record<string, string>> = Object.freeze({
   'auth.setup': '初始化管理员',
   'auth.login': '登录',
+  'auth.login.locked': '登录失败锁定',
   'auth.logout': '登出',
   'auth.password.change': '修改密码',
   'node.create': '新建节点',

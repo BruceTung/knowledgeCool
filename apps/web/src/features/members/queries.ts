@@ -1,5 +1,5 @@
 /**
- * 节点成员的查询与变更(v2.4,DESIGN.md §8.5「调岗两步」的配套)。
+ * 节点成员的查询与变更(v2.4,DESIGN.md §8.4「调岗两步」的配套)。
  *
  * 缓存键:`['node', id, 'members']` —— 与 `grants` / `content` 同一命名法。
  *
@@ -8,7 +8,11 @@
  * 会让"我刚把他加进来,但树上还是老样子"。
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { AddNodeMemberInput, GrantCandidate, NodeMembersResponse } from '@knowledgecool/shared';
+import type {
+  AddNodeMemberInput,
+  GrantCandidate,
+  NodeMembersResponse,
+} from '@knowledgecool/shared';
 
 import { apiFetch, apiSend } from '../../lib/api';
 

@@ -11,7 +11,7 @@ import { buildTree } from '../features/org/tree-utils';
 /**
  * 组织架构管理(超管)。
  *
- * 两件事:**建组织**(部门 / 组)与**导名单**(Excel,§8.5)。
+ * 两件事:**建组织**(部门 / 组)与**导名单**(Excel,§8.4)。
  *
  * ⚠️ 这里刻意**不做"删除部门"**。删掉一个部门会连带影响它下面所有内容与
  * 人的归属,而阶段一没有"部门归档"这个概念。要停用一个部门,
@@ -125,8 +125,7 @@ export function OrgAdminPage() {
       <section className="rounded-lg border border-slate-200 bg-white p-4">
         <h2 className="text-sm font-medium text-slate-900">新建组 / 项目</h2>
         <p className="mt-1 text-sm text-slate-500">
-          组必须挂在某个部门下面。不指定负责人时,由部门负责人代管
-          —— 他本来就能改本部门的全部内容。
+          组必须挂在某个部门下面。不指定负责人时,由部门负责人代管 —— 他本来就能改本部门的全部内容。
         </p>
         <div className="mt-3 flex flex-wrap items-end gap-2">
           <div className="min-w-[200px] flex-1">

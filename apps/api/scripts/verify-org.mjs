@@ -189,12 +189,12 @@ async function login(employeeNo, candidates) {
     // 429 = 被限流锁住了。**必须立刻说清楚**,不能继续往下走 ——
     // 否则后面每一条断言都会拿到 401/404,然后被报成"功能坏了"。
     if (attempt.status === 429) {
-      const wait = String(attempt.body?.retryAfterSeconds ?? "?");
+      const wait = String(attempt.body?.retryAfterSeconds ?? '?');
       throw new Error(
         `${employeeNo} 被登录限流锁住了(HTTP 429,还需约 ${wait} 秒)。` +
-          "这不是功能缺陷,是 v2.12 的登录限流在生效。等它过期,或清掉计数:" +
-          "  compose exec redis redis-cli --scan --pattern kc:login:*(逐个 del);" +
-          "  也可以把 LOGIN_MAX_ATTEMPTS 设为 0 来关掉账号锁(IP 门仍生效)。",
+          '这不是功能缺陷,是 v2.12 的登录限流在生效。等它过期,或清掉计数:' +
+          '  compose exec redis redis-cli --scan --pattern kc:login:*(逐个 del);' +
+          '  也可以把 LOGIN_MAX_ATTEMPTS 设为 0 来关掉账号锁(IP 门仍生效)。',
       );
     }
 
@@ -226,9 +226,9 @@ async function login(employeeNo, candidates) {
   }
 
   throw new Error(
-    `${employeeNo} 登录失败:候选密码一个都不对(${candidates.join(" / ")})。` +
-      "继续跑下去会带着**上一个人的会话**发请求,那比直接失败更坏,所以这里中止。" +
-      "如果这个账号的密码不在候选里,把它加进调用处的候选列表。",
+    `${employeeNo} 登录失败:候选密码一个都不对(${candidates.join(' / ')})。` +
+      '继续跑下去会带着**上一个人的会话**发请求,那比直接失败更坏,所以这里中止。' +
+      '如果这个账号的密码不在候选里,把它加进调用处的候选列表。',
   );
 }
 
@@ -596,7 +596,16 @@ async function main() {
   let users = (await api('GET', '/admin/users?limit=500')).body.users;
   const userId = (employeeNo) => users.find((user) => user.employeeNo === employeeNo)?.id;
 
-  for (const title of ['技术部', '市场部', '后端组', 'CRM 项目', '研发规范', '技术方案', '接口规范', '市场部工作方式']) {
+  for (const title of [
+    '技术部',
+    '市场部',
+    '后端组',
+    'CRM 项目',
+    '研发规范',
+    '技术方案',
+    '接口规范',
+    '市场部工作方式',
+  ]) {
     if (nodeId(title) === undefined) {
       console.error(`✗ 树里找不到「${title}」—— 先跑 pnpm seed:dev`);
       process.exit(1);
@@ -772,7 +781,11 @@ async function main() {
   });
   check('也不能在「市场部」下新建 → 403', underOtherDept.status === 403);
 
-  const topLevel = await api('POST', '/nodes', { parentId: null, kind: 'space', title: '赵敏建的部门' });
+  const topLevel = await api('POST', '/nodes', {
+    parentId: null,
+    kind: 'space',
+    title: '赵敏建的部门',
+  });
   check('非超管不能新建一级部门 → 403', topLevel.status === 403);
 
   check(
@@ -805,9 +818,14 @@ async function main() {
   check('陈默能读授权视图,canManage 为真', grants?.canManage === true);
   check(
     '授权视图分三段:所有者 / 上级所有者 / 显式授权',
-    grants?.owner?.employeeNo === 'KC002' && Array.isArray(grants.inherited) && Array.isArray(grants.grants),
+    grants?.owner?.employeeNo === 'KC002' &&
+      Array.isArray(grants.inherited) &&
+      Array.isArray(grants.grants),
   );
-  check('赵敏已在授权名单里', grants?.grants?.some((row) => row.employeeNo === 'KC004'));
+  check(
+    '赵敏已在授权名单里',
+    grants?.grants?.some((row) => row.employeeNo === 'KC004'),
+  );
 
   const grantToOutsider = await api('PUT', `/nodes/${nodeId('接口规范')}/grants`, {
     version: grants.version,
@@ -859,7 +877,9 @@ async function main() {
 
   cookie = '';
   await login('KC001', [ADMIN_PASSWORD]);
-  const adminSetDeptOwner = await api('PATCH', `/nodes/${nodeId('技术部')}/owner`, { ownerId: chen?.id });
+  const adminSetDeptOwner = await api('PATCH', `/nodes/${nodeId('技术部')}/owner`, {
+    ownerId: chen?.id,
+  });
   check('超管能改一级部门的所有者 → 204', adminSetDeptOwner.status === 204);
 
   const assignOutsider = await api('PATCH', `/admin/users/${userId('KC005')}/assignments`, {
@@ -904,7 +924,10 @@ async function main() {
 
   const exported = await api('GET', `/nodes/${nodeId('技术方案')}/export?format=md`);
   check('导出 Markdown → 200', exported.status === 200);
-  check('导出内容是 Markdown(含表格语法)', exported.text.includes('|') && exported.text.includes('技术栈'));
+  check(
+    '导出内容是 Markdown(含表格语法)',
+    exported.text.includes('|') && exported.text.includes('技术栈'),
+  );
 
   // ============================================================
   // H. 评论
@@ -1046,10 +1069,7 @@ async function main() {
     '按已被删除的节点查子树 → 404(它真的不存在了)',
     (await api('GET', `/org/tree?root=${parentPage.body?.id}`)).status === 404,
   );
-  check(
-    'root 不是 uuid → 400',
-    (await api('GET', '/org/tree?root=abc')).status === 400,
-  );
+  check('root 不是 uuid → 400', (await api('GET', '/org/tree?root=abc')).status === 400);
 
   // ---- 不能删别人的东西 ----
   cookie = '';
@@ -1088,7 +1108,11 @@ async function main() {
   console.log('\nJ. 附件上传');
 
   const form = new FormData();
-  form.append('file', new Blob([new Uint8Array([137, 80, 78, 71])], { type: 'image/png' }), 'x.svg');
+  form.append(
+    'file',
+    new Blob([new Uint8Array([137, 80, 78, 71])], { type: 'image/png' }),
+    'x.svg',
+  );
   const svgUpload = await fetch(`${BASE}/uploads`, {
     method: 'POST',
     headers: cookie === '' ? {} : { Cookie: cookie },
@@ -1097,14 +1121,22 @@ async function main() {
   check('上传 .svg → 400(SVG 能内嵌脚本,是 XSS 载体)', svgUpload.status === 400);
 
   const form2 = new FormData();
-  form2.append('file', new Blob([new Uint8Array([137, 80, 78, 71])], { type: 'image/png' }), 'ok.png');
+  form2.append(
+    'file',
+    new Blob([new Uint8Array([137, 80, 78, 71])], { type: 'image/png' }),
+    'ok.png',
+  );
   const pngUpload = await fetch(`${BASE}/uploads`, {
     method: 'POST',
     headers: { Cookie: cookie },
     body: form2,
   });
   const pngBody = await pngUpload.json().catch(() => null);
-  check('上传 .png → 201 且返回服务端生成的 URL', pngUpload.status === 201 && /^\/uploads\/[0-9a-f-]+\.png$/.test(pngBody?.url ?? ''), JSON.stringify(pngBody));
+  check(
+    '上传 .png → 201 且返回服务端生成的 URL',
+    pngUpload.status === 201 && /^\/uploads\/[0-9a-f-]+\.png$/.test(pngBody?.url ?? ''),
+    JSON.stringify(pngBody),
+  );
   if (pngBody?.url !== undefined) {
     // ⚠️ 静态文件的直出方是 **Nginx(web 容器)**,不是 API 容器。
     // 所以这一项能不能验,取决于脚本跑在哪:
@@ -1115,7 +1147,11 @@ async function main() {
     // 会让"通过了几项"这个结论变得没有意义。
     try {
       const served = await fetch(`${ROOT}${pngBody.url}`);
-      check(`由 Nginx 直出静态文件 → 200(${ROOT})`, served.status === 200, `HTTP ${String(served.status)}`);
+      check(
+        `由 Nginx 直出静态文件 → 200(${ROOT})`,
+        served.status === 200,
+        `HTTP ${String(served.status)}`,
+      );
     } catch (error) {
       console.log(
         `  · 跳过静态直出检查:${ROOT} 从这里不可达(${error instanceof Error ? error.message : '未知'})`,
@@ -1251,7 +1287,16 @@ async function main() {
   // **再也不会发生**,所以这条断言永远失败(跑一次就能看到)。
   // 它不该被「改成另一个还能发生的动作」来凑数,而是直接删掉;
   // 接替它的 visibility.replace 在下面那段保密场景里单独验(那时它才真的发生)。
-  for (const action of ['auth.login', 'org.import', 'node.create', 'node.content.update', 'grant.replace', 'node.owner.update', 'comment.create', 'node.delete']) {
+  for (const action of [
+    'auth.login',
+    'org.import',
+    'node.create',
+    'node.content.update',
+    'grant.replace',
+    'node.owner.update',
+    'comment.create',
+    'node.delete',
+  ]) {
     check(`审计里有 ${action}`, actions.has(action));
   }
 
@@ -1313,10 +1358,7 @@ async function main() {
     techMembers.body?.inherited?.some((member) => member.employeeNo === 'KC003') === true &&
       techMembers.body?.inherited?.some((member) => member.employeeNo === 'KC004') === true,
   );
-  check(
-    '超管在成员视图里 canManage 为真(组织架构归他管)',
-    techMembers.body?.canManage === true,
-  );
+  check('超管在成员视图里 canManage 为真(组织架构归他管)', techMembers.body?.canManage === true);
 
   const wangInTech = techMembers.body?.inherited?.find((member) => member.employeeNo === 'KC003');
   check(
@@ -1337,7 +1379,10 @@ async function main() {
   });
   check('组员给自己加归属 → 403', zhaoAddMember.status === 403);
 
-  const zhaoRemoveMember = await api('DELETE', `/nodes/${nodeId('后端组')}/members/${userId('KC003')}`);
+  const zhaoRemoveMember = await api(
+    'DELETE',
+    `/nodes/${nodeId('后端组')}/members/${userId('KC003')}`,
+  );
   check('组员移出别人 → 403', zhaoRemoveMember.status === 403);
 
   // ---- 部长:能管本部门,但受组织范围约束 ----
@@ -1382,7 +1427,11 @@ async function main() {
     await login('KC002', [SEED_PASSWORD]);
     return attempt;
   })();
-  check('把已离职的人加进组织 → 400', addDeparted.status === 400, `实际 ${String(addDeparted.status)}`);
+  check(
+    '把已离职的人加进组织 → 400',
+    addDeparted.status === 400,
+    `实际 ${String(addDeparted.status)}`,
+  );
 
   // ============================================================
   // M. 树的按根查询(?root=)
@@ -1450,8 +1499,7 @@ async function main() {
   const marketLeaf = await api('GET', `/org/tree?root=${nodeId('接口规范')}`);
   check(
     '别部门的人查同一棵子树,权限标记依然是对的(不含它)',
-    marketLeaf.status === 200 &&
-      !marketLeaf.body.editableNodeIds.includes(nodeId('接口规范')),
+    marketLeaf.status === 200 && !marketLeaf.body.editableNodeIds.includes(nodeId('接口规范')),
   );
 
   // ============================================================
@@ -1491,7 +1539,10 @@ async function main() {
 
   // 真去翻一页:limit=2 时必须只回 2 条、且给出游标;而 total 不受 limit 影响。
   const paged = await api('GET', '/admin/users?limit=2');
-  const pageTwo = await api('GET', `/admin/users?limit=2&cursor=${encodeURIComponent(paged.body?.nextCursor ?? '')}`);
+  const pageTwo = await api(
+    'GET',
+    `/admin/users?limit=2&cursor=${encodeURIComponent(paged.body?.nextCursor ?? '')}`,
+  );
   check(
     'limit 生效,且游标能翻到下一页且不重复',
     paged.body?.users?.length === 2 &&
@@ -1530,11 +1581,7 @@ async function main() {
   cookie = '';
   await login('KC005', [SEED_PASSWORD, INITIAL_PASSWORD]);
   check('非超管读人员名册 → 403', (await api('GET', '/admin/users?limit=500')).status === 403);
-  const outsiderReset = await api(
-    'POST',
-    `/admin/users/${String(kc004?.id)}/reset-password`,
-    {},
-  );
+  const outsiderReset = await api('POST', `/admin/users/${String(kc004?.id)}/reset-password`, {});
   check(
     '非超管重置别人的密码 → 403',
     outsiderReset.status === 403,
@@ -1558,10 +1605,7 @@ async function main() {
   const kc004Alive = await tryLogin('KC004', [SEED_PASSWORD, INITIAL_PASSWORD, ADMIN_PASSWORD]);
   const kc004Cookie = cookie;
   check('KC004 重置前能正常登录(后面要验这个会话会被吊销)', kc004Alive && kc004Cookie !== '');
-  check(
-    '重置前,他带会话能读树',
-    (await api('GET', '/org/tree')).status === 200,
-  );
+  check('重置前,他带会话能读树', (await api('GET', '/org/tree')).status === 200);
 
   cookie = '';
   await login('KC001', [ADMIN_PASSWORD]);
@@ -1641,7 +1685,6 @@ async function main() {
     (kc005Back.body?.users ?? []).find((item) => item.employeeNo === 'KC005')?.status === 'active',
   );
 
-
   // ============================================================
   // 保密能力(v2.13)—— 受限节点与读者名单
   // ============================================================
@@ -1649,68 +1692,70 @@ async function main() {
   // 这一段必须自己复原(把 市场部 改回公开),否则后面的收尾与下一轮运行的
   // 断言都会看到一个受限的市场部 —— 那是"验收脚本把演示数据弄脏"的老毛病。
   {
-    const MARKET = nodeId("市场部");
-    const kc004Id = userId("KC004");
+    const MARKET = nodeId('市场部');
+    const kc004Id = userId('KC004');
 
-    await login("KC001", [ADMIN_PASSWORD]);
-    const before = await api("GET", "/nodes/" + String(MARKET) + "/readers");
+    await login('KC001', [ADMIN_PASSWORD]);
+    const before = await api('GET', '/nodes/' + String(MARKET) + '/readers');
     check(
-      "默认可见性是 public(存量数据行为不变)",
-      before.status === 200 && before.body?.visibility === "public",
-      String(before.status) + " " + String(before.body?.visibility),
+      '默认可见性是 public(存量数据行为不变)',
+      before.status === 200 && before.body?.visibility === 'public',
+      String(before.status) + ' ' + String(before.body?.visibility),
     );
 
     // 1) 改成受限,名单为空
-    const setRestricted = await api("PUT", "/nodes/" + String(MARKET) + "/readers", {
+    const setRestricted = await api('PUT', '/nodes/' + String(MARKET) + '/readers', {
       version: before.body?.version,
-      visibility: "restricted",
+      visibility: 'restricted',
       userIds: [],
     });
-    check("超管能把节点改成受限 → 200", setRestricted.status === 200, String(setRestricted.status));
+    check('超管能把节点改成受限 → 200', setRestricted.status === 200, String(setRestricted.status));
 
     // 2) 无关的人(赵敏,技术部)看不见了 —— 树 / 详情 / 正文 / 导出 / 检索全都要挡住
-    await login("KC004", [SEED_PASSWORD, INITIAL_PASSWORD, ADMIN_PASSWORD]);
-    const treeHidden = await api("GET", "/org/tree");
+    await login('KC004', [SEED_PASSWORD, INITIAL_PASSWORD, ADMIN_PASSWORD]);
+    const treeHidden = await api('GET', '/org/tree');
     const visibleTitles = (treeHidden.body?.nodes ?? []).map((n) => n.title);
     check(
-      "★ 受限节点的整棵子树从树里消失(连子节点标题一起)",
+      '★ 受限节点的整棵子树从树里消失(连子节点标题一起)',
       treeHidden.status === 200 &&
-        !visibleTitles.includes("市场部") &&
-        !visibleTitles.includes("市场部工作方式"),
-      "市场部=" + String(visibleTitles.includes("市场部")) +
-        " 子节点=" + String(visibleTitles.includes("市场部工作方式")),
+        !visibleTitles.includes('市场部') &&
+        !visibleTitles.includes('市场部工作方式'),
+      '市场部=' +
+        String(visibleTitles.includes('市场部')) +
+        ' 子节点=' +
+        String(visibleTitles.includes('市场部工作方式')),
     );
 
-    const detailHidden = await api("GET", "/nodes/" + String(MARKET));
+    const detailHidden = await api('GET', '/nodes/' + String(MARKET));
     check(
-      "★ 读不到时回 404 而不是 403(403 等于承认这里有个你看不见的东西)",
+      '★ 读不到时回 404 而不是 403(403 等于承认这里有个你看不见的东西)',
       detailHidden.status === 404,
       String(detailHidden.status),
     );
 
-    const contentHidden = await api("GET", "/nodes/" + String(MARKET) + "/content");
-    check("★ 正文也读不到 → 404", contentHidden.status === 404, String(contentHidden.status));
+    const contentHidden = await api('GET', '/nodes/' + String(MARKET) + '/content');
+    check('★ 正文也读不到 → 404', contentHidden.status === 404, String(contentHidden.status));
 
-    const exportHidden = await api("GET", "/nodes/" + String(MARKET) + "/export?format=md");
+    const exportHidden = await api('GET', '/nodes/' + String(MARKET) + '/export?format=md');
     check(
-      "★ 导出也读不到 → 404(漏了就能整篇下载走)",
+      '★ 导出也读不到 → 404(漏了就能整篇下载走)',
       exportHidden.status === 404,
       String(exportHidden.status),
     );
 
-    const searchHidden = await api("GET", "/search?q=" + encodeURIComponent("市场部工作方式"));
+    const searchHidden = await api('GET', '/search?q=' + encodeURIComponent('市场部工作方式'));
     check(
-      "★ 检索里也搜不到(最容易漏的一条读取路径)",
+      '★ 检索里也搜不到(最容易漏的一条读取路径)',
       searchHidden.status === 200 &&
         !(searchHidden.body?.hits ?? []).some((h) => h.nodeId === MARKET),
-      "hits=" + String((searchHidden.body?.hits ?? []).length),
+      'hits=' + String((searchHidden.body?.hits ?? []).length),
     );
 
     // 3) 所有者链仍然看得见 —— 受限不是"谁都看不见"
-    await login("KC005", [SEED_PASSWORD, ADMIN_PASSWORD]);
-    const ownerSees = await api("GET", "/nodes/" + String(MARKET));
+    await login('KC005', [SEED_PASSWORD, ADMIN_PASSWORD]);
+    const ownerSees = await api('GET', '/nodes/' + String(MARKET));
     check(
-      "★ 市场部部长的所有者链仍然看得见(受限不等于谁都看不见)",
+      '★ 市场部部长的所有者链仍然看得见(受限不等于谁都看不见)',
       ownerSees.status === 200,
       String(ownerSees.status),
     );
@@ -1722,15 +1767,15 @@ async function main() {
     // 触发,拿到 409 而不是 403/404。
     // 那看起来像"权限没挡住",实际上是这条断言**根本没测到权限** ——
     // 一条测错了对象的断言比没有断言更坏,因为它给人已经验证过的错觉。
-    await login("KC004", [SEED_PASSWORD, INITIAL_PASSWORD, ADMIN_PASSWORD]);
-    const asZhao = await api("GET", "/nodes/" + String(MARKET) + "/readers");
-    const forbidden = await api("PUT", "/nodes/" + String(MARKET) + "/readers", {
+    await login('KC004', [SEED_PASSWORD, INITIAL_PASSWORD, ADMIN_PASSWORD]);
+    const asZhao = await api('GET', '/nodes/' + String(MARKET) + '/readers');
+    const forbidden = await api('PUT', '/nodes/' + String(MARKET) + '/readers', {
       version: asZhao.body?.version ?? 1,
-      visibility: "public",
+      visibility: 'public',
       userIds: [],
     });
     check(
-      "★ 无关的人改可见范围 → 403 或 404(两者都算挡住)",
+      '★ 无关的人改可见范围 → 403 或 404(两者都算挡住)',
       forbidden.status === 403 || forbidden.status === 404,
       String(forbidden.status),
     );
@@ -1744,15 +1789,15 @@ async function main() {
     // 一条不一致的读路径就是一条侧信道:它确认节点存在,还可能带出内容。
     {
       for (const [label, path] of [
-        ["详情", `/nodes/${String(MARKET)}`],
-        ["正文", `/nodes/${String(MARKET)}/content`],
-        ["导出", `/nodes/${String(MARKET)}/export?format=md`],
-        ["评论", `/nodes/${String(MARKET)}/comments`],
-        ["授权名单", `/nodes/${String(MARKET)}/grants`],
-        ["可见范围", `/nodes/${String(MARKET)}/readers`],
-        ["成员列表", `/nodes/${String(MARKET)}/members`],
+        ['详情', `/nodes/${String(MARKET)}`],
+        ['正文', `/nodes/${String(MARKET)}/content`],
+        ['导出', `/nodes/${String(MARKET)}/export?format=md`],
+        ['评论', `/nodes/${String(MARKET)}/comments`],
+        ['授权名单', `/nodes/${String(MARKET)}/grants`],
+        ['可见范围', `/nodes/${String(MARKET)}/readers`],
+        ['成员列表', `/nodes/${String(MARKET)}/members`],
       ]) {
-        const probe = await api("GET", path);
+        const probe = await api('GET', path);
         check(
           `★ 受限节点的「${label}」对无关的人回 404(不能有侧信道)`,
           probe.status === 404,
@@ -1762,63 +1807,62 @@ async function main() {
     }
 
     // 5) 把赵敏加进读者名单 → 她又能看到了
-    await login("KC001", [ADMIN_PASSWORD]);
-    const nowRestricted = await api("GET", "/nodes/" + String(MARKET) + "/readers");
-    const addReader = await api("PUT", "/nodes/" + String(MARKET) + "/readers", {
+    await login('KC001', [ADMIN_PASSWORD]);
+    const nowRestricted = await api('GET', '/nodes/' + String(MARKET) + '/readers');
+    const addReader = await api('PUT', '/nodes/' + String(MARKET) + '/readers', {
       version: nowRestricted.body?.version,
-      visibility: "restricted",
+      visibility: 'restricted',
       userIds: [kc004Id],
     });
     check(
-      "加进读者名单 → 200 且名单里有她",
-      addReader.status === 200 &&
-        (addReader.body?.readers ?? []).some((r) => r.userId === kc004Id),
+      '加进读者名单 → 200 且名单里有她',
+      addReader.status === 200 && (addReader.body?.readers ?? []).some((r) => r.userId === kc004Id),
       JSON.stringify((addReader.body?.readers ?? []).map((r) => r.userId)),
     );
 
-    await login("KC004", [SEED_PASSWORD, INITIAL_PASSWORD, ADMIN_PASSWORD]);
-    const readerSees = await api("GET", "/nodes/" + String(MARKET));
-    check("★ 名单里的人读得到 → 200", readerSees.status === 200, String(readerSees.status));
+    await login('KC004', [SEED_PASSWORD, INITIAL_PASSWORD, ADMIN_PASSWORD]);
+    const readerSees = await api('GET', '/nodes/' + String(MARKET));
+    check('★ 名单里的人读得到 → 200', readerSees.status === 200, String(readerSees.status));
 
-    const readerTree = await api("GET", "/org/tree");
+    const readerTree = await api('GET', '/org/tree');
     check(
-      "★ 树里也回来了",
-      (readerTree.body?.nodes ?? []).some((n) => n.title === "市场部"),
-      "nodes=" + String((readerTree.body?.nodes ?? []).length),
+      '★ 树里也回来了',
+      (readerTree.body?.nodes ?? []).some((n) => n.title === '市场部'),
+      'nodes=' + String((readerTree.body?.nodes ?? []).length),
     );
 
     // 6) 复原成公开 —— 必须复原,否则演示数据里市场部会一直是受限的
-    await login("KC001", [ADMIN_PASSWORD]);
-    const back = await api("GET", "/nodes/" + String(MARKET) + "/readers");
-    const restored = await api("PUT", "/nodes/" + String(MARKET) + "/readers", {
+    await login('KC001', [ADMIN_PASSWORD]);
+    const back = await api('GET', '/nodes/' + String(MARKET) + '/readers');
+    const restored = await api('PUT', '/nodes/' + String(MARKET) + '/readers', {
       version: back.body?.version,
-      visibility: "public",
+      visibility: 'public',
       userIds: [],
     });
     check(
-      "复原为公开(验收不能留下改动)",
-      restored.status === 200 && restored.body?.visibility === "public",
+      '复原为公开(验收不能留下改动)',
+      restored.status === 200 && restored.body?.visibility === 'public',
       String(restored.body?.visibility),
     );
 
-    await login("KC004", [SEED_PASSWORD, INITIAL_PASSWORD, ADMIN_PASSWORD]);
-    const openAgain = await api("GET", "/nodes/" + String(MARKET));
+    await login('KC004', [SEED_PASSWORD, INITIAL_PASSWORD, ADMIN_PASSWORD]);
+    const openAgain = await api('GET', '/nodes/' + String(MARKET));
     check(
-      "改回公开之后名单外的人也读得到(名单不再是门槛)",
+      '改回公开之后名单外的人也读得到(名单不再是门槛)',
       openAgain.status === 200,
       String(openAgain.status),
     );
 
     // 可见性变更必须留痕,顺便验 action 筛选真的能筛(服务端筛,不是客户端)
-    await login("KC001", [ADMIN_PASSWORD]);
-    const visLogs = await api("GET", "/audit-logs?limit=200&action=visibility.replace");
+    await login('KC001', [ADMIN_PASSWORD]);
+    const visLogs = await api('GET', '/audit-logs?limit=200&action=visibility.replace');
     const visItems = visLogs.body?.items ?? [];
     check(
-      "★ 可见性变更进了审计,且 action 筛选生效",
+      '★ 可见性变更进了审计,且 action 筛选生效',
       visLogs.status === 200 &&
         visItems.length > 0 &&
-        visItems.every((item) => item.action === "visibility.replace"),
-      "status=" + String(visLogs.status) + " items=" + String(visItems.length),
+        visItems.every((item) => item.action === 'visibility.replace'),
+      'status=' + String(visLogs.status) + ' items=' + String(visItems.length),
     );
 
     // 导出必须与列表**同一个可见范围** —— 导出若绕开范围就是一次越权读取,
@@ -1827,36 +1871,39 @@ async function main() {
     // `body` 是 JSON.parse 之后的结果,对 text/csv 永远是 null ——
     // 于是"带 BOM 吗"这条断言**必然为假**。这是脚本自己的 bug,
     // 而它看起来像是导出功能坏了(真机部署时就是这么误报的)。
-    const csvSuper = await api("GET", "/audit-logs/export");
-    const csvScoped = await api("GET", "/audit-logs/export?action=visibility.replace");
+    const csvSuper = await api('GET', '/audit-logs/export');
+    const csvScoped = await api('GET', '/audit-logs/export?action=visibility.replace');
     // (BOM 不再作为常量比较 —— 见下面:直接查字节 0xEF 0xBB 0xBF,因为 text 解码可能吃掉它)
     check(
-      "★ 审计导出为 CSV,且带 BOM(Excel 打开不乱码)",
+      '★ 审计导出为 CSV,且带 BOM(Excel 打开不乱码)',
       csvSuper.status === 200 &&
         // BOM 必须查**字节**:text 经过解码可能已经被规范吃掉
         csvSuper.bytes[0] === 0xef &&
         csvSuper.bytes[1] === 0xbb &&
         csvSuper.bytes[2] === 0xbf &&
-        csvSuper.text.includes("时间,操作者"),
-      "status=" + String(csvSuper.status) +
-        " bom=" + String(csvSuper.bytes[0] === 0xef && csvSuper.bytes[1] === 0xbb && csvSuper.bytes[2] === 0xbf),
+        csvSuper.text.includes('时间,操作者'),
+      'status=' +
+        String(csvSuper.status) +
+        ' bom=' +
+        String(
+          csvSuper.bytes[0] === 0xef && csvSuper.bytes[1] === 0xbb && csvSuper.bytes[2] === 0xbf,
+        ),
     );
     check(
-      "★ 导出带上筛选条件时只剩那一类动作",
+      '★ 导出带上筛选条件时只剩那一类动作',
       csvScoped.status === 200 &&
-        csvScoped.text.includes("修改可见范围") &&
-        !csvScoped.text.includes("登录"),
-      "status=" + String(csvScoped.status),
+        csvScoped.text.includes('修改可见范围') &&
+        !csvScoped.text.includes('登录'),
+      'status=' + String(csvScoped.status),
     );
 
     // ★ 换一个范围小得多的人:他导出的文件里**不该出现**超管那条 visibility.replace
-    await login("KC004", [SEED_PASSWORD, INITIAL_PASSWORD, ADMIN_PASSWORD]);
-    const csvZhao = await api("GET", "/audit-logs/export");
+    await login('KC004', [SEED_PASSWORD, INITIAL_PASSWORD, ADMIN_PASSWORD]);
+    const csvZhao = await api('GET', '/audit-logs/export');
     check(
-      "★★ 导出遵守可见范围(赵敏导不出市场部那条记录)",
-      csvZhao.status === 200 &&
-        !csvZhao.text.includes("修改可见范围"),
-      "status=" + String(csvZhao.status),
+      '★★ 导出遵守可见范围(赵敏导不出市场部那条记录)',
+      csvZhao.status === 200 && !csvZhao.text.includes('修改可见范围'),
+      'status=' + String(csvZhao.status),
     );
   }
   // ---- 收尾:把脚本动过的**全部**东西放回去 ----

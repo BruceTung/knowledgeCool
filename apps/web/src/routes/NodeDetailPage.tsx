@@ -16,7 +16,13 @@ import { useGrantDialog } from '../features/grants/dialog-store';
 import { BulkMoveDialog } from '../features/bulk/BulkMoveDialog';
 import { useVisibilityDialog } from '../features/visibility/dialog-store';
 import { useMembersDialog } from '../features/members/dialog-store';
-import { useExportMarkdown, useNodeContent, useNodeDetail, useOrgTree, useUpdateNode } from '../features/org/queries';
+import {
+  useExportMarkdown,
+  useNodeContent,
+  useNodeDetail,
+  useOrgTree,
+  useUpdateNode,
+} from '../features/org/queries';
 import { copyText } from '../lib/clipboard';
 import { usePersonal } from '../lib/personal-store';
 import { toast } from '../lib/toast-store';
@@ -95,9 +101,7 @@ function ChildPages({ nodeId }: { nodeId: string }) {
               >
                 {child.kind === 'space' ? '组' : '页'}
               </span>
-              <span className="min-w-0 flex-1 truncate text-sm text-slate-800">
-                {child.title}
-              </span>
+              <span className="min-w-0 flex-1 truncate text-sm text-slate-800">{child.title}</span>
               {child.commentCount > 0 && (
                 <span
                   className={`flex-none rounded-full bg-slate-100 px-1.5 py-0.5 font-medium tabular-nums text-slate-500 ${T_META}`}
@@ -360,58 +364,58 @@ function NodeDetailView({ nodeId }: { nodeId: string }) {
                   权限
                 </Button>
               )}
-                {/*
+              {/*
                   「可见范围」与「权限」刻意是两个按钮、两个弹窗。
                   它们管的是两件事(能改 / 能读),而且门槛也不同:
                   权限看 canManage,可见范围看"创建者或所有者"。
                   合并成一个入口会让人以为"授权 = 也能看",而那不成立。
                 */}
-                {node.visibility === 'restricted' && (
-                  <span
-                    className="rounded bg-amber-50 px-1.5 py-0.5 text-xs text-amber-700 ring-1 ring-amber-200"
-                    title="这个节点(或它的某个上级)是受限的"
-                  >
-                    🔒 受限
-                  </span>
-                )}
-                <Button
-                  variant="secondary"
-                  onClick={() => {
-                    openVisibility(node.id, node.title);
-                  }}
+              {node.visibility === 'restricted' && (
+                <span
+                  className="rounded bg-amber-50 px-1.5 py-0.5 text-xs text-amber-700 ring-1 ring-amber-200"
+                  title="这个节点(或它的某个上级)是受限的"
                 >
-                  可见范围
-                </Button>
-                {/*
+                  🔒 受限
+                </span>
+              )}
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  openVisibility(node.id, node.title);
+                }}
+              >
+                可见范围
+              </Button>
+              {/*
                   批量移动(v2.14)。只在**组 / 部门**上出现 —— 一篇文档下面没有"要整理的内容"。
                   权限这次交给服务端逐个判:能改这个组、能改目标、且不成环,才真的移动。
                 */}
-                {node.kind === 'space' && node.canEdit && (
-                  <Button
-                    variant="secondary"
-                    title="把这个节点下的内容批量移到别处"
-                    onClick={() => {
-                      setBulkMoveOpen(true);
-                    }}
-                  >
-                    批量移动
-                  </Button>
-                )}
-                {/*
+              {node.kind === 'space' && node.canEdit && (
+                <Button
+                  variant="secondary"
+                  title="把这个节点下的内容批量移到别处"
+                  onClick={() => {
+                    setBulkMoveOpen(true);
+                  }}
+                >
+                  批量移动
+                </Button>
+              )}
+              {/*
                   收藏(v2.14)。它是**个人视图**,存在浏览器里(见 personal-store 的说明),
                   所以不需要任何接口,也不需要权限判定 —— 收藏一篇自己读不到的东西
                   这个动作本身不成立。
                 */}
-                <Button
-                  variant="secondary"
-                  title={isFavorite ? '取消收藏' : '收藏这篇,首页会列出来'}
-                  aria-pressed={isFavorite}
-                  onClick={() => {
-                    toggleFavorite(node.id);
-                  }}
-                >
-                  {isFavorite ? '★ 已收藏' : '☆ 收藏'}
-                </Button>
+              <Button
+                variant="secondary"
+                title={isFavorite ? '取消收藏' : '收藏这篇,首页会列出来'}
+                aria-pressed={isFavorite}
+                onClick={() => {
+                  toggleFavorite(node.id);
+                }}
+              >
+                {isFavorite ? '★ 已收藏' : '☆ 收藏'}
+              </Button>
               {/*
                 「复制链接」是知识库最高频的动作之一(把文档发给同事)。
                 在此之前只有「导出 MD」—— 那要求对方自己再导入一次,
@@ -548,9 +552,7 @@ function NodeDetailView({ nodeId }: { nodeId: string }) {
           <div className="min-h-0 flex-1 overflow-auto px-2 py-3">
             {outline.length === 0 ? (
               <div className="px-4 py-8 text-center">
-                <p className="text-sm leading-relaxed text-slate-500">
-                  这一页还没有标题。
-                </p>
+                <p className="text-sm leading-relaxed text-slate-500">这一页还没有标题。</p>
                 <p className={`mt-2 leading-relaxed text-slate-500 ${T_META}`}>
                   用工具栏的 H1 / H2 / H3 建出结构,目录会自动出现在这里。
                 </p>

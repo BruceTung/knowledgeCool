@@ -131,8 +131,7 @@ export function useDeleteNode() {
   const invalidate = useInvalidateTree();
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (nodeId: string) =>
-      apiSend<{ removedCount: number }>('DELETE', `/nodes/${nodeId}`),
+    mutationFn: (nodeId: string) => apiSend<{ removedCount: number }>('DELETE', `/nodes/${nodeId}`),
     onSuccess: (_result, nodeId) => {
       invalidate(nodeId);
       /*

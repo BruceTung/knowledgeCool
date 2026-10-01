@@ -15,7 +15,7 @@
  *     —— 填了不生效的开关比没有开关更坏
  *   · `/health` 与 `/health/ready` 两个接口根本没进接口清单
  *
- * ## 检查九件事
+ * ## 检查十二件事
  *
  * 1. **接口**:`DESIGN.md` §6.2 的表格 ↔ 控制器里实际注册的路由,双向比对
  *    (文档少的、多的都报 —— 单向比对会漏掉「代码里有、文档没写」)
@@ -36,6 +36,21 @@
  *    (保密能力的说明散落在六处),而 **§5.6 那一节根本不存在** ——
  *    文档只写到 §5.3。源码注释里同样引用了它十几处。
  *    两头都在"看起来正常"的范围内,而**没有任何一处会去核对那个号存不存在**。
+ * 10. **文档数量**:仓库里只允许有一篇 `*.md`(§0.3 的约定)。
+ *     ⚠️ 这条约定原来**完全没有机制** —— 脚本里 `read('DESIGN.md')` 是硬编码的,
+ *     把 `DEPLOY.md` 加回来门禁一样绿。而"同一件事散在两三篇里各自漂移"
+ *     正是这份文档当初烂掉的起点,所以它必须是一条会被执行的规则。
+ * 11. **界面字号刻度**:前端源码里不许出现任意值字号(`text-[13px]` 之类)。
+ *     ⚠️ 这条规则原来由 `typography.test.ts` 执行,而"删除全部测试"之后
+ *     规则还在、执行者没了 —— `MIN_FONT_PX` / `ALLOWED_ARBITRARY_PX`
+ *     因此变成没人读的死常量。**文档说有门禁而门禁不存在,比没有规则更坏。**
+ * 12. **§9.1 的环境变量表必须覆盖代码真读的每个键**。
+ *     ⚠️ 第 8 项只比"生成物 ↔ 文档",第 2 项只比"代码扫描 ↔ `.env.example`",
+ *     **没有任何一项把两者放在一起看**;而生成器每行只取第一个 `process.env.X`。
+ *     于是"与别的变量写在同一行"的新变量会静默不进文档,而门禁全绿。
+ *     ⚠️ 覆盖的判据是"在某一行的表达式里**真的引用了** `process.env.X`",
+ *     不是"这个词出现过" —— 生成器会把行尾**注释**一起放进单元格,
+ *     用裸词匹配的话一句注释就能让缺失的行蒙混过关(对抗性复核实测)。
  *
  * 用法:`pnpm audit:docs`(退出码非 0 表示有漂移);`node scripts/gen-doc.mjs` 重新生成表格。
  */
@@ -55,22 +70,85 @@ const fail = (msg) => problems.push(msg);
 // ============================================================
 
 /**
- * 文档里写了、但**故意不实现**的路由(§6.2 的「阶段二占位」表)。
- * 键必须是 `normalizeRoute` 之后的形式 —— 第一版用原始字符串比,
- * 于是 `WS /collab?nodeId=&token=` 没匹配上 `/collab`,检查器自己报了假漂移。
+ * 文档里写了、但**故意不实现**的路由。
+ *
+ * ⚠️ 这里现在是**空的**,而且是刻意的:原来只有一条 `WS /collab`,
+ * 理由写的是"§6.2 的阶段二占位表" —— 而那张表**根本不存在**,
+ * §6.2 里一条 `WS` 行都没有。一条永远不可能命中的豁免项是**不可证伪的**:
+ * 它不会报错,也不会起任何作用,只会让下一个人以为"这里有豁免机制,可以往里加"。
+ *
+ * 所以真需要占位路由时,**先把它写进 §6.2,再把理由写在这里** ——
+ * 在那之前,文档里有、代码里没有的路由一律报漂移。
  */
-const PLANNED_ONLY = new Set([normalizeRoute('WS', '/collab')]);
+const PLANNED_ONLY = new Set();
 
 /** 把 `:id` / `:nodeId` / `:userId` 归一成同一个形状(参数名不同不算漂移)。 */
 function normalizeRoute(method, routePath) {
-  return `${method} ${routePath.split('?')[0].replace(/:[A-Za-z]+/g, ':p').replace(/\/$/, '')}`;
+  return `${method} ${routePath
+    .split('?')[0]
+    .replace(/:[A-Za-z]+/g, ':p')
+    .replace(/\/$/, '')}`;
 }
 
 const designText = read('DESIGN.md');
-const apiSection = designText.slice(
-  designText.indexOf('### 6.2 接口清单'),
-  designText.indexOf('## 7. 前端架构'),
-);
+
+/**
+ * 找一个**标题行**的偏移量。找不到返回 -1。
+ *
+ * ⚠️ **绝对不能用 `indexOf`** —— 它匹配的是"任意位置出现的子串"。
+ * 而这份文档的**变更记录里原样引用了这些标题字符串**(v4.5 那条为了讲清这个
+ * 缺陷,把 `## 7. 前端架构` 与 `## 7. 前端` 两种写法都写进了正文)。
+ * 实测:这两个字符串在文档里各出现两次 —— 一次是真标题,一次在变更记录的正文里。
+ *
+ * 后果极其隐蔽:一旦有人改了真标题,`indexOf` 会在**变更记录里**命中,守卫以为
+ * "找到了",切片却悄悄放宽到全文约 64%(一路含到附录),而门禁照样打印
+ * 「未发现漂移」—— **这恰恰就是它要修的那个缺陷本身**(一次静默的范围退化)。
+ * 一个用"字符串有没有出现"做守卫的检查,会被任何一句提到它的说明文字骗过去。
+ *
+ * 所以这里必须锚定到"行首的 `#` 开头、整行恰好就是这个标题"。
+ */
+function headingOffset(heading) {
+  const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = new RegExp('^' + escaped + '[ \\t]*$', 'm').exec(designText);
+  return match === null ? -1 : match.index;
+}
+
+/**
+ * 取文档里两个**标题行**之间的一段。
+ *
+ * 旧写法把两个 `indexOf` 的结果直接喂给 `slice`,而结束标题当时写的是
+ * `## 7. 前端架构`(真实标题是 `## 7. 前端`)—— `indexOf` 返回 **-1**,
+ * 而 `String.slice(start, -1)` **不报错**,于是"接口区"静默变成从 §6.2
+ * 一直到文档末尾的一大段。检查照常通过,只是 §7~§12 里任何长得像接口表的
+ * 表格都会被当成真实路由收进来,而真正的漏写反而可能被这堆噪声掩盖。
+ */
+function sectionRange(startHeading, endHeading) {
+  const start = headingOffset(startHeading);
+  if (start < 0) throw new Error(`DESIGN.md 里找不到标题行「${startHeading}」`);
+  const end = headingOffset(endHeading);
+  if (end < 0) {
+    throw new Error(`DESIGN.md 里找不到标题行「${endHeading}」(「${startHeading}」的范围终点)`);
+  }
+  if (end <= start) {
+    throw new Error(`DESIGN.md 的「${endHeading}」不在「${startHeading}」之后 —— 范围不成立`);
+  }
+  return designText.slice(start, end);
+}
+
+const apiSection = sectionRange('### 6.2 接口清单', '## 7. 前端');
+
+/*
+  ⚠️ 结构性不变式,作为纵深防御:接口区是 §6.x 的**子节**,
+  所以它里面**不该出现任何一级(`## `)标题** —— 范围终点本该正好停在
+  下一个 `## ` 之前。一旦出现,就说明终点被锚到了更靠后的地方
+  (实测那种退化的切片里会含 `## 8. 关键流程` / `## 9. 运维` / 附录)。
+
+  用这条不变式而不是"占全文不超过 N%":比例是拍出来的阈值,
+  会随文档与接口表正常增长而误报;而"子节里不该有一级标题"是结构事实。
+*/
+if (/^## /m.test(apiSection)) {
+  throw new Error('DESIGN.md 的接口区里出现了一级标题 —— 范围终点锚错了,切片已过宽');
+}
 
 const docRoutes = new Map();
 for (const line of apiSection.split('\n')) {
@@ -101,7 +179,9 @@ for (const [key, label] of codeRoutes) {
   if (docRoutes.has(key)) continue;
   fail(`接口漂移:代码里有 \`${label}\`,但 §6.2 没写`);
 }
-notes.push(`接口:文档 ${String(docRoutes.size)} 条 / 代码 ${String(codeRoutes.size)} 条,已双向比对`);
+notes.push(
+  `接口:文档 ${String(docRoutes.size)} 条 / 代码 ${String(codeRoutes.size)} 条,已双向比对`,
+);
 
 // ============================================================
 // 2) 环境变量
@@ -134,7 +214,9 @@ for (const line of read('.env.example').split('\n')) {
   if (m !== null) envExample.set(m[1], line.trim());
 }
 
-const composeVars = new Set([...read('docker-compose.yml').matchAll(/\$\{([A-Z][A-Z0-9_]*)/g)].map((m) => m[1]));
+const composeVars = new Set(
+  [...read('docker-compose.yml').matchAll(/\$\{([A-Z][A-Z0-9_]*)/g)].map((m) => m[1]),
+);
 
 /** 这些由运行环境或 Node 自己提供,不该写进 .env.example。 */
 const ENV_EXTERNAL = new Set(['NODE_ENV', 'TZ', 'HOST', 'PORT']);
@@ -147,7 +229,9 @@ for (const name of envExample.keys()) {
   if (codeVars.has(name) || composeVars.has(name) || ENV_READ_ELSEWHERE.has(name)) continue;
   fail(`环境变量漂移:\`${name}\` 在 .env.example 里声明,但**没有任何一处读它**(填了不生效)`);
 }
-notes.push(`环境变量:代码读 ${String(codeVars.size)} 个 / .env.example 声明 ${String(envExample.size)} 个,已双向比对`);
+notes.push(
+  `环境变量:代码读 ${String(codeVars.size)} 个 / .env.example 声明 ${String(envExample.size)} 个,已双向比对`,
+);
 
 // ============================================================
 // 3) 文件路径
@@ -163,10 +247,6 @@ notes.push(`环境变量:代码读 ${String(codeVars.size)} 个 / .env.example �
  * 没有理由的名单迟早会变成"把报错塞进去就完事"的地方,那时这个检查就死了。
  */
 const HISTORICAL = new Map([
-  ['apps/api/scripts/verify-m4m5.mjs', '§9.1 是历史记录,文中已明确写了"v2.0 改造时已删除"'],
-  ['packages/shared/src/roles.ts', '只出现在 v1.5 的变更记录里,那是对当时状态的存档'],
-  ['features/pages', 'v2.0 删掉的前端模块目录,历史上真实存在过'],
-  ['docker-compose.override.yml', '部署侧文件,不进仓库'],
   ['backups/', '运行期目录,不进仓库'],
   [
     'apps/api/src/generated',
@@ -238,7 +318,9 @@ notes.push(`文件路径:检查 ${String(pathRefs.size)} 个引用`);
 // ============================================================
 
 const headerVersion = /\|\s*文档版本\s*\|\s*(v[\d.]+)\s*\|/.exec(designText)?.[1];
-const changelogVersions = [...designText.matchAll(/^\|\s*\d{4}-\d{2}-\d{2}\s*\|\s*(v[\d.]+)\s*\|/gm)].map((m) => m[1]);
+const changelogVersions = [
+  ...designText.matchAll(/^\|\s*\d{4}-\d{2}-\d{2}\s*\|\s*(v[\d.]+)\s*\|/gm),
+].map((m) => m[1]);
 const latest = changelogVersions.at(-1);
 
 if (headerVersion === undefined) fail('版本漂移:文档头找不到「文档版本」');
@@ -313,9 +395,7 @@ function extractPathArgument(raw) {
 /** 把前端写出来的路径归一成与后端路由同一种形状。 */
 function normalizeClientPath(raw) {
   const withoutQuery = raw.split('?')[0];
-  return (
-    withoutQuery.replace(/\/+/g, '/').replace(/\/$/, '') || '/'
-  );
+  return withoutQuery.replace(/\/+/g, '/').replace(/\/$/, '') || '/';
 }
 
 {
@@ -358,14 +438,9 @@ function normalizeClientPath(raw) {
   }
 
   for (const item of missing) {
-    fail(
-      '前端调了不存在的路由:' + item +
-        '(后端没有这条 —— 点了会是 404,而静态检查不会报)',
-    );
+    fail('前端调了不存在的路由:' + item + '(后端没有这条 —— 点了会是 404,而静态检查不会报)');
   }
-  notes.push(
-    '前端调用:检查 ' + String(callCount) + ' 处,未匹配 ' + String(missing.length) + ' 处',
-  );
+  notes.push('前端调用:检查 ' + String(callCount) + ' 处,未匹配 ' + String(missing.length) + ' 处');
 }
 
 // ============================================================
@@ -436,9 +511,7 @@ function normalizeClientPath(raw) {
         (generated.stderr === '' ? '' : '\n' + generated.stderr.trim()),
     );
   } else {
-    notes.push(
-      `生成块:接口/数据模型/环境变量/前端路由四张表已与代码比对`,
-    );
+    notes.push(`生成块:接口/数据模型/环境变量/前端路由四张表已与代码比对`);
   }
 }
 
@@ -585,6 +658,251 @@ const headingNumbers = new Set(
     `章节引用:文档 ${String(headingNumbers.size)} 个标题 / 扫描 ${String(scanned)} 个源文件,` +
       `悬空引用 ${String(dangling.length)} 处`,
   );
+}
+
+// ============================================================
+// 10) 仓库里只允许有一篇 Markdown 文档(v4.5 新增)
+// ============================================================
+
+/*
+  §0.3 的约定是「全仓库只留一篇文档」。但这条约定**原来没有任何机制**:
+  这个脚本里是 `read('DESIGN.md')` 硬编码,没有任何地方枚举过 `*.md`。
+  也就是说,把 `DEPLOY.md` / `README.md` 加回来,门禁**照样全绿** ——
+  而"同一件事散在两三篇里、各自漂移"正是这份文档当初烂掉的起点。
+
+  排除目录与 `.prettierignore` 保持一致:那些是依赖、构建产物与
+  Prisma 生成/迁移目录,不是"人写的文档"的所在位置。
+*/
+{
+  const SKIP_DIRS = new Set([
+    'node_modules',
+    '.git',
+    'dist',
+    'coverage',
+    'prototype',
+    'generated',
+    'migrations',
+  ]);
+  const found = [];
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        if (SKIP_DIRS.has(entry.name)) continue;
+        walk(path.join(dir, entry.name));
+      } else if (/\.md$/i.test(entry.name)) {
+        found.push(path.relative(ROOT, path.join(dir, entry.name)).replaceAll(path.sep, '/'));
+      }
+    }
+  };
+  walk(ROOT);
+
+  /**
+   * §0.3 的**显式例外**。
+   *
+   * ⚠️ 每一条都必须写清理由 —— 没有理由的名单迟早会变成"把报错塞进去就完事"
+   * 的地方,那时这条检查就死了(与 HISTORICAL / ENV_READ_ELSEWHERE 同一条纪律)。
+   *
+   * 注意:"默认不允许"这条规则没有变。新增第二篇文档依然会让门禁变红,
+   * 除非同时在这里登记理由 —— 那正是想要的效果。
+   */
+  const EXTRA_DOCS = new Map([
+    [
+      'REMAINING.md',
+      '临时的工作交接清单(还剩什么没做),不是设计文档,做完即删;' +
+        '破例放进仓库是因为开发机是网吧机器 —— 桌面与临时目录会被还原,放在仓库外第二天就没了。',
+    ],
+  ]);
+
+  for (const file of found) {
+    if (file === 'DESIGN.md' || EXTRA_DOCS.has(file)) continue;
+    fail(
+      `文档漂移:仓库里多了一篇 Markdown「${file}」—— §0.3 约定全仓库只留 DESIGN.md 一篇;` +
+        ' 真要保留它,就得先在 scripts/audit-docs.mjs 的 EXTRA_DOCS 里显式登记理由,' +
+        ' 并同步 DESIGN.md §0.3',
+    );
+  }
+  const extras = found.filter((file) => file !== 'DESIGN.md');
+  notes.push(
+    `文档数量:仓库 Markdown 共 ${String(found.length)} 篇` +
+      `(约定只有 DESIGN.md 一篇;显式例外 ${String(extras.length)} 篇` +
+      `${extras.length === 0 ? '' : ':' + extras.join('、')})`,
+  );
+}
+
+// ============================================================
+// 11) 界面字号只允许用刻度档位(v4.5 新增 —— 补回被删掉的那条测试)
+// ============================================================
+
+/*
+  `apps/web/src/lib/typography.ts` 文件末尾的"唯一规则"是:
+  **组件代码里不允许写任意值字号**(`text-[13px]` 之类)。
+
+  ⚠️ **执行范围要说清楚**(这是被一次对抗性复核逼出来的):下面只扫
+  `.ts/.tsx/.mjs/.js`(`walkSource` 的过滤条件),**不扫 CSS**。
+  所以准确的表述是「组件代码里的字号必须走四档刻度」,而不是
+  「全仓库任何地方都不许出现任意值字号」—— `styles.css` 里本来就有
+  若干相对字号(`1.65rem` / `0.9em` / 打印用的 `11pt` …),它们负责的是
+  正文排版的相对刻度,与"组件里挑哪一档"是两件事。
+  规则原文已按这个口径改写,免得读的人以为 CSS 也被管着。
+
+  ⚠️ 这条规则原来由**测试**执行。那次"删除全部测试"把测试删掉之后,
+  规则还留在文档与注释里,而**已经没有任何东西在执行它** ——
+  `MIN_FONT_PX` / `ALLOWED_ARBITRARY_PX` 两个导出因此变成没人读的死常量。
+  这比"没有规则"更坏:文档说有门禁,而门禁其实不存在。
+
+  这里把它搬回**每次都会跑**的地方(与上面"弃用结构"同一条思路),
+  而且阈值仍然从 `typography.ts` 里读 —— 那两个常量就此不再是死代码。
+*/
+{
+  const typographySrc = read('apps/web/src/lib/typography.ts');
+  const minFontPx = Number(/export const MIN_FONT_PX = (\d+)/.exec(typographySrc)?.[1]);
+  const allowedRaw = /export const ALLOWED_ARBITRARY_PX = \[([^\]]*)\]/.exec(typographySrc)?.[1];
+  const allowedArbitraryPx = [...(allowedRaw ?? '').matchAll(/\d+(?:\.\d+)?/g)].map((m) =>
+    Number(m[0]),
+  );
+
+  if (!Number.isFinite(minFontPx) || allowedRaw === undefined) {
+    fail('字号刻度:读不到 typography.ts 的 MIN_FONT_PX / ALLOWED_ARBITRARY_PX —— 常量被改名了?');
+  } else {
+    /** 只有"看起来是长度"的值才算字号:`text-[#fff]` 是**文字颜色**,不能误伤。 */
+    const ARBITRARY = /text-\[([^\]]+)\]/g;
+    /**
+     * ⚠️ 单位必须**忽略大小写**:CSS 的单位是不区分大小写的,
+     * 而这条正则是大小写敏感的 —— 写 `text-[13PX]` 就能从检查底下走过去
+     * (对抗性复核实测:门禁报"发现任意值字号 0 处")。
+     */
+    const LENGTH = /^(?:length:|font-size:)?\s*(\d+(?:\.\d+)?)(px|rem|em)$/i;
+
+    let scanned = 0;
+    let hits = 0;
+    for (const file of walkSource(path.join(ROOT, 'apps/web/src'), [])) {
+      scanned += 1;
+      const rel = path.relative(ROOT, file).replaceAll(path.sep, '/');
+      fs.readFileSync(file, 'utf8')
+        .split(/\r?\n/)
+        .forEach((line, index) => {
+          if (line.includes('audit-docs:allow')) return;
+          for (const m of line.matchAll(ARBITRARY)) {
+            const value = m[1].trim();
+            const length = LENGTH.exec(value);
+            if (length === null) continue; // 颜色等非长度值,与字号无关
+            hits += 1;
+            const where = `${rel}:${String(index + 1)}`;
+            // 单位要比小写再判:正则有 `i` 标志,`13PX` 必须算 px 而不是"非像素单位"
+            if (length[2].toLowerCase() !== 'px') {
+              fail(
+                `字号刻度:${where} 用了 \`text-[${value}]\` —— 只能用像素刻度档位` +
+                  '(T_BODY / T_NAV / T_LABEL / T_META),不要引入 rem/em 任意值',
+              );
+            } else if (Number(length[1]) < minFontPx) {
+              fail(
+                `字号刻度:${where} 的 \`text-[${value}]\` 小于屏上最小字号 ${String(minFontPx)}px`,
+              );
+            } else if (!allowedArbitraryPx.includes(Number(length[1]))) {
+              fail(
+                `字号刻度:${where} 用了任意值字号 \`text-[${value}]\` —— ` +
+                  '四档刻度已经覆盖所有场景,想加新档先问它在 ADS 刻度里对应哪一个',
+              );
+            }
+          }
+        });
+    }
+    notes.push(
+      `字号刻度:扫描 ${String(scanned)} 个前端源文件,发现任意值字号 ${String(hits)} 处` +
+        `(最小 ${String(minFontPx)}px,白名单 ${String(allowedArbitraryPx.length)} 项)`,
+    );
+  }
+}
+
+// ============================================================
+// 12) §9.1 的环境变量表必须覆盖代码真读的每个键(v4.7 新增)
+// ============================================================
+
+/*
+  ⚠️ 这一条是**对抗性复核挖出来的**:第 8 项只比对"生成器的输出 ↔ 文档里的表",
+  而生成器 `extractEnv` **每行只取第一个 `process.env.X`**(见 `gen-doc.mjs`)。
+  于是 `toInt(process.env.API_PORT ?? process.env.PORT, 3000)` 这一行里,
+  `PORT` **永远不会成为表里的一行** —— 而两份"计数"各自自洽:
+    · 第 8 项比的是 生成物(14) ↔ 文档(14) ✓
+    · 第 2 项比的是 代码扫描 ↔ `.env.example`,而 `PORT` 被 `ENV_EXTERNAL` 豁免 ✓
+  **没有任何一项把这两个数放在一起看。** 今天无害(`PORT` 以别名形式出现在
+  `API_PORT` 那一行的默认值表达式里,读者看得见),但下一个"与别的变量写在同一行"
+  的新变量会**静默地不进文档**,而门禁全绿。
+
+  所以这里补上交叉核对:代码读的每个键,要么**自己有一行**,
+  要么**在某一行的默认值表达式里被真正引用**(`process.env.X` ——
+  合法且常见,例如 `PORT` 就出现在 `API_PORT` 那一行)。
+  两条都不满足才算漂移 —— 判据是"读者在 §9.1 里究竟查不查得到它"。
+
+  ⚠️ 判据必须是"真的引用了 `process.env.X`",不能只是"这个词出现过":
+  生成器把源码行的**整段尾巴(含行尾注释)**放进单元格,用 `\bNAME\b` 的话
+  一句注释就能让缺失的行蒙混过关(对抗性复核实测)。
+*/
+{
+  const envBegin = '<!-- BEGIN GENERATED:env -->';
+  const envEnd = '<!-- END GENERATED:env -->';
+  const envStart = designText.indexOf(envBegin);
+  const envStop = designText.indexOf(envEnd, envStart + envBegin.length);
+  if (envStart < 0 || envStop < 0) {
+    fail('环境变量表:DESIGN.md 里找不到 `GENERATED:env` 生成块');
+  } else {
+    const block = designText.slice(envStart, envStop);
+    const tableKeys = new Set();
+    let exprText = '';
+    for (const line of block.split('\n')) {
+      /*
+        ⚠️ 第二格用**宽松**匹配(`.*`),不能要求"里面没有反引号"。
+
+        生成器把一个 `tsconfig`/模板串之类的默认值原样放进单元格时,格子里
+        会出现内层反引号(`| `UPLOAD_DIR` | `process.env.UPLOAD_DIR ?? `/data/uploads`` |`)——
+        那是**格式上有点毛边的 Markdown,但行确实在表里**。原来那条严格正则
+        (`([^`]*)`)匹配不到它,于是门禁报"读者查不到它":**行明明在,却判成缺失**。
+        对抗性复核实测到了这一条。
+      */
+      const m = /^\|\s*`([A-Z][A-Z0-9_]*)`\s*\|(.*)\|\s*$/.exec(line);
+      if (m === null) continue;
+      tableKeys.add(m[1]);
+      exprText += ' ' + m[2];
+    }
+
+    const uncovered = [];
+    for (const name of codeVars) {
+      if (ENV_EXTERNAL.has(name) || ENV_READ_ELSEWHERE.has(name)) continue;
+      if (tableKeys.has(name)) continue;
+      /*
+        ⚠️ 必须是**真的引用了这个变量**(`process.env.NAME`),不能只是"这个词
+        在某个格子里出现过"。
+
+        原来的判据是 `\bNAME\b`,而生成器把源码里那一行的**整段尾巴**都放进
+        单元格 —— **包括行尾注释**。于是只要在任意一行的注释里提一句
+        "与 REDIS_URL 一样",那个变量的行就算"被覆盖"了:
+        实测把它自己的行从文档里删掉,门禁仍然 exit 0 并打印"未覆盖的代码键 0 个"。
+        一个能被注释满足的覆盖判据,等于没有判据。
+      */
+      const referenced = new RegExp(
+        'process\\.env\\.' + name + '\\b' + '|' + 'process\\.env\\[[\'"]' + name + '[\'"]\\]',
+      );
+      if (referenced.test(exprText)) continue;
+      uncovered.push(name);
+    }
+    for (const name of uncovered) {
+      fail(
+        '环境变量表:代码读 `' +
+          name +
+          '`,但 §9.1 里既没有它自己的行、' +
+          '也没有在任一行的默认值表达式里被真正引用(`process.env.' +
+          name +
+          '`)—— 读者查不到它',
+      );
+    }
+    notes.push(
+      '环境变量表:表内 ' +
+        String(tableKeys.size) +
+        ' 行,未覆盖的代码键 ' +
+        String(uncovered.length) +
+        ' 个',
+    );
+  }
 }
 
 // ============================================================

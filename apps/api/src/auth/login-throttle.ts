@@ -1,5 +1,5 @@
 /**
- * 登录限流与账号锁定 —— §6.1.2 的加固。
+ * 登录限流与账号锁定 —— §6.1.3 的加固。
  *
  * ## 为什么必须有它
  *
@@ -160,7 +160,12 @@ export class LoginThrottleService {
     const ipLocked =
       ip === null
         ? false
-        : await this.bump(ipFailureKey(ip), ipLockKey(ip), this.ipMaxFailures, this.ipWindowSeconds);
+        : await this.bump(
+            ipFailureKey(ip),
+            ipLockKey(ip),
+            this.ipMaxFailures,
+            this.ipWindowSeconds,
+          );
 
     if (!accountLocked && !ipLocked) return UNLOCKED;
     return { locked: true, retryAfterSeconds: this.lockSeconds };

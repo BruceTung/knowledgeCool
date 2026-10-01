@@ -1,5 +1,5 @@
 /**
- * 组织架构导入 —— IO 层。对应 DESIGN.md §8.5。
+ * 组织架构导入 —— IO 层。对应 DESIGN.md §8.4。
  *
  * 这里只做三件事:**生成模板、读 xlsx、执行计划**。
  * 解析、校验、差异计算全在 `import.core.ts`(纯函数,可单测)——
@@ -69,7 +69,7 @@ export class OrgImportService {
    *
    * **模板里带当前全部数据** —— 这一点很要紧:管理员拿到的是"几百人已经在里面"
    * 的表,他的动作是"往上加行",而不是"从空白开始填"。
-   * 后者必然有人只填新增的几行就上传(见 §8.5 对"覆盖 vs 增量"的讨论)。
+   * 后者必然有人只填新增的几行就上传(见 §8.4 对"覆盖 vs 增量"的讨论)。
    *
    * 一行 = 一个人在一个节点上的归属;同一个人多行就是多归属。
    */
@@ -103,7 +103,9 @@ export class OrgImportService {
     };
     const orgNodes = nodes
       .filter((node) => node.depth <= 1)
-      .sort((a, b) => (a.depth === b.depth ? orderOf(a).localeCompare(orderOf(b)) : a.depth - b.depth));
+      .sort((a, b) =>
+        a.depth === b.depth ? orderOf(a).localeCompare(orderOf(b)) : a.depth - b.depth,
+      );
 
     const titles = new Map(nodes.map((node) => [node.id, node.title]));
     const userById = new Map(users.map((user) => [user.id, user]));
@@ -238,7 +240,19 @@ export class OrgImportService {
 
     const contentHash = createHash('sha256').update(file).digest('hex');
 
-    if (!options.dryRun && options.expectedHash !== undefined && options.expectedHash !== contentHash) {
+    // ⚠️ 两道都要,**先要求必须带**,再比对。
+    //
+    // 原来只比对"带了但不一致"的情况:于是 `?dryRun=false` **不带** contentHash 时,
+    // 整段校验被跳过 —— 预览与确认之间上传的文件被换掉,也不会有任何人发现。
+    // 而 JSDoc 上面写着"确认写入时必带"、文档也这么写:**代码没有兑现自己声明的前提**,
+    // 而"声明了却没检查"比没声明更危险(读的人会以为这道闸在)。
+    // 仓库里三处写入调用点都已经带上它(`seed-dev.mjs` / `verify-org.mjs` / 前端导入向导)。
+    if (!options.dryRun && options.expectedHash === undefined) {
+      throw AppError.validation(
+        '确认写入必须带上预览返回的 contentHash —— 它是「我确认的就是刚才预览的那一份」的凭据',
+      );
+    }
+    if (!options.dryRun && options.expectedHash !== contentHash) {
       throw AppError.versionConflict('上传的文件与预览时的那一份不一致,请重新预览后再确认');
     }
 
@@ -431,10 +445,52 @@ export class OrgImportService {
             nodeIdByKey.set(node.key, id);
 
             const parentId =
-              node.parentId ?? (node.parentKey === null ? null : (nodeIdByKey.get(node.parentKey) ?? null));
-            const parentPath = node.parentKey === null ? null : (parentPathByKey.get(node.parentKey) ?? null);
-            const materializedPath =
-              parentPath === null ? pathOfRoot(id) : pathOfChild(parentPath, id);
+              node.parentId ??
+              (node.parentKey === null ? null : (nodeIdByKey.get(node.parentKey) ?? null));
+
+            /*
+              ⚠️⚠️ **物化路径必须与 `parentId` 一致 —— 这里原来把"父节点已存在"
+              当成了"没有父节点"。**
+
+              `planImport` 对**已存在**部门下的新组只填 `parentId`、不填 `parentKey`
+              (见 `import.core.ts`:`parentKey: department.ref.kind === 'new' ? … : null`),
+              而这里原来只从 `parentKey` 推路径 —— 于是 `parentPath` 是 `null`,
+              最后写进去的是 `pathOfRoot(id)`,**一个一级节点的物化路径**,
+              而 `parent_id` / `depth` 又是对的。三者互相矛盾。
+
+              后果不是"排版不好看",而是**权限判定所依赖的那条链被写坏了**:
+              `chainOf` 靠物化路径的前缀集合找祖先链(§5.2),路径成了根 ⇒ 这个组
+              **没有祖先** ⇒ 部长对它失去编辑权、删除子树也扫不到它;
+              更要紧的是,若它所属的部门是 `restricted`,这个组**不会继承受限**
+              (默认 `public`,而链上又没有受限祖先)⇒ **所有人都能读**,
+              连检索都会把它搜出来。这是与 §5.6「整棵子树继承,后代无法放开」
+              直接冲突的一次静默保密失守。
+
+              所以三个分支都要显式处理,而且**取不到父路径就报错** ——
+              绝不再退回"当成一级节点"这个默认值。
+            */
+            let materializedPath: string;
+            if (parentId === null) {
+              // 真正的一级节点(部门)
+              materializedPath = pathOfRoot(id);
+            } else if (node.parentKey !== null) {
+              // 父节点是**本次新建**的 —— 路径已经在上面那张表里
+              const parentPath = parentPathByKey.get(node.parentKey);
+              if (parentPath === undefined) {
+                throw new Error(`导入失败:找不到本次新建父节点 ${node.parentKey} 的路径`);
+              }
+              materializedPath = pathOfChild(parentPath, id);
+            } else {
+              // 父节点是**库里已存在**的部门 —— 路径只能从库里取
+              const parent = await tx.node.findUnique({
+                where: { id: parentId },
+                select: { materializedPath: true },
+              });
+              if (parent === null) {
+                throw new Error(`导入失败:父节点 ${parentId} 不存在`);
+              }
+              materializedPath = pathOfChild(parent.materializedPath, id);
+            }
             parentPathByKey.set(node.key, materializedPath);
 
             const ownerId = resolveUserId(node.ownerEmployeeNo);
@@ -585,16 +641,37 @@ function cellText(value: ExcelJS.CellValue): string | null {
 
 /** 「填写说明」表的内容。放在表里而不是只写进文档 —— 填表的人不会去翻文档。 */
 const HELP_LINES: { column: string; how: string }[] = [
-  { column: '工号', how: '必填。登录用的就是工号。**一旦定了就不要改** —— 改了系统会当成另一个人,他名下文档的作者也会断。' },
+  {
+    column: '工号',
+    how: '必填。登录用的就是工号。**一旦定了就不要改** —— 改了系统会当成另一个人,他名下文档的作者也会断。',
+  },
   { column: '姓名', how: '必填。与系统里不一致时**以表格为准**(改名的正常情况)。' },
   { column: '部门', how: '必填。一级组织。系统里没有的部门会自动创建。' },
   { column: '组 / 项目', how: '可空。留空表示这个人只属于部门本身。' },
-  { column: '负责人', how: '填「是」表示这一行的人是**这一行最深那个节点**的负责人:填了组就是组长,没填就是部长。\n每个部门必须有一个负责人(新建的部门尤其),一个节点只能有一个。' },
-  { column: '部门ID(勿改)', how: '系统生成的只读列。**不要手工编辑**。它的作用是:部门改名之后,靠 ID 仍能认出它,而不是当成新建。' },
+  {
+    column: '负责人',
+    how: '填「是」表示这一行的人是**这一行最深那个节点**的负责人:填了组就是组长,没填就是部长。\n每个部门必须有一个负责人(新建的部门尤其),一个节点只能有一个。',
+  },
+  {
+    column: '部门ID(勿改)',
+    how: '系统生成的只读列。**不要手工编辑**。它的作用是:部门改名之后,靠 ID 仍能认出它,而不是当成新建。',
+  },
   { column: '组ID(勿改)', how: '同上,对应「组 / 项目」那一列。' },
-  { column: '一行代表什么', how: '一行 = 一个人在一个节点上的归属。同一个人出现多行是**正常**的 —— 表示他同属多个部门 / 组 / 项目。' },
+  {
+    column: '一行代表什么',
+    how: '一行 = 一个人在一个节点上的归属。同一个人出现多行是**正常**的 —— 表示他同属多个部门 / 组 / 项目。',
+  },
   { column: '怎么加人', how: '在表格末尾**追加行**,不要在中间插行或删除已有行。' },
-  { column: '怎么调岗', how: '⚠️ 本表是**增量**语义:加一行新归属即可,但**移出旧归属要去界面上做**。\n表格里"没写"与"要删掉"无法区分,所以这一步必须手工。' },
-  { column: '怎么处理离职', how: '删除表格里的行**不会**让任何人离职。离职请到「人员管理」里把状态改成"已离职"。' },
-  { column: '密码', how: `不需要填。新账号的初始密码统一是 ${INITIAL_PASSWORD},首次登录会强制要求改成「8 位以上且同时含字母与数字」的密码。` },
+  {
+    column: '怎么调岗',
+    how: '⚠️ 本表是**增量**语义:加一行新归属即可,但**移出旧归属要去界面上做**。\n表格里"没写"与"要删掉"无法区分,所以这一步必须手工。',
+  },
+  {
+    column: '怎么处理离职',
+    how: '删除表格里的行**不会**让任何人离职。离职请到「人员管理」里把状态改成"已离职"。',
+  },
+  {
+    column: '密码',
+    how: `不需要填。新账号的初始密码统一是 ${INITIAL_PASSWORD},首次登录会强制要求改成「8 位以上且同时含字母与数字」的密码。`,
+  },
 ];

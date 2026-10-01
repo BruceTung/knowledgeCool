@@ -169,7 +169,11 @@ export function LoginPage() {
           disabled={login.isPending || lockedSeconds > 0}
           className="w-full py-2"
         >
-          {lockedSeconds > 0 ? '已锁定(' + waitLabel(lockedSeconds) + ')' : login.isPending ? '登录中…' : '登录'}
+          {lockedSeconds > 0
+            ? '已锁定(' + waitLabel(lockedSeconds) + ')'
+            : login.isPending
+              ? '登录中…'
+              : '登录'}
         </Button>
       </form>
 

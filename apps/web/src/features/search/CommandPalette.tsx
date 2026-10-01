@@ -74,100 +74,105 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
         </>
       }
     >
-        <input
-          ref={inputRef}
-          value={query}
-          onChange={(event) => {
-            setQuery(event.target.value);
-            // 换了关键词就回到第一条 —— 由输入事件负责,不用 effect
-            setActiveIndex(0);
-          }}
-          onKeyDown={(event) => {
-            // Esc 由 Modal 统一处理(它在 document 的捕获阶段监听),
-            // 这里不再自己处理一遍 —— 两处都关会各跑一次 onClose。
-            if (event.key === 'ArrowDown') {
-              event.preventDefault();
-              setActiveIndex(hits.length === 0 ? 0 : (safeIndex + 1) % hits.length);
-              return;
-            }
-            if (event.key === 'ArrowUp') {
-              event.preventDefault();
-              setActiveIndex(hits.length === 0 ? 0 : (safeIndex - 1 + hits.length) % hits.length);
-              return;
-            }
-            if (event.key === 'Enter') {
-              const hit = hits[safeIndex];
-              if (hit !== undefined) go(hit);
-            }
-          }}
-          placeholder="搜索页面标题与正文…(中文可直接搜)"
-          className="w-full flex-none border-b border-slate-200 px-4 py-3 text-sm outline-none placeholder:text-slate-500"
-        />
+      <input
+        ref={inputRef}
+        value={query}
+        onChange={(event) => {
+          setQuery(event.target.value);
+          // 换了关键词就回到第一条 —— 由输入事件负责,不用 effect
+          setActiveIndex(0);
+        }}
+        onKeyDown={(event) => {
+          // Esc 由 Modal 统一处理(它在 document 的捕获阶段监听),
+          // 这里不再自己处理一遍 —— 两处都关会各跑一次 onClose。
+          /*
+            ⚠️ **输入法组词期间的方向键与 Enter 属于输入法,不属于这个列表。**
+            不判 `isComposing` 的话,中文用户每选一次候选词,↑/↓ 会把选中项挪走、
+            Enter 会直接打开某个搜索结果 —— 而用户只是想把自己那个词打完。
+          */
+          if (event.nativeEvent.isComposing) return;
+          if (event.key === 'ArrowDown') {
+            event.preventDefault();
+            setActiveIndex(hits.length === 0 ? 0 : (safeIndex + 1) % hits.length);
+            return;
+          }
+          if (event.key === 'ArrowUp') {
+            event.preventDefault();
+            setActiveIndex(hits.length === 0 ? 0 : (safeIndex - 1 + hits.length) % hits.length);
+            return;
+          }
+          if (event.key === 'Enter') {
+            const hit = hits[safeIndex];
+            if (hit !== undefined) go(hit);
+          }
+        }}
+        placeholder="搜索页面标题与正文…(中文可直接搜)"
+        className="w-full flex-none border-b border-slate-200 px-4 py-3 text-sm outline-none placeholder:text-slate-500"
+      />
 
-        <div className="min-h-0 flex-1 overflow-auto py-1">
-          {query.trim() === '' ? (
-            <p className="px-4 py-6 text-center text-sm text-slate-500">
-              输入关键词开始搜索。
-              <br />
-              你能读到的内容都会出现在这里(受限节点里读不到的部分不会出现)。
-            </p>
-          ) : search.isPending ? (
-            <p className="px-4 py-6 text-center text-sm text-slate-500">搜索中…</p>
-          ) : search.isError ? (
-            /*
+      <div className="min-h-0 flex-1 overflow-auto py-1">
+        {query.trim() === '' ? (
+          <p className="px-4 py-6 text-center text-sm text-slate-500">
+            输入关键词开始搜索。
+            <br />
+            你能读到的内容都会出现在这里(受限节点里读不到的部分不会出现)。
+          </p>
+        ) : search.isPending ? (
+          <p className="px-4 py-6 text-center text-sm text-slate-500">搜索中…</p>
+        ) : search.isError ? (
+          /*
               ⚠️ v2.16:`isError` 必须排在 `hits.length === 0` **前面**。
               故障(500 / 网络断开)时 hits 也是空的,原来的分支顺序会把
               "搜索坏了"显示成「没有匹配的内容」—— 与结果页(`SearchPage`
               给的是 ErrorNote + 重试按钮)对同一件事给出两个相反结论,
               而用户会照着"没搜到"这个结论去换关键词继续试。
             */
-            <div className="px-4 py-6 text-center text-sm text-slate-500">
-              <p>搜索失败了,不是"没有匹配的内容"。</p>
-              <p className="mt-1">{search.error instanceof Error ? search.error.message : '请稍后重试。'}</p>
-            </div>
-          ) : hits.length === 0 ? (
-            <p className="px-4 py-6 text-center text-sm text-slate-500">没有匹配的内容</p>
-          ) : (
-            <ul>
-              {hits.map((hit, index) => (
-                <li key={hit.nodeId}>
-                  <button
-                    type="button"
-                    onMouseEnter={() => {
-                      setActiveIndex(index);
-                    }}
-                    onClick={() => {
-                      go(hit);
-                    }}
-                    className={`flex w-full flex-col items-start gap-0.5 px-4 py-2 text-left ${
-                      index === safeIndex ? 'bg-slate-100' : ''
-                    }`}
-                  >
-                    <span className="flex w-full items-center gap-2">
-                      <span className="min-w-0 flex-1 truncate text-sm text-slate-800">
-                        {hit.title}
-                      </span>
-                      {hit.matchedIn === 'title' && (
-                        <span className={`flex-none rounded bg-blue-50 px-1 text-blue-700 ${T_META}`}>
-                          标题
-                        </span>
-                      )}
+          <div className="px-4 py-6 text-center text-sm text-slate-500">
+            <p>搜索失败了,不是"没有匹配的内容"。</p>
+            <p className="mt-1">
+              {search.error instanceof Error ? search.error.message : '请稍后重试。'}
+            </p>
+          </div>
+        ) : hits.length === 0 ? (
+          <p className="px-4 py-6 text-center text-sm text-slate-500">没有匹配的内容</p>
+        ) : (
+          <ul>
+            {hits.map((hit, index) => (
+              <li key={hit.nodeId}>
+                <button
+                  type="button"
+                  onMouseEnter={() => {
+                    setActiveIndex(index);
+                  }}
+                  onClick={() => {
+                    go(hit);
+                  }}
+                  className={`flex w-full flex-col items-start gap-0.5 px-4 py-2 text-left ${
+                    index === safeIndex ? 'bg-slate-100' : ''
+                  }`}
+                >
+                  <span className="flex w-full items-center gap-2">
+                    <span className="min-w-0 flex-1 truncate text-sm text-slate-800">
+                      {hit.title}
                     </span>
-                    <span className="w-full truncate text-xs text-slate-500">
-                      {hit.breadcrumb.length > 0 && hit.breadcrumb.join(' / ')}
-                    </span>
-                    {hit.snippet !== '' && (
-                      <span className="w-full truncate text-sm text-slate-500">
-                        {hit.snippet}
+                    {hit.matchedIn === 'title' && (
+                      <span className={`flex-none rounded bg-blue-50 px-1 text-blue-700 ${T_META}`}>
+                        标题
                       </span>
                     )}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-
+                  </span>
+                  <span className="w-full truncate text-xs text-slate-500">
+                    {hit.breadcrumb.length > 0 && hit.breadcrumb.join(' / ')}
+                  </span>
+                  {hit.snippet !== '' && (
+                    <span className="w-full truncate text-sm text-slate-500">{hit.snippet}</span>
+                  )}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </Modal>
   );
 }

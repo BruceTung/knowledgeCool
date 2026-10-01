@@ -1,5 +1,5 @@
 /**
- * 组织架构导入向导(DESIGN.md §8.5)。
+ * 组织架构导入向导(DESIGN.md §8.4)。
  *
  * 三步两阶段:**下载模板 → 上传得到差异预览(dryRun,不写库)→ 确认写入**。
  *
@@ -17,14 +17,24 @@ import { useRef, useState, type ReactNode } from 'react';
 import { Button, ErrorNote } from '../../components/ui';
 import { useImportOrg, useImportTemplate } from './queries';
 
-function CountRow({ label, count, children }: { label: string; count: number; children?: ReactNode }) {
+function CountRow({
+  label,
+  count,
+  children,
+}: {
+  label: string;
+  count: number;
+  children?: ReactNode;
+}) {
   return (
     <div className="border-t border-slate-100 py-2 first:border-t-0">
       <div className="flex items-center gap-2">
         <span className="flex-none rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">
           {label}
         </span>
-        <span className={`text-sm font-medium ${count === 0 ? 'text-slate-300' : 'text-slate-900'}`}>
+        <span
+          className={`text-sm font-medium ${count === 0 ? 'text-slate-300' : 'text-slate-900'}`}
+        >
           {count}
         </span>
       </div>
@@ -104,8 +114,8 @@ function ResultBody({ result }: { result: OrgImportResult }) {
       {result.createdAssignments} 条、改名 {result.updatedNames} 处、换所有者 {result.updatedOwners}{' '}
       处。
       <p className="mt-1 text-xs text-emerald-800">
-        新账号的初始密码是 <code className="rounded bg-white px-1">123456</code>,首次登录会被要求改成
-        「8 位以上且同时含字母与数字」的新密码。
+        新账号的初始密码是 <code className="rounded bg-white px-1">123456</code>
+        ,首次登录会被要求改成 「8 位以上且同时含字母与数字」的新密码。
       </p>
     </div>
   );
@@ -135,12 +145,14 @@ export function OrgImportPanel() {
       <div className="rounded-lg border border-slate-200 bg-white p-4">
         <h3 className="text-sm font-medium text-slate-900">用 Excel 维护全员名单</h3>
         <p className="mt-1 text-sm leading-relaxed text-slate-500">
-          模板里带着当前的组织架构与人员,你只需要在末尾<b>追加行</b>。
-          一行 = 一个人在一个节点上的归属;同一个人写多行表示他同属多个部门 / 组 / 项目。
+          模板里带着当前的组织架构与人员,你只需要在末尾<b>追加行</b>。 一行 =
+          一个人在一个节点上的归属;同一个人写多行表示他同属多个部门 / 组 / 项目。
         </p>
         <ol className="mt-2 list-inside list-decimal space-y-0.5 text-sm leading-relaxed text-slate-500">
           <li>下载模板(含当前全部数据)</li>
-          <li>填好之后上传 —— <b>不会立即写入</b>,先给你看差异</li>
+          <li>
+            填好之后上传 —— <b>不会立即写入</b>,先给你看差异
+          </li>
           <li>确认差异无误,再点「确认导入」</li>
         </ol>
         <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -171,7 +183,12 @@ export function OrgImportPanel() {
               if (file === null) return;
               importOrg.mutate(
                 { file, dryRun: true },
-                { onSuccess: (result) => { setPreview(result); setApplied(null); } },
+                {
+                  onSuccess: (result) => {
+                    setPreview(result);
+                    setApplied(null);
+                  },
+                },
               );
             }}
           >
@@ -220,15 +237,18 @@ export function OrgImportPanel() {
                   if (file === null) return;
                   importOrg.mutate(
                     { file, dryRun: false, contentHash: preview.contentHash },
-                    { onSuccess: (result) => { setApplied(result.applied); setPreview(result); } },
+                    {
+                      onSuccess: (result) => {
+                        setApplied(result.applied);
+                        setPreview(result);
+                      },
+                    },
                   );
                 }}
               >
                 {importOrg.isPending ? '写入中…' : '③ 确认导入'}
               </Button>
-              {hasBlockingErrors && (
-                <span className="text-xs text-red-600">有问题时不能导入</span>
-              )}
+              {hasBlockingErrors && <span className="text-xs text-red-600">有问题时不能导入</span>}
             </div>
           ) : (
             applied !== null && <ResultBody result={applied} />

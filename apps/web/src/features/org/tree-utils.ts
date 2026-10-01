@@ -85,11 +85,11 @@ export interface NodeLocation {
  * 拖拽落位要用它把「落在第几格」翻译成「目标父 + 目标下标」——
  * `POST /nodes/:id/move` 只认这两样,不认"兄弟关系"。
  */
-export function locateNode(
-  nodes: readonly OrgTreeNode[],
-  id: string,
-): NodeLocation | undefined {
-  const walk = (list: readonly OrgTreeNode[], parentId: string | null): NodeLocation | undefined => {
+export function locateNode(nodes: readonly OrgTreeNode[], id: string): NodeLocation | undefined {
+  const walk = (
+    list: readonly OrgTreeNode[],
+    parentId: string | null,
+  ): NodeLocation | undefined => {
     for (let index = 0; index < list.length; index += 1) {
       const node = list[index];
       if (node === undefined) continue;

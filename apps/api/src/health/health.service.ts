@@ -26,7 +26,7 @@ function describeError(error: unknown): string {
  *     否则数据库抖一下,编排器会把健康的进程反复重启,把一次小故障放大成雪崩。
  *   - **readiness(/health/ready)**:回答「现在能提供服务吗」。逐个检查依赖并如实上报。
  *
- * DESIGN.md §9 的 M1 验收口径是 `/api/v1/health` 返回 200 —— 那一条对应 liveness。
+ * DESIGN.md §6.3 把两个健康接口分开了:`/api/v1/health` 返回 200 就是 liveness(它不碰外部依赖)。
  */
 @Injectable()
 export class HealthService {

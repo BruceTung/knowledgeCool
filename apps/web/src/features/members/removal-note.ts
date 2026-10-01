@@ -24,9 +24,7 @@ export function describeRemoval(member: NodeMemberView, nodeTitle: string): stri
   const notes: string[] = [];
 
   if (member.isOwnerHere) {
-    notes.push(
-      `他正是「${nodeTitle}」的所有者 —— 移出归属不会改变这一点,他仍然能改、能管这里。`,
-    );
+    notes.push(`他正是「${nodeTitle}」的所有者 —— 移出归属不会改变这一点,他仍然能改、能管这里。`);
   } else if (member.isAncestorOwner) {
     notes.push('他是上级所有者 —— 移出归属不影响他对这里的管理权。');
   }

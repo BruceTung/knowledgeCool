@@ -21,13 +21,16 @@ import {
 import { recordAudit } from '../audit/record.js';
 import { hasPrismaCode, runSerializable } from '../common/db/serializable.js';
 import { AppError } from '../common/errors/app-error.js';
-import { idsOfPath, pathOfChild, pathOfRoot, rootIdOfPath, subtreePrefix } from '../common/node-path.js';
+import {
+  idsOfPath,
+  pathOfChild,
+  pathOfRoot,
+  rootIdOfPath,
+  subtreePrefix,
+} from '../common/node-path.js';
 import { Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
-import {
-  PermissionService,
-  type AccessContext,
-} from '../permission/permission.service.js';
+import { PermissionService, type AccessContext } from '../permission/permission.service.js';
 
 /**
  * 节点服务 —— DESIGN.md §6.2 的节点接口 + §8.1/§8.2 的两个关键流程。
@@ -169,10 +172,7 @@ export class NodeService {
         scopePath === null
           ? {}
           : {
-              OR: [
-                { id: rootId },
-                { materializedPath: { startsWith: subtreePrefix(scopePath) } },
-              ],
+              OR: [{ id: rootId }, { materializedPath: { startsWith: subtreePrefix(scopePath) } }],
             },
       orderBy: [{ position: 'asc' }, { createdAt: 'asc' }],
       select: TREE_SELECT,
@@ -208,8 +208,8 @@ export class NodeService {
     //
     // ⚠️ 判定本身**不在这里**,而是 shared 里的 `readableNodeIds` ——
     // 这段逻辑「错了不会报错」,只表现为「某一层的标题被不该看见的人看见了」,
-    // 所以它必须能被单测覆盖(见 packages/shared/test/visibility.spec.ts,16 条)。
-    // 写在这里的话要连着 Prisma 一起 mock 才测得到,而那种测试没人会去写。
+    // 所以它被刻意下沉成零 IO 的纯函数:判定能单独推理,不靠"跑一遍看看"。
+    // 写在这里的话要连着 Prisma 一起 mock 才验得到,而那种测试没人会去写。
     //
     // 这里只负责**取数**:把判定需要的字段(祖先链 + 受限节点的两张名单)凑齐。
     // 注意 byId 里必须包含判定范围的全部祖先 —— rootId 场景下祖先不在 rows 里,
@@ -459,6 +459,24 @@ export class NodeService {
       }
 
       newParentPath = parent.materializedPath;
+    } else {
+      /*
+        ⚠️ 移到**一级**(`newParentId: null` / 省略该字段)原来**完全没有任何校验**。
+
+        `MoveNodeDto.newParentId` 默认就是 `null`,所以"不传这个字段"等于静默
+        把节点提升成部门。它绕过了两件事:
+
+        1. **建一级节点只有管理员能做**(`requireCreateUnder(operator, null)`,
+           §5.3)。普通成员 —— 甚至只是**被授权者**(有 `canEdit` 就够)——
+           都能借此把节点搬到顶层,等于自己给自己造了一个部门。
+        2. **更严重的是它会摘掉保密继承。** 受限部门的子孙之所以读不到,是因为
+           祖先链上有那个受限节点(§5.6:整棵子树继承,后代无法放开)。
+           移到一级之后链上不再有受限祖先,它就**对所有人可读**(检索也会搜到)——
+           一个 `canEdit` 的人可以借此把受限内容公开出去。
+
+        所以这一支必须与"新建一级节点"共用同一道闸。
+      */
+      await this.permissions.requireCreateUnder(operator, null);
     }
 
     await runSerializable(this.prisma, async (tx) => {
@@ -583,7 +601,7 @@ export class NodeService {
         if (id === otherId) continue;
         if (otherRow.materializedPath.startsWith(subtreePrefix(row.materializedPath))) {
           throw AppError.validation(
-            `「${otherRow.title}」在「${row.title}」里面,请只选最外层的那几个`
+            `「${otherRow.title}」在「${row.title}」里面,请只选最外层的那几个`,
           );
         }
       }
@@ -612,7 +630,10 @@ export class NodeService {
         const row = rows.get(id);
         if (row === undefined) continue;
         // 防环也要按**新**路径重判一次:目标可能已经被移进了某个选中节点的子树
-        if (target === id || freshTarget.materializedPath.startsWith(subtreePrefix(row.materializedPath))) {
+        if (
+          target === id ||
+          freshTarget.materializedPath.startsWith(subtreePrefix(row.materializedPath))
+        ) {
           throw AppError.validation(`「${row.title}」不能移动到它自己或它的子节点下`);
         }
         await applyMoveTo(tx, {
@@ -636,7 +657,11 @@ export class NodeService {
       action: 'node.bulkMove',
       targetType: 'node',
       targetId: target,
-      detail: { count: ids.length, titles: [...rows.values()].map((row) => row.title), nodeId: target },
+      detail: {
+        count: ids.length,
+        titles: [...rows.values()].map((row) => row.title),
+        nodeId: target,
+      },
     });
 
     return { moved: ids.length, newParentId: target };
@@ -673,8 +698,6 @@ export class NodeService {
 
     return { removedCount };
   }
-
-
 
   /**
    * 物理删除一棵子树,返回删掉的节点总数。
@@ -765,9 +788,7 @@ export class NodeService {
     });
     const titles = new Map(rows.map((row) => [row.id, row.title]));
 
-    return ids
-      .filter((id) => titles.has(id))
-      .map((id) => ({ id, title: titles.get(id) ?? '' }));
+    return ids.filter((id) => titles.has(id)).map((id) => ({ id, title: titles.get(id) ?? '' }));
   }
 
   /**

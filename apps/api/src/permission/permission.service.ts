@@ -519,8 +519,7 @@ export class PermissionService {
       }),
       canManage: canManageReadersPure(operator, chain),
       version: row.version,
-      inheritedFrom:
-        nearest === undefined ? null : { nodeId: nearest.id, title: nearest.title },
+      inheritedFrom: nearest === undefined ? null : { nodeId: nearest.id, title: nearest.title },
     };
   }
 

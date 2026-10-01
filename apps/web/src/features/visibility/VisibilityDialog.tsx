@@ -103,8 +103,8 @@ export function VisibilityDialog({
           {inherited !== null && (
             <p className="rounded-md bg-amber-50 px-3 py-2 text-sm leading-relaxed text-amber-800">
               ⚠️ 限制是从上级继承来的 —— <b>{inherited.title}</b> 是受限的,
-              所以这个节点及其子节点也受限。要放开,得去那一层改;在这里把它改成
-              「公开」<b>不会生效</b>。
+              所以这个节点及其子节点也受限。要放开,得去那一层改;在这里把它改成 「公开」
+              <b>不会生效</b>。
             </p>
           )}
 
@@ -176,7 +176,9 @@ export function VisibilityDialog({
                         <div className="truncate text-sm text-slate-800">
                           {known?.name ?? '未知'}
                           {known?.departed === true && (
-                            <span className={`ml-1 rounded bg-amber-50 px-1 text-amber-700 ring-1 ring-amber-200 ${T_META}`}>
+                            <span
+                              className={`ml-1 rounded bg-amber-50 px-1 text-amber-700 ring-1 ring-amber-200 ${T_META}`}
+                            >
                               {USER_STATUS_LABELS.departed}
                             </span>
                           )}

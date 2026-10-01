@@ -72,9 +72,7 @@ export function HomePage() {
 
   return (
     <div className="mx-auto max-w-4xl p-8">
-      <h1 className="text-xl font-semibold text-slate-900">
-        你好,{me.data?.user.name ?? ''}
-      </h1>
+      <h1 className="text-xl font-semibold text-slate-900">你好,{me.data?.user.name ?? ''}</h1>
       <p className="mt-1 text-sm text-slate-500">
         全公司 {tree.data.nodes.length} 个节点,其中 {editableCount} 个你可以编辑。
       </p>
@@ -94,8 +92,7 @@ export function HomePage() {
             ))}
           </div>
           <p className="mt-2 text-xs leading-relaxed text-slate-500">
-            你可以在自己所属的节点下面新建内容;新建出来的东西归你所有,
-            你的上级同样可以修改。
+            你可以在自己所属的节点下面新建内容;新建出来的东西归你所有, 你的上级同样可以修改。
           </p>
         </div>
       )}

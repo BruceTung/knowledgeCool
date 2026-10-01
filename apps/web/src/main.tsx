@@ -9,8 +9,8 @@ import './styles.css';
 /**
  * 服务端状态交给 TanStack Query,本地 UI 状态用 Zustand(DESIGN.md §7.3)。
  *
- * Zustand 目前仍未接入:M2 的界面状态(表单草稿、折叠)都由组件自己 useState
- * 就够了,引入一个全局 store 是空架子。等 M3 的页面树有了跨组件的选中态再上。
+ * Zustand 目前仍未接入:界面状态(表单草稿、折叠)都由组件自己 useState
+ * 就够了,引入一个全局 store 是空架子。等真的出现跨组件共享的选中态再上。
  */
 const queryClient = new QueryClient({
   defaultOptions: {

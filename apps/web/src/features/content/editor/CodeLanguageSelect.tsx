@@ -29,7 +29,11 @@ export function CodeLanguageSelect({ editor }: { editor: Editor }) {
         value={known ? normalizeLanguage(stored) : stored}
         aria-label="代码语言"
         onChange={(event) => {
-          editor.chain().focus().updateAttributes('codeBlock', { language: event.target.value }).run();
+          editor
+            .chain()
+            .focus()
+            .updateAttributes('codeBlock', { language: event.target.value })
+            .run();
         }}
         className="h-7 rounded-md border border-slate-300 bg-white px-1.5 text-xs text-slate-700 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
       >

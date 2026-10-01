@@ -108,8 +108,7 @@ export function findLanguage(name: string | null | undefined): CodeLanguage | un
   if (name === null || name === undefined || name === '') return undefined;
   const lower = name.toLowerCase();
   return CODE_LANGUAGES.find(
-    (language) =>
-      language.id === lower || language.aliases.some((alias) => alias === lower),
+    (language) => language.id === lower || language.aliases.some((alias) => alias === lower),
   );
 }
 

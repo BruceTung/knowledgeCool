@@ -230,18 +230,15 @@ export class OrgController {
     return this.org.resetPassword(user, userId);
   }
 
-  // ---------------- 组织架构导入(Excel,§8.5) ----------------
+  // ---------------- 组织架构导入(Excel,§8.4) ----------------
 
   /**
    * 下载模板。**模板里带当前全部数据** —— 管理员的动作是"往上加行",
-   * 而不是"从空白开始填"(见 §8.5 对"覆盖 vs 增量"的讨论)。
+   * 而不是"从空白开始填"(见 §8.4 对"覆盖 vs 增量"的讨论)。
    */
   @Get('admin/org/import-template')
   @Header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-  async importTemplate(
-    @CurrentUser() user: AuthUser,
-    @Res() res: Response,
-  ): Promise<void> {
+  async importTemplate(@CurrentUser() user: AuthUser, @Res() res: Response): Promise<void> {
     const buffer = await this.imports.buildTemplate(user);
     res.setHeader(
       'Content-Disposition',
@@ -284,8 +281,25 @@ export class OrgController {
       throw AppError.validation('请选择要上传的 .xlsx 文件(字段名 file)');
     }
     return this.imports.run(user, file.buffer, {
-      dryRun: dryRun !== 'false',
+      dryRun: parseDryRun(dryRun),
       expectedHash: contentHash,
     });
   }
+}
+
+/**
+ * 解析 `?dryRun=`。
+ *
+ * ⚠️ 旧写法是 `dryRun !== 'false'` —— 于是 `dryRun=0`、`dryRun=no`、`dryRun=FALSE`
+ * 全都落进**预览**(不写库),而省略参数也是预览。使用者以为写进去了,其实什么
+ * 都没发生,而且**不报任何错**;这是最坏的一类"静默不生效"。
+ *
+ * 现在改成**显式白名单**(与 `GET /nodes/:id/export` 对 `format` 的做法一致):
+ * 认得的写法各归其位,认不得的直接 400 —— 不再靠猜。
+ * 省略 / 空串仍按**预览**处理:那是不写库的那一侧,默认落在安全的一边。
+ */
+function parseDryRun(value: string | undefined): boolean {
+  if (value === undefined || value === '' || value === 'true' || value === '1') return true;
+  if (value === 'false' || value === '0') return false;
+  throw AppError.validation(`dryRun 只能是 true / false(收到「${value}」)`);
 }

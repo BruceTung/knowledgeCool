@@ -12,12 +12,16 @@
  *      界面表达不了的状态。
  *
  * ⚠️ 三件要知道的事:
- *   - **KC001 / KC004 / KC005 的密码仍是 `123456`**,登录后会被强制改密 ——
- *     这正是新账号的真实流程,拿来验收最合适。
- *   - **KC002(陈默)的密码被改成种子密码**:他是技术部部长,种子里由他
- *     创建内容,而"首次强制改密"会挡住所有其他接口,不改就什么都做不了。
- *   - 列顺序必须与 `apps/api/src/org/import.core.ts` 的 `IMPORT_COLUMNS` 一致,
- *     所以下面有一段自检:解析出来的行数与预期不符就直接失败。
+ *   - **KC003 / KC004 的密码仍是 `123456`**(见生成的 `DEMO-ACCOUNTS.txt`)——
+ *     登录后会被强制改密,这正是新账号的真实流程,拿来验收最合适。
+ *   - **KC002(陈默)与 KC005(孙浩)的密码被改成种子密码**:他们要在种子里
+ *     创建内容,而"未改密的人没有任何登录态"会让所有业务接口回 401。
+ *     这两人顺带把"首登改密 → 改完必须重新登录"这条链路真验一遍 ——
+ *     **KC002 走内联那一段**(中间还要插一条"没有登录态就回 401"的断言),
+ *     **KC005 走 `loginAs`**;两处的断言是同一组。
+ *   - 列顺序必须与 `apps/api/src/org/import.core.ts` 的 `IMPORT_COLUMNS` 一致。
+ *     这一点由**导入预览的断言**兜住(新建节点数 / 新建人数 / 预览错误必须为空):
+ *     列顺序错了,解析出来的形状就与预期不符,脚本当场失败。
  */
 
 import { existsSync, writeFileSync } from 'node:fs';
@@ -30,6 +34,17 @@ const BASE = process.env.KC_API ?? 'http://127.0.0.1:8080/api/v1';
 const ROOT = process.env.KC_ROOT ?? 'http://127.0.0.1:8080';
 const PASSWORD = process.env.KC_SEED_PASSWORD ?? 'Kc-verify-2026';
 const ADMIN_PASSWORD = process.env.KC_ADMIN_PASSWORD ?? 'Kc-admin-2026';
+
+/**
+ * 新账号的内置初始密码。
+ *
+ * ⚠️ 必须与 `packages/shared/src/org.ts` 的 `INITIAL_PASSWORD` 一致。
+ * 这里**刻意不 import 那个常量**:引入 `@knowledgecool/shared` 会让本脚本
+ * 依赖 `packages/shared/dist` 已经构建,而它现在只依赖 exceljs ——
+ * 种子脚本要能在"刚 clone 完、还没 build"时也跑得起来。
+ * (同样的取舍见 `reset-demo-passwords.mjs`,那边也是硬编码 + 这条注释。)
+ */
+const INITIAL_PASSWORD = '123456';
 
 // 与 import.core.ts 的 IMPORT_COLUMNS 一一对应(顺序不能变)
 const COLUMNS = ['工号', '姓名', '部门', '组 / 项目', '负责人', '部门ID(勿改)', '组ID(勿改)'];
@@ -46,11 +61,18 @@ const ROSTER = [
 
 let cookie = '';
 
+/**
+ * 跟随响应里的 `Set-Cookie`。
+ *
+ * ⚠️ 值为空 = 服务端在**清**这个 Cookie(登出),必须跟着清 —— 否则旧的
+ * 会话会一直留在变量里,后面所有请求都还在用上一个人的身份。
+ */
 function syncCookie(response) {
   const raw = response.headers.getSetCookie?.() ?? [];
   for (const item of raw) {
     const match = /kc_session=([^;]*)/.exec(item);
-    if (match?.[1] !== undefined) cookie = `kc_session=${match[1]}`;
+    if (match === null) continue;
+    cookie = match[1] === '' ? '' : `kc_session=${match[1]}`;
   }
 }
 
@@ -73,7 +95,66 @@ async function api(method, path, body, options = {}) {
   } catch {
     json = null;
   }
-  return { status: response.status, body: json };
+  // `setCookie` 要带出来:首登那道响应**不写 Cookie**,只看状态码分不出来。
+  return {
+    status: response.status,
+    body: json,
+    setCookie: response.headers.getSetCookie?.() ?? [],
+  };
+}
+
+/**
+ * 切换身份前必须清掉上一个人的会话。
+ *
+ * ⚠️ 它只清**本进程的这个变量**,不调 `POST /auth/logout` ——
+ * 服务端那几行 `sessions` 会一直留到过期(完整跑一次大约 5 行:
+ * 超管 1、陈默 2、孙浩 2)。对开发/演示库无害,但**别以为"跑完种子不会留下登录态"**。
+ * 若想让它们当场消失,在这里补一次 best-effort 的
+ * `await api('POST', '/auth/logout')` 即可 —— 注意 cookie 为空时那个接口回 401,
+ * 必须忽略掉,不能让它把种子弄失败。
+ */
+function forgetSession() {
+  cookie = '';
+}
+
+/**
+ * 以某个账号登录,并**在需要时完成首次改密**。
+ *
+ * ⚠️ v2.4 起首次登录**不建立会话**:返回 `password-change-required` 与一张
+ * 10 分钟的一次性凭证;改密之后**仍然不给会话**,必须用新密码再登一次。
+ *
+ * ⚠️⚠️ 这里每次都先 `forgetSession()`,原因是踩过的坑:
+ * "首登不写 Cookie"意味着那句登录**不会覆盖**上一个人的会话,而本脚本原来
+ * 共用一个全局 `cookie` —— 于是脚本以为自己在以陈默操作,请求却带着
+ * KC001(超管)的会话。`verify-org.mjs` 里记过同一个坑,这边当时漏改了。
+ */
+async function loginAs(employeeNo, initialPassword, newPassword, label) {
+  forgetSession();
+  const first = await api('POST', '/auth/login', { employeeNo, password: initialPassword });
+  if (first.status !== 200 || first.body?.kind !== 'password-change-required') {
+    console.error(
+      `✗ ${label} 首次登录未返回 password-change-required:`,
+      JSON.stringify(first.body),
+    );
+    process.exit(1);
+  }
+  if (first.setCookie.some((item) => item.startsWith('kc_session='))) {
+    console.error(`✗ ${label} 首次登录竟然下发了会话 Cookie —— 强制改密被绕过了`);
+    process.exit(1);
+  }
+  console.log(`✓ ${label} 首次登录只拿到一次性凭证,未建立会话`);
+
+  expectOk(
+    `${label} 凭一次性凭证设置新密码`,
+    await api('POST', '/auth/initial-password', {
+      setupToken: first.body.setupToken,
+      newPassword,
+    }),
+  );
+  expectSessionEstablished(
+    `${label} 用新密码重新登录(这次才建立会话)`,
+    await api('POST', '/auth/login', { employeeNo, password: newPassword }),
+  );
 }
 
 function expectOk(label, result) {
@@ -84,6 +165,29 @@ function expectOk(label, result) {
   console.error(`✗ ${label} → HTTP ${String(result.status)}`);
   console.error(JSON.stringify(result.body, null, 2));
   process.exit(1);
+}
+
+/**
+ * 断言"这一次登录**真的建立了会话**"。
+ *
+ * ⚠️ 只靠 `expectOk` 是不够的:它只要求 2xx,而**首登那条路径也是 2xx 且不发会话**。
+ * 不复核 `kind` 与 Cookie 的话,一旦改密那一步静默失效(例如服务端仍认为这个人
+ * 处于待改密状态),脚本就会带着**空 cookie** 继续往下跑,然后在某个毫不相关的
+ * 请求上报 401 —— 报错位置离真正的原因隔了十几步,极难排查。
+ */
+function expectSessionEstablished(label, result) {
+  if (
+    result.status !== 200 ||
+    result.body?.kind !== 'session' ||
+    !result.setCookie.some((item) => item.startsWith('kc_session='))
+  ) {
+    console.error(
+      `✗ ${label} 没有建立会话(期望 200 + kind=session + Set-Cookie):HTTP ${String(result.status)}`,
+    );
+    console.error(JSON.stringify(result.body, null, 2));
+    process.exit(1);
+  }
+  console.log(`✓ ${label}`);
 }
 
 // ---------------------------------------------------------------- 文档构造
@@ -123,7 +227,11 @@ const DOCS = {
       '紧急修复走 hotfix 分支,修完同时回合 main',
     ),
     heading(2, '二、提交信息'),
-    para(text('提交信息用「类型: 说明」的格式,类型取值为 feat / fix / docs / refactor / test / chore。')),
+    para(
+      text(
+        '提交信息用「类型: 说明」的格式,类型取值为 feat / fix / docs / refactor / test / chore。',
+      ),
+    ),
     code('feat: 支持按工号登录\nfix: 移动节点后子孙路径未重建'),
     heading(2, '三、代码评审'),
     para(text('所有改动必须经过至少一人评审。评审看三件事:正确性、可读性、有没有把复杂度藏起来。')),
@@ -161,7 +269,9 @@ const DOCS = {
     heading(2, '命名'),
     bullet('路径用复数资源名:/nodes、/comments', '错误体统一为 { error: { code, message } }'),
     heading(2, '错误码'),
-    code('UNAUTHORIZED        401 未登录\nFORBIDDEN           403 已登录但无权限\nNOT_FOUND           404 内容不存在'),
+    code(
+      'UNAUTHORIZED        401 未登录\nFORBIDDEN           403 已登录但无权限\nNOT_FOUND           404 内容不存在',
+    ),
   ),
   'CRM 项目概览': doc(
     heading(1, 'CRM 项目概览'),
@@ -265,29 +375,78 @@ async function main() {
     }
   }
 
-  // ---- 4. 陈默(技术部部长)登场:他要改密才能做任何事 ----
-  console.log('\n—— 以陈默(技术部部长)的身份创建内容 ——');
-  const login = await api('POST', '/auth/login', { employeeNo: 'KC002', password: '123456' });
-  if (login.status !== 201 && login.status !== 200) {
-    console.error('✗ 陈默(KC002)用初始密码 123456 登录失败:', JSON.stringify(login.body));
+  // ---- 3.5 趁**超管会话还在**,先把赵敏(KC004)的 id 取出来 ----
+  //
+  // ⚠️ 这一步的位置是**必须的**,不能挪到后面去:
+  // `GET /admin/users` 是**超管专属**(`org.controller.ts` 的「人员列表。超管专属」与
+  // `OrgService.listUsers` 里的 `requireSuperAdmin`)—— 名册含账号状态与登录时间,
+  // 不是公开信息(仓库自己的验收里也钉着这一条:非超管读名册必须 403)。
+  //
+  // 而第 7 步给赵敏授权是用**陈默(KC002,非超管)**的身份做的 ——
+  // 走到那里已经没有哪个身份能读名册了。
+  //
+  // 旧版把这次查询放在授权之前,而当时手里恰好是**超管的残留会话**,
+  // 于是"非超管读名册"这件事被掩盖了;把 cookie 的坑修掉之后它才浮出来。
+  // (返回体是 `{ users, total, nextCursor }` 而不是数组 —— 游标分页包装,
+  //  见 `packages/shared/src/org.ts` 的 `OrgUserListResponse`。)
+  const roster = expectOk('读取人员列表(超管专属)', await api('GET', '/admin/users?limit=500'));
+  // ⚠️ 先确认"这一页就是全部"。`limit=500` 已经是接口上限,人再多就会分页,
+  // 而赵敏可能落在第二页 —— 那时下面会报"找不到 KC004 赵敏",把人引向
+  // "人没建出来"这个错误方向(她其实在,只是不在这页)。这一版种子假设演示组织只有 5 人。
+  if (roster.total > roster.users.length) {
+    console.error(
+      `✗ 人员列表被分页了(${String(roster.users.length)}/${String(roster.total)}),` +
+        'KC004 可能不在这一页 —— 本脚本假设演示组织只有 5 个人',
+    );
     process.exit(1);
   }
-  console.log('✓ KC002 用初始密码 123456 登录成功');
+  const zhao = roster.users.find((user) => user.employeeNo === 'KC004');
+  if (zhao === undefined) {
+    console.error('✗ 人员列表里找不到 KC004 赵敏');
+    process.exit(1);
+  }
 
-  // 先证明拦截真的生效:改密之前访问别的接口必须是 403 PASSWORD_CHANGE_REQUIRED
-  const blocked = await api('GET', '/org/tree');
-  if (blocked.status !== 403 || blocked.body?.error?.code !== 'PASSWORD_CHANGE_REQUIRED') {
-    console.error('✗ 未改密却能访问其他接口 —— 强制改密的拦截没生效:', JSON.stringify(blocked.body));
+  // ---- 4. 陈默(技术部部长)登场:他要先改密才能做任何事 ----
+  console.log('\n—— 以陈默(技术部部长)的身份创建内容 ——');
+  forgetSession();
+  const chenFirst = await api('POST', '/auth/login', {
+    employeeNo: 'KC002',
+    password: INITIAL_PASSWORD,
+  });
+  if (chenFirst.status !== 200 || chenFirst.body?.kind !== 'password-change-required') {
+    console.error(
+      '✗ 陈默(KC002)首次登录未返回 password-change-required:',
+      JSON.stringify(chenFirst.body),
+    );
     process.exit(1);
   }
-  console.log('✓ 未改密时其他接口被拦(403 PASSWORD_CHANGE_REQUIRED)');
+  if (chenFirst.setCookie.some((item) => item.startsWith('kc_session='))) {
+    console.error('✗ 首次登录竟然下发了会话 Cookie —— 强制改密被绕过了');
+    process.exit(1);
+  }
+  console.log('✓ KC002 用初始密码 123456 登录 → 只拿到一次性凭证,未建立会话');
+
+  // 顺带验一条产品行为:**改密之前他没有任何登录态**,所以业务接口回 401 而不是 403。
+  // (v2.4 之前是"先发会话、再由守卫拦成 403 PASSWORD_CHANGE_REQUIRED";
+  //  那条路径没了之后,`PASSWORD_CHANGE_REQUIRED` 这个错误码再也没有生产者,
+  //  已从 shared 的错误码表里删除。)
+  const blocked = await api('GET', '/org/tree');
+  if (blocked.status !== 401 || blocked.body?.error?.code !== 'UNAUTHORIZED') {
+    console.error('✗ 未登录访问业务接口没有被拦成 401:', JSON.stringify(blocked.body));
+    process.exit(1);
+  }
+  console.log('✓ 改密之前业务接口回 401(不是 403)');
 
   expectOk(
-    'KC002 改密为种子密码',
-    await api('POST', '/auth/change-password', {
-      currentPassword: '123456',
+    'KC002 凭一次性凭证设置新密码',
+    await api('POST', '/auth/initial-password', {
+      setupToken: chenFirst.body.setupToken,
       newPassword: PASSWORD,
     }),
+  );
+  expectSessionEstablished(
+    'KC002 用新密码重新登录(这次才建立会话)',
+    await api('POST', '/auth/login', { employeeNo: 'KC002', password: PASSWORD }),
   );
 
   // ---- 5. 建内容 ----
@@ -327,14 +486,7 @@ async function main() {
 
   // 市场部的页面由孙浩自己建(他不是超管,但他是市场部所有者)
   console.log('\n—— 以孙浩(市场部部长)的身份创建内容 ——');
-  expectOk('KC005 登录', await api('POST', '/auth/login', { employeeNo: 'KC005', password: '123456' }));
-  expectOk(
-    'KC005 改密为种子密码',
-    await api('POST', '/auth/change-password', {
-      currentPassword: '123456',
-      newPassword: PASSWORD,
-    }),
-  );
+  await loginAs('KC005', INITIAL_PASSWORD, PASSWORD, '孙浩(KC005)');
   await createDoc('市场部工作方式', '市场部');
 
   // ---- 6. 评论(全体都能发;陈默发一条并回复一条) ----
@@ -344,7 +496,11 @@ async function main() {
   });
   expectOk('孙浩在市场部页面留言', marketComment);
 
-  expectOk('KC002 登录', await api('POST', '/auth/login', { employeeNo: 'KC002', password: PASSWORD }));
+  forgetSession();
+  expectSessionEstablished(
+    'KC002 登录',
+    await api('POST', '/auth/login', { employeeNo: 'KC002', password: PASSWORD }),
+  );
   const techComment = expectOk(
     '陈默在「技术方案」留言',
     await api('POST', `/nodes/${created.get('技术方案')}/comments`, {
@@ -364,12 +520,7 @@ async function main() {
     '读取「接口规范」的授权视图',
     await api('GET', `/nodes/${created.get('接口规范')}/grants`),
   );
-  const users = expectOk('读取人员列表', await api('GET', '/admin/users'));
-  const zhao = users.find((user) => user.employeeNo === 'KC004');
-  if (zhao === undefined) {
-    console.error('✗ 找不到 KC004 赵敏');
-    process.exit(1);
-  }
+  // 赵敏的 id 在第 3.5 步(超管阶段)就取好了 —— 名册是超管专属,这里读不到。
   const grantResult = await api('PUT', `/nodes/${created.get('接口规范')}/grants`, {
     version: grants.version,
     userIds: [zhao.id],
@@ -400,11 +551,11 @@ async function main() {
     '─────  ─────  ────────────────────────────  ───────────────  ──────────',
     `KC001  林晓    超级管理员                    ${ADMIN_PASSWORD.padEnd(15)}  否`,
     `KC002  陈默    技术部部长                    ${PASSWORD.padEnd(15)}  否`,
-    'KC003  王思远  后端组组长 + CRM 项目组长     123456            是 ←',
-    'KC004  赵敏    技术部 / 后端组 组员         123456            是 ←',
+    `KC003  王思远  后端组组长 + CRM 项目组长     ${INITIAL_PASSWORD.padEnd(15)}  是 ←`,
+    `KC004  赵敏    技术部 / 后端组 组员          ${INITIAL_PASSWORD.padEnd(15)}  是 ←`,
     `KC005  孙浩    市场部部长                    ${PASSWORD.padEnd(15)}  否`,
     '',
-    '⚠️ KC003 / KC004 的初始密码是 123456。用它登录**不会直接进入系统** ——',
+    `⚠️ KC003 / KC004 的初始密码是 ${INITIAL_PASSWORD}。用它登录**不会直接进入系统** ——`,
     '   而是跳到「设置你的密码」页;设完回登录页,**再用新密码登录一次**才进得去。',
     '   (首次登录不记录登录状态,这是刻意的,不是故障。)改完请记住你自己设的那个。',
     '',

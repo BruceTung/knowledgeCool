@@ -1,0 +1,67 @@
+# 知源 KnowledgeCool · CI
+#
+# ⚠️ 这个文件补的是一个**长期存在的缺口**:在它之前仓库里**没有任何 CI**,
+# 于是 `pnpm check` / `pnpm build` 全凭"提交的人记得跑"。
+# 结果是两件事同时发生而没人发现:
+#   · `pnpm typecheck` 在干净检出上**必然失败**(两个 app 经包入口引用
+#     `packages/shared` 的 dist,而它还没构建);
+#   · 58 个文件的格式化早已漂移。
+# 门禁的价值全在"每次都会跑"。靠人不靠机制,等于没有门禁。
+#
+# 跑的东西与本地**完全一致**(§12 的约定):
+#   db:generate → check(typecheck + lint + format:check + audit:docs) → build
+# 这里刻意不另写一套命令,否则 CI 绿而本地红(或反过来)就成了新的漂移源。
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# 同一分支连续推送时取消上一次,省 runner 也省等待
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 22 = 生产镜像用的那一档(DESIGN.md §2.2:镜像用 node:22-alpine)
+        # 24 = 当前开发机与 @types/node 对齐的那一档
+        # 两个都跑,是为了让"本地能跑、镜像里跑不了"这类差异在 CI 就暴露。
+        node-version: [22, 24]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # 版本从 package.json 的 packageManager 字段读,不再抄一份
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: pnpm
+
+      # 锁定文件必须与 package.json 一致 —— 不一致就直接失败,
+      # 而不是"顺便帮你更新一下"(那会让 CI 悄悄改掉依赖版本)
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      # api 的类型检查依赖 Prisma 生成的客户端(src/generated/prisma),
+      # 那份代码不在仓库里,必须先生成
+      - name: 生成 Prisma 客户端
+        run: pnpm db:generate
+
+      # typecheck + lint + format:check + audit:docs(含文档漂移、字号刻度、
+      # 文档数量、前端路径↔后端路由等十二项机检)
+      - name: 门禁
+        run: pnpm check
+
+      # 门禁不覆盖打包,单独跑一次 —— nest build 与 vite build 各自有
+      # 只在真打包时才暴露的问题(例如 ESM 扩展名、缺失的运行时依赖)
+      - name: 构建
+        run: pnpm build

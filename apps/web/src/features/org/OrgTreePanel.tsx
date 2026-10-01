@@ -195,7 +195,9 @@ export function OrgTreePanel({
 
   /** 我的组织归属覆盖到的节点集合(含各自子树)。 */
   function assignedWithin(nodeId: string): boolean {
-    return scopes.some((scope) => scope.nodeId === nodeId || isInsideSubtree(nodes, scope.nodeId, nodeId));
+    return scopes.some(
+      (scope) => scope.nodeId === nodeId || isInsideSubtree(nodes, scope.nodeId, nodeId),
+    );
   }
 
   /**
@@ -298,7 +300,8 @@ export function OrgTreePanel({
 
   function handleDelete(node: OrgTreeNode): void {
     const size = countNodes([node]);
-    const label = size > 1 ? `「${node.title}」及其下 ${String(size - 1)} 个节点` : `「${node.title}」`;
+    const label =
+      size > 1 ? `「${node.title}」及其下 ${String(size - 1)} 个节点` : `「${node.title}」`;
     // ⚠️ v2.12 起删除是**物理删除、不可恢复**,确认语必须说清后果。
     // 原来说的是"移入回收站"(可恢复),在回收站被移除之后那句话会骗人。
     if (!window.confirm(`确定删除 ${label}?\n\n此操作不可恢复,内容将永久丢失。`)) return;

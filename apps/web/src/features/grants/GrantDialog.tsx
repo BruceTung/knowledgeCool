@@ -24,7 +24,9 @@ import { useGrantCandidates, useNodeGrants, useSaveGrants } from './queries';
 
 function DepartedBadge() {
   return (
-    <span className={`ml-1 rounded bg-amber-50 px-1 text-amber-700 ring-1 ring-amber-200 ${T_META}`}>
+    <span
+      className={`ml-1 rounded bg-amber-50 px-1 text-amber-700 ring-1 ring-amber-200 ${T_META}`}
+    >
       已离职
     </span>
   );
@@ -144,7 +146,11 @@ export function GrantDialog({
               if (grants.data === undefined) return;
               save.mutate(
                 { version: grants.data.version, userIds: rows.map((row) => row.userId) },
-                { onSuccess: () => { setDraft(null); } },
+                {
+                  onSuccess: () => {
+                    setDraft(null);
+                  },
+                },
               );
             }}
           >
@@ -153,160 +159,157 @@ export function GrantDialog({
         </>
       }
     >
-          {grants.isError && <ErrorNote error={grants.error} />}
-          {grants.isPending && <p className="text-sm text-slate-500">加载中…</p>}
+      {grants.isError && <ErrorNote error={grants.error} />}
+      {grants.isPending && <p className="text-sm text-slate-500">加载中…</p>}
 
-          {grants.data !== undefined && (
-            <>
-              {/* ---------- 第 1 段:所有者 ---------- */}
-              <div>
-                <div className="mb-1 text-sm font-medium text-slate-700">所有者</div>
-                <p className="mb-2 text-xs leading-relaxed text-slate-500">
-                  每个节点都有且只有一个所有者。部门的所有者就是部长,组长由部长任命。
-                </p>
-                {canAppointOwner && !canManage && (
-                  <p className="mb-2 text-xs leading-relaxed text-amber-700">
-                    你是超级管理员,所以能换部长;但你不是这个部门的内容所有者,
-                    下面的授权名单你改不了 —— 组织权限与内容权限是分开的两件事。
-                  </p>
-                )}
+      {grants.data !== undefined && (
+        <>
+          {/* ---------- 第 1 段:所有者 ---------- */}
+          <div>
+            <div className="mb-1 text-sm font-medium text-slate-700">所有者</div>
+            <p className="mb-2 text-xs leading-relaxed text-slate-500">
+              每个节点都有且只有一个所有者。部门的所有者就是部长,组长由部长任命。
+            </p>
+            {canAppointOwner && !canManage && (
+              <p className="mb-2 text-xs leading-relaxed text-amber-700">
+                你是超级管理员,所以能换部长;但你不是这个部门的内容所有者, 下面的授权名单你改不了 ——
+                组织权限与内容权限是分开的两件事。
+              </p>
+            )}
+            <PersonRow
+              name={grants.data.owner.name}
+              employeeNo={grants.data.owner.employeeNo}
+              departed={grants.data.owner.departed}
+            />
+            {canAppointOwner && (
+              <div className="mt-2 flex gap-2">
+                <SelectField
+                  value={ownerPicker}
+                  onChange={(event) => setOwnerPicker(event.target.value)}
+                  aria-label="选择新的所有者"
+                >
+                  <option value="">更换所有者为…</option>
+                  {(owners.data ?? []).map((candidate) => (
+                    <option key={candidate.userId} value={candidate.userId}>
+                      {candidate.name}（{candidate.employeeNo}）
+                      {candidate.scopePaths.length > 0 && ` · ${candidate.scopePaths.join('、')}`}
+                    </option>
+                  ))}
+                </SelectField>
+                <Button
+                  variant="secondary"
+                  className="flex-none"
+                  disabled={ownerPicker === '' || setOwner.isPending}
+                  onClick={() => {
+                    setOwner.mutate(ownerPicker, {
+                      onSuccess: () => {
+                        setOwnerPicker('');
+                      },
+                    });
+                  }}
+                >
+                  更换
+                </Button>
+              </div>
+            )}
+            <ErrorNote error={setOwner.error} />
+          </div>
+
+          {/* ---------- 第 2 段:祖先链上的所有者 ---------- */}
+          <div>
+            <div className="mb-1 text-sm font-medium text-slate-700">
+              上级所有者 · {grants.data.inherited.length}
+            </div>
+            <p className="mb-2 text-xs leading-relaxed text-slate-500">
+              他们能改这一篇,是因为在上级链上拥有所有权(例如部长对本部门的全部内容)。
+              <b>不能在这里移除</b> —— 要改变这一点只能调整组织架构或所有者。
+            </p>
+            {grants.data.inherited.length === 0 ? (
+              <p className="text-xs text-slate-500">这是顶层节点,没有上级所有者。</p>
+            ) : (
+              grants.data.inherited.map((item) => (
                 <PersonRow
-                  name={grants.data.owner.name}
-                  employeeNo={grants.data.owner.employeeNo}
-                  departed={grants.data.owner.departed}
+                  key={item.nodeId}
+                  name={item.ownerName}
+                  employeeNo=""
+                  departed={item.departed}
+                  note={`来自「${item.title}」`}
                 />
-                {canAppointOwner && (
-                  <div className="mt-2 flex gap-2">
-                    <SelectField
-                      value={ownerPicker}
-                      onChange={(event) => setOwnerPicker(event.target.value)}
-                      aria-label="选择新的所有者"
-                    >
-                      <option value="">更换所有者为…</option>
-                      {(owners.data ?? []).map((candidate) => (
-                        <option key={candidate.userId} value={candidate.userId}>
-                          {candidate.name}（{candidate.employeeNo}）
-                          {candidate.scopePaths.length > 0 && ` · ${candidate.scopePaths.join('、')}`}
-                        </option>
-                      ))}
-                    </SelectField>
-                    <Button
-                      variant="secondary"
-                      className="flex-none"
-                      disabled={ownerPicker === '' || setOwner.isPending}
-                      onClick={() => {
-                        setOwner.mutate(ownerPicker, {
-                          onSuccess: () => {
-                            setOwnerPicker('');
-                          },
-                        });
-                      }}
-                    >
-                      更换
-                    </Button>
-                  </div>
-                )}
-                <ErrorNote error={setOwner.error} />
+              ))
+            )}
+          </div>
+
+          {/* ---------- 第 3 段:显式授权 ---------- */}
+          <div>
+            <div className="mb-1 text-sm font-medium text-slate-700">额外授权 · {rows.length}</div>
+            <p className="mb-2 text-xs leading-relaxed text-slate-500">
+              只影响<b>这一个节点</b>,不会往下传。收回权限就把人从名单里移除 ——
+              没有"拒绝访问"这种设置。
+            </p>
+
+            {rows.length === 0 ? (
+              <p className="text-xs text-slate-500">还没有额外授权。</p>
+            ) : (
+              rows.map((row) => (
+                <PersonRow
+                  key={row.userId}
+                  name={row.name}
+                  employeeNo={row.employeeNo}
+                  departed={row.departed}
+                  note={`由 ${row.grantedByName} 添加`}
+                  onRemove={
+                    canManage
+                      ? () => {
+                          setDraft(rows.filter((item) => item.userId !== row.userId));
+                        }
+                      : undefined
+                  }
+                />
+              ))
+            )}
+
+            {canManage && (
+              <div className="mt-2 flex gap-2">
+                <SelectField
+                  value={picker}
+                  onChange={(event) => setPicker(event.target.value)}
+                  aria-label="选择要授权的人"
+                >
+                  <option value="">选择要授权的人…</option>
+                  {(candidates.data ?? [])
+                    .filter((candidate) => !rows.some((row) => row.userId === candidate.userId))
+                    .map((candidate) => (
+                      <option key={candidate.userId} value={candidate.userId}>
+                        {candidate.name}（{candidate.employeeNo}）
+                        {candidate.scopePaths.length > 0 && ` · ${candidate.scopePaths.join('、')}`}
+                      </option>
+                    ))}
+                </SelectField>
+                <Button
+                  variant="secondary"
+                  className="flex-none"
+                  disabled={picker === ''}
+                  onClick={() => {
+                    const candidate = (candidates.data ?? []).find(
+                      (item) => item.userId === picker,
+                    );
+                    if (candidate === undefined) return;
+                    addCandidate(candidate);
+                    setPicker('');
+                  }}
+                >
+                  添加
+                </Button>
               </div>
-
-              {/* ---------- 第 2 段:祖先链上的所有者 ---------- */}
-              <div>
-                <div className="mb-1 text-sm font-medium text-slate-700">
-                  上级所有者 · {grants.data.inherited.length}
-                </div>
-                <p className="mb-2 text-xs leading-relaxed text-slate-500">
-                  他们能改这一篇,是因为在上级链上拥有所有权(例如部长对本部门的全部内容)。
-                  <b>不能在这里移除</b> —— 要改变这一点只能调整组织架构或所有者。
-                </p>
-                {grants.data.inherited.length === 0 ? (
-                  <p className="text-xs text-slate-500">这是顶层节点,没有上级所有者。</p>
-                ) : (
-                  grants.data.inherited.map((item) => (
-                    <PersonRow
-                      key={item.nodeId}
-                      name={item.ownerName}
-                      employeeNo=""
-                      departed={item.departed}
-                      note={`来自「${item.title}」`}
-                    />
-                  ))
-                )}
-              </div>
-
-              {/* ---------- 第 3 段:显式授权 ---------- */}
-              <div>
-                <div className="mb-1 text-sm font-medium text-slate-700">
-                  额外授权 · {rows.length}
-                </div>
-                <p className="mb-2 text-xs leading-relaxed text-slate-500">
-                  只影响<b>这一个节点</b>,不会往下传。收回权限就把人从名单里移除 ——
-                  没有"拒绝访问"这种设置。
-                </p>
-
-                {rows.length === 0 ? (
-                  <p className="text-xs text-slate-500">还没有额外授权。</p>
-                ) : (
-                  rows.map((row) => (
-                    <PersonRow
-                      key={row.userId}
-                      name={row.name}
-                      employeeNo={row.employeeNo}
-                      departed={row.departed}
-                      note={`由 ${row.grantedByName} 添加`}
-                      onRemove={
-                        canManage
-                          ? () => {
-                              setDraft(rows.filter((item) => item.userId !== row.userId));
-                            }
-                          : undefined
-                      }
-                    />
-                  ))
-                )}
-
-                {canManage && (
-                  <div className="mt-2 flex gap-2">
-                    <SelectField
-                      value={picker}
-                      onChange={(event) => setPicker(event.target.value)}
-                      aria-label="选择要授权的人"
-                    >
-                      <option value="">选择要授权的人…</option>
-                      {(candidates.data ?? [])
-                        .filter((candidate) => !rows.some((row) => row.userId === candidate.userId))
-                        .map((candidate) => (
-                          <option key={candidate.userId} value={candidate.userId}>
-                            {candidate.name}（{candidate.employeeNo}）
-                            {candidate.scopePaths.length > 0 &&
-                              ` · ${candidate.scopePaths.join('、')}`}
-                          </option>
-                        ))}
-                    </SelectField>
-                    <Button
-                      variant="secondary"
-                      className="flex-none"
-                      disabled={picker === ''}
-                      onClick={() => {
-                        const candidate = (candidates.data ?? []).find(
-                          (item) => item.userId === picker,
-                        );
-                        if (candidate === undefined) return;
-                        addCandidate(candidate);
-                        setPicker('');
-                      }}
-                    >
-                      添加
-                    </Button>
-                  </div>
-                )}
-                {canManage && candidates.data?.length === 0 && (
-                  <p className="mt-1 text-xs text-slate-500">
-                    没有可授权的人 —— 只能授权给你组织范围内的人。
-                  </p>
-                )}
-              </div>
-            </>
-          )}
+            )}
+            {canManage && candidates.data?.length === 0 && (
+              <p className="mt-1 text-xs text-slate-500">
+                没有可授权的人 —— 只能授权给你组织范围内的人。
+              </p>
+            )}
+          </div>
+        </>
+      )}
     </Modal>
   );
 }

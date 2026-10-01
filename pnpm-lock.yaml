@@ -251,9 +251,6 @@ importers:
       '@nestjs/schematics':
         specifier: ^12.0.5
         version: 12.0.5(chokidar@5.0.0)(prettier@3.9.9)(typescript@6.0.3)
-      '@nestjs/testing':
-        specifier: ^12.1.0
-        version: 12.1.0(@nestjs/common@12.1.0(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/core@12.1.0)(@nestjs/platform-express@12.1.0)
       '@swc/core':
         specifier: ^1.16.2
         version: 1.16.2
@@ -1008,19 +1005,6 @@ packages:
       typescript: '>=6.0.0'
     peerDependenciesMeta:
       prettier:
-        optional: true
-
-  '@nestjs/testing@12.1.0':
-    resolution: {integrity: sha512-OL6ar+p4BRy26YlOk6nqSchGShQajW0jaPSz2tvP7C3dLQcb26Wm0AG2IlvqIBoHuN3zQFMc5DoLAyiosPP4pw==}
-    peerDependencies:
-      '@nestjs/common': ^12.0.0
-      '@nestjs/core': ^12.0.0
-      '@nestjs/microservices': ^12.0.0
-      '@nestjs/platform-express': ^12.0.0
-    peerDependenciesMeta:
-      '@nestjs/microservices':
-        optional: true
-      '@nestjs/platform-express':
         optional: true
 
   '@node-rs/bcrypt-android-arm-eabi@1.10.9':
@@ -4510,14 +4494,6 @@ snapshots:
       prettier: 3.9.9
     transitivePeerDependencies:
       - chokidar
-
-  '@nestjs/testing@12.1.0(@nestjs/common@12.1.0(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/core@12.1.0)(@nestjs/platform-express@12.1.0)':
-    dependencies:
-      '@nestjs/common': 12.1.0(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1)
-      '@nestjs/core': 12.1.0(@nestjs/common@12.1.0(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/platform-express@12.1.0)(reflect-metadata@0.2.2)(rxjs@7.8.2)
-      tslib: 2.8.1
-    optionalDependencies:
-      '@nestjs/platform-express': 12.1.0(@nestjs/common@12.1.0(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/core@12.1.0)(supports-color@8.1.1)
 
   '@node-rs/bcrypt-android-arm-eabi@1.10.9':
     optional: true

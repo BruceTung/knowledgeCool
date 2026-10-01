@@ -35,9 +35,9 @@ export function escapeRegExp(value: string): string {
  */
 export function splitByQuery(text: string, query: string): HighlightSegment[] {
   const trimmed = query.trim();
-  if (trimmed === "" || text === "") return [{ text, hit: false }];
+  if (trimmed === '' || text === '') return [{ text, hit: false }];
 
-  const pattern = new RegExp(escapeRegExp(trimmed), "gi");
+  const pattern = new RegExp(escapeRegExp(trimmed), 'gi');
   const segments: HighlightSegment[] = [];
   let cursor = 0;
 

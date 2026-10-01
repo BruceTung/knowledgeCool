@@ -154,7 +154,15 @@ export function AppLayout() {
           onClick={() => setPaletteOpen(true)}
           className="flex w-80 flex-none items-center gap-2 rounded-lg border border-sky-400/20 bg-white/5 px-3 py-2 text-left text-slate-400 transition-colors hover:border-sky-400/40 hover:bg-white/10"
         >
-          <svg viewBox="0 0 16 16" aria-hidden className="h-4 w-4 flex-none" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round">
+          <svg
+            viewBox="0 0 16 16"
+            aria-hidden
+            className="h-4 w-4 flex-none"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={1.8}
+            strokeLinecap="round"
+          >
             <circle cx="7" cy="7" r="4.5" />
             <path d="M10.5 10.5 14 14" />
           </svg>
@@ -290,11 +298,7 @@ export function AppLayout() {
       )}
 
       {grantTarget !== null && (
-        <GrantDialog
-          nodeId={grantTarget.nodeId}
-          title={grantTarget.title}
-          onClose={closeGrants}
-        />
+        <GrantDialog nodeId={grantTarget.nodeId} title={grantTarget.title} onClose={closeGrants} />
       )}
 
       {visibilityTarget !== null && (

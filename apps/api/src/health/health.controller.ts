@@ -20,7 +20,7 @@ export class HealthController {
 
   /**
    * 存活探针。**永远**返回 200,只要进程还能响应。
-   * DESIGN.md §9 M1 的验收口径就是这一条。
+   * DESIGN.md §6.3 把两个健康接口分开了,这一条是 liveness(不碰外部依赖)。
    */
   @Get()
   @HttpCode(HttpStatus.OK)

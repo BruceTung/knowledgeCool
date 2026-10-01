@@ -42,23 +42,23 @@ export function App() {
       {/* 兜底包在路由**外面**:任何一页渲染抛错都不该变成白屏 */}
       <ErrorBoundary>
         <Routes>
-      <Route path="/setup" element={<SetupPage />} />
-      <Route path="/login" element={<LoginPage />} />
-      <Route path="/change-password" element={<ChangePasswordPage />} />
+          <Route path="/setup" element={<SetupPage />} />
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/change-password" element={<ChangePasswordPage />} />
 
-      <Route element={<RequireAuth />}>
-        <Route element={<AppLayout />}>
-          <Route path="/" element={<HomePage />} />
-          <Route path="/n/:nodeId" element={<NodeDetailPage />} />
-          <Route path="/search" element={<SearchPage />} />
-          <Route path="/audit" element={<AuditPage />} />
-          <Route path="/admin" element={<RequireSuperAdmin />}>
-            <Route path="/admin/org" element={<OrgAdminPage />} />
-            <Route path="/admin/users" element={<UsersAdminPage />} />
+          <Route element={<RequireAuth />}>
+            <Route element={<AppLayout />}>
+              <Route path="/" element={<HomePage />} />
+              <Route path="/n/:nodeId" element={<NodeDetailPage />} />
+              <Route path="/search" element={<SearchPage />} />
+              <Route path="/audit" element={<AuditPage />} />
+              <Route path="/admin" element={<RequireSuperAdmin />}>
+                <Route path="/admin/org" element={<OrgAdminPage />} />
+                <Route path="/admin/users" element={<UsersAdminPage />} />
+              </Route>
+              <Route path="*" element={<NotFound />} />
+            </Route>
           </Route>
-          <Route path="*" element={<NotFound />} />
-        </Route>
-      </Route>
         </Routes>
       </ErrorBoundary>
 

@@ -70,7 +70,7 @@ export interface SaveContentInput {
   baseUpdatedAt?: string;
 }
 
-/** 导出格式。阶段一只做 Markdown —— PDF 需要额外依赖,不在 M6 范围内。 */
+/** 导出格式。阶段一只做 Markdown —— PDF 需要额外依赖,不在当前范围内。 */
 export const EXPORT_FORMATS = ['md'] as const;
 export type ExportFormat = (typeof EXPORT_FORMATS)[number];
 

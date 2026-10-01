@@ -59,13 +59,13 @@ export function pushSearchTerm(
 ): string[] {
   const trimmed = term.trim();
   // 空词不进历史:回车一次空搜索就多一条垃圾记录,而且删不掉
-  if (trimmed === "") return [...list];
+  if (trimmed === '') return [...list];
   return [trimmed, ...list.filter((item) => item !== trimmed)].slice(0, max);
 }
 
 /** 从 JSON 里安全读出列表 —— 坏数据一律当空列表,绝不让它把页面弄崩。 */
 export function parseStoredList<T>(raw: string | null, guard: (value: unknown) => value is T): T[] {
-  if (raw === null || raw === "") return [];
+  if (raw === null || raw === '') return [];
   try {
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
@@ -76,15 +76,13 @@ export function parseStoredList<T>(raw: string | null, guard: (value: unknown) =
 }
 
 export function isRecentEntry(value: unknown): value is RecentEntry {
-  if (typeof value !== "object" || value === null) return false;
+  if (typeof value !== 'object' || value === null) return false;
   const item = value as { id?: unknown; title?: unknown; at?: unknown };
   return (
-    typeof item.id === "string" &&
-    typeof item.title === "string" &&
-    typeof item.at === "number"
+    typeof item.id === 'string' && typeof item.title === 'string' && typeof item.at === 'number'
   );
 }
 
 export function isString(value: unknown): value is string {
-  return typeof value === "string";
+  return typeof value === 'string';
 }

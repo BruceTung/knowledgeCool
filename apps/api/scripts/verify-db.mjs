@@ -1,5 +1,5 @@
 /**
- * 数据库契约自检 —— M1 验收用,v2.0 已按新模型更新。
+ * 数据库契约自检 —— 建库 / 迁移之后的验收用,v2.0 已按新模型更新。
  *
  * 为什么用原生 pg 而不是 Prisma Client:
  * 这是个**验收脚本**,要能在 Prisma Client 生成失败、甚至依赖装了一半的情况下
@@ -24,6 +24,14 @@ const REQUIRED_TABLES = [
   // v2.0 新增的两张关系表
   'org_assignments',
   'node_grants',
+  /**
+   * ⚠️ v2.12 的保密能力(v2.15 补进本清单)。
+   *
+   * 原来这里**没有** `node_readers` —— 于是"受限节点的读者名单表整张丢了"
+   * 这件事在本自检里是看不见的,而它恰恰是保密功能的唯一载体。
+   * 一张表没了却报告"契约通过",比自检跑不起来更危险。
+   */
+  'node_readers',
   'comments',
   'audit_logs',
 ];
@@ -33,13 +41,7 @@ const REQUIRED_TABLES = [
  * `pages` / `page_contents` —— 它们在 v2.0 被废除。
  * 如果哪天有人把它们加回来,说明有人在往回改模型,应该先改 DESIGN。
  */
-const FORBIDDEN_TABLES = [
-  'spaces',
-  'space_members',
-  'page_permissions',
-  'pages',
-  'page_contents',
-];
+const FORBIDDEN_TABLES = ['spaces', 'space_members', 'page_permissions', 'pages', 'page_contents'];
 
 /**
  * v2.12 起**必须不存在**的结构 —— 回收站被整体移除了。
@@ -64,9 +66,18 @@ const REQUIRED_CHECKS = [
   'users_status_check',
   'nodes_kind_check',
   'nodes_status_check',
+  /**
+   * ⚠️ v2.12 的 `visibility` 取值约束(v2.15 补进本清单)。
+   *
+   * 少了这条 CHECK,`nodes.visibility` 就能被写进任意字符串 ——
+   * 而判定的写法是 `visibility === 'restricted'`(见 shared 的 `canRead`),
+   * 于是一个**拼错的取值会让所有人都能读**(静默失守,不留痕迹)。
+   * 数据库层是这个取值集合唯一说得上"被强制"的地方。
+   */
+  'nodes_visibility_check',
   // ⚠️ 这里**没有** `comments_status_check` —— 评论的 `status` 列(v2.4)已被删除。
   // 评论就是评论,不是"问题单":那套 open/resolved 的语义连同列一起去掉了。
-  // 详见 DESIGN §8.4 与 `packages/shared/src/comment.ts` 的说明。
+  // 详见 DESIGN §5.4 与 `packages/shared/src/comment.ts` 的说明。
 ];
 
 const connectionString = process.env.DATABASE_URL;

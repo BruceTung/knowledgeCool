@@ -23,7 +23,7 @@ export interface AppConfiguration {
   /**
    * 会话 Cookie 是否带 Secure 属性。
    * 默认跟随 NODE_ENV=production 打开(DESIGN.md §2.4 要求内网也上 HTTPS)。
-   * TLS 要到 M6 才落地,在那之前若走 http 访问(例如本机 compose 验收),
+   * HTTPS 尚未启用(DESIGN.md §2.4 要求内网也上 HTTPS),在那之前若走 http 访问(例如本机 compose 验收),
    * 必须显式设 SESSION_COOKIE_SECURE=false,否则浏览器不会回传 Cookie。
    */
   sessionCookieSecure: boolean;

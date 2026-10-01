@@ -73,8 +73,10 @@ export class AllExceptionsFilter implements ExceptionFilter {
     // 2) 框架抛的 HTTP 异常:映射成统一错误码,文案用默认中文。
     if (exception instanceof HttpException) {
       const status = exception.getStatus();
-      const code = STATUS_TO_CODE[status] ?? (status >= 500 ? 'INTERNAL_ERROR' : 'VALIDATION_FAILED');
-      const details = code === 'VALIDATION_FAILED' ? extractValidationDetails(exception) : undefined;
+      const code =
+        STATUS_TO_CODE[status] ?? (status >= 500 ? 'INTERNAL_ERROR' : 'VALIDATION_FAILED');
+      const details =
+        code === 'VALIDATION_FAILED' ? extractValidationDetails(exception) : undefined;
 
       // ⚠️ 一律用 §6.1 的默认文案,**不透传** exception.message。
       //

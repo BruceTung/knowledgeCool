@@ -98,7 +98,10 @@ export class UploadController {
         },
         filename: (_req, file, cb) => {
           // 服务端生成文件名:不信任用户传来的名字(可能含路径分隔符)
-          cb(null, `${randomUUID()}${isAllowedExtension(file.originalname) ? safeExtension(file.originalname) : ''}`);
+          cb(
+            null,
+            `${randomUUID()}${isAllowedExtension(file.originalname) ? safeExtension(file.originalname) : ''}`,
+          );
         },
       }),
       limits: { fileSize: MAX_UPLOAD_BYTES, files: 1 },

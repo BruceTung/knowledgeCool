@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * 从**代码**生成文档里的事实性表格(接口 / 数据模型 / 环境变量 / 前端路由 / 脚本)。
+ * 从**代码**生成文档里的事实性表格(接口 / 数据模型 / 环境变量 / 前端路由)。
  *
  * ## 为什么要有这个脚本
  *
@@ -40,7 +40,8 @@ function read(rel) {
 
 function findFiles(dir, suffix, out = []) {
   for (const entry of readdirSync(join(ROOT, dir), { withFileTypes: true })) {
-    if (entry.name === 'node_modules' || entry.name === 'generated' || entry.name === 'dist') continue;
+    if (entry.name === 'node_modules' || entry.name === 'generated' || entry.name === 'dist')
+      continue;
     const rel = dir + '/' + entry.name;
     if (entry.isDirectory()) findFiles(rel, suffix, out);
     else if (entry.name.endsWith(suffix)) out.push(rel);
@@ -74,7 +75,10 @@ function firstStringArg(text) {
   const rest = text.slice(open + 1, parenEnd < 0 ? text.length : parenEnd);
   let quote = -1;
   for (let i = 0; i < rest.length; i += 1) {
-    if (rest[i] === SQ || rest[i] === DQ) { quote = i; break; }
+    if (rest[i] === SQ || rest[i] === DQ) {
+      quote = i;
+      break;
+    }
   }
   if (quote < 0) return '';
   const ch = rest[quote];
@@ -99,22 +103,38 @@ function extractRoutes() {
         const after = src.slice(i + needle.length, i + needle.length + 200);
         if (after[0] !== '(') continue;
         const sub = firstStringArg(after);
-        const full = ('/' + [prefix, sub].filter((s) => s !== '').join('/'));
+        const full = '/' + [prefix, sub].filter((s) => s !== '').join('/');
         rows.push({ method: method.toUpperCase(), path: full, file: rel });
       }
     }
   }
-  return rows.sort((a, b) => ((a.path + a.method) < (b.path + b.method) ? -1 : 1));
+  return rows.sort((a, b) => (a.path + a.method < b.path + b.method ? -1 : 1));
 }
 
 function renderRoutes() {
   const rows = extractRoutes();
   const out = ['| 方法 | 路径 | 实现 |', '|---|---|---|'];
   for (const r of rows) {
-    out.push('| ' + r.method + ' | ' + '`' + r.path + '`' + ' | ' + '`' + r.file.replace('apps/api/src/', '') + '`' + ' |');
+    out.push(
+      '| ' +
+        r.method +
+        ' | ' +
+        '`' +
+        r.path +
+        '`' +
+        ' | ' +
+        '`' +
+        r.file.replace('apps/api/src/', '') +
+        '`' +
+        ' |',
+    );
   }
   out.push('');
-  out.push('共 **' + String(rows.length) + '** 条。前缀 `/api/v1` 由 `app-setup.ts` 统一加;本表由 `scripts/gen-doc.mjs` 从控制器生成,`pnpm audit:docs` 会校验它是否与代码一致。');
+  out.push(
+    '共 **' +
+      String(rows.length) +
+      '** 条。前缀 `/api/v1` 由 `app-setup.ts` 统一加;本表由 `scripts/gen-doc.mjs` 从控制器生成,`pnpm audit:docs` 会校验它是否与代码一致。',
+  );
   return out.join('\n');
 }
 
@@ -139,8 +159,12 @@ function extractModels() {
       if (src[scan] !== '}') continue;
       // 行首(允许前面只有空白)
       let back = scan - 1;
-      while (back > braceOpen && (src[back] === ' ' || src[back] === String.fromCharCode(9))) back -= 1;
-      if (src[back] === String.fromCharCode(10)) { braceClose = scan; break; }
+      while (back > braceOpen && (src[back] === ' ' || src[back] === String.fromCharCode(9)))
+        back -= 1;
+      if (src[back] === String.fromCharCode(10)) {
+        braceClose = scan;
+        break;
+      }
     }
     if (braceOpen < 0 || braceClose < 0) break;
     cursor = braceClose + 1;
@@ -169,10 +193,15 @@ function renderModels() {
     out.push('');
     out.push('| 字段 | 类型 |');
     out.push('|---|---|');
-    for (const f of m.fields) out.push('| ' + '`' + f.name + '`' + ' | ' + '`' + f.type + '`' + ' |');
+    for (const f of m.fields)
+      out.push('| ' + '`' + f.name + '`' + ' | ' + '`' + f.type + '`' + ' |');
     out.push('');
   }
-  out.push('共 **' + String(models.length) + '** 张表。由 `scripts/gen-doc.mjs` 从 `schema.prisma` 生成,`pnpm audit:docs` 校验一致性。');
+  out.push(
+    '共 **' +
+      String(models.length) +
+      '** 张表。由 `scripts/gen-doc.mjs` 从 `schema.prisma` 生成,`pnpm audit:docs` 校验一致性。',
+  );
   return out.join('\n');
 }
 
@@ -214,15 +243,16 @@ function extractEnv() {
 
 function renderEnv() {
   const rows = extractEnv();
-  const out = [
-    '| 环境变量 | 默认值 / 取值 |',
-    '|---|---|',
-  ];
+  const out = ['| 环境变量 | 默认值 / 取值 |', '|---|---|'];
   for (const r of rows) {
     out.push('| ' + '`' + r.key + '`' + ' | ' + '`' + r.expr.split('|').join('\\|') + '`' + ' |');
   }
   out.push('');
-  out.push('共 **' + String(rows.length) + '** 个。由 `scripts/gen-doc.mjs` 从 `configuration.ts` 生成;与 `.env.example` 的双向比对由 `pnpm audit:docs` 负责。');
+  out.push(
+    '共 **' +
+      String(rows.length) +
+      '** 个。由 `scripts/gen-doc.mjs` 从 `configuration.ts` 生成;与 `.env.example` 的双向比对由 `pnpm audit:docs` 负责。',
+  );
   return out.join('\n');
 }
 
@@ -256,10 +286,7 @@ function extractPages() {
 
 function renderPages() {
   const rows = extractPages();
-  const out = [
-    '| 路径 | 组件 |',
-    '|---|---|',
-  ];
+  const out = ['| 路径 | 组件 |', '|---|---|'];
   for (const r of rows) {
     out.push('| ' + '`' + r.path + '`' + ' | ' + '`' + r.el + '`' + ' |');
   }
@@ -281,11 +308,29 @@ const BLOCKS = {
 };
 
 /**
+ * Prettier 的**区域忽略**标记(Markdown 支持)。
+ *
+ * 生成的表格包在它们之间,理由见 `replaceBlock`。
+ */
+const IGNORE_START = '<!-- prettier-ignore-start -->';
+const IGNORE_END = '<!-- prettier-ignore-end -->';
+
+/**
  * 把文档里某个生成块替换成新内容。
  *
  * ⚠️ 找不到标记就直接抛错,而不是"跳过这一块"。
  * 静默跳过的话,某天有人删了标记,校验会**永远通过** —— 而文档已经不再被生成覆盖,
  * 那正是旧文档烂掉的起点(没人发现它不再对账了)。
+ *
+ * ⚠️ 生成的内容外面再包一层 **`<!-- prettier-ignore-start/end -->`**。
+ * 原因是两份门禁对同一段文本提出了**互相冲突**的要求:
+ *   · 这里(和 `audit-docs` 的 `--check`)要求它**逐字等于生成器的输出**;
+ *   · Prettier 会把 Markdown 表格的每一列补齐到等宽,还会合并标题里的多余空格。
+ * 两者同时开着必然有一个是红的 —— 实测:跑一次 `prettier --write DESIGN.md`
+ * 之后 `gen-doc.mjs --check` 立刻失败(250 行落在生成块内)。
+ *
+ * 用 Prettier 自己的区域忽略标记圈起来,两边就都成立;而且标记是**生成器写出来的**,
+ * 所以"改了代码就跑 gen-doc"这个约定动作不会把格式弄坏。
  */
 function replaceBlock(text, name, body) {
   const begin = beginMarker(name);
@@ -295,7 +340,9 @@ function replaceBlock(text, name, body) {
   if (i < 0 || j < 0 || j < i) {
     throw new Error('文档里缺少生成块标记: ' + name + '(需要 ' + begin + ' 与 ' + end + ')');
   }
-  return text.slice(0, i + begin.length) + String.fromCharCode(10) + body + String.fromCharCode(10) + text.slice(j);
+  const NL = String.fromCharCode(10);
+  const wrapped = [IGNORE_START, body, IGNORE_END].join(NL);
+  return text.slice(0, i + begin.length) + NL + wrapped + NL + text.slice(j);
 }
 
 function renderAll(text) {

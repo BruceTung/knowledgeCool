@@ -1,5 +1,5 @@
 /**
- * ProseMirror 文档树 → Markdown 导出器(M6 · 页面导出)。
+ * ProseMirror 文档树 → Markdown 导出器(页面导出,§6.2)。
  *
  * 为什么不用现成的库:导出格式要做**产品级决策**(代码块围栏用什么、
  * 表格要不要转 GFM、嵌套列表缩进几格),而这些决策写在一处比藏在依赖里好。
@@ -49,7 +49,10 @@ function block(node: ProseMirrorNode, indent: number): string {
       return `${pad}${inline(node)}\n\n`;
 
     case 'blockquote': {
-      const inner = (node.content ?? []).map((child) => block(child, 0)).join('').trimEnd();
+      const inner = (node.content ?? [])
+        .map((child) => block(child, 0))
+        .join('')
+        .trimEnd();
       return `${inner
         .split('\n')
         .map((line) => `${pad}> ${line}`.trimEnd())
@@ -103,7 +106,10 @@ function list(
 
   const lines = items.map((item, index) => {
     const marker = bullet(index, item);
-    const raw = (item.content ?? []).map((child) => block(child, indent + 1)).join('').trimEnd();
+    const raw = (item.content ?? [])
+      .map((child) => block(child, indent + 1))
+      .join('')
+      .trimEnd();
 
     const parts = raw.split('\n');
     // ⚠️ block() 给**第一行**也加了块级缩进,但列表标记本身就提供缩进 ——

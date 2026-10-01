@@ -24,8 +24,8 @@ export function AuditPage() {
     <div className="mx-auto max-w-4xl px-8 py-8">
       <h1 className="text-lg font-semibold text-slate-900">审计日志</h1>
       <p className="mt-1 text-sm leading-relaxed text-slate-500">
-        只写不删。登录、节点变更、所有者变更、授权调整、评论都会留痕。
-        你能看到的是<b>你拥有所有权的节点</b>范围内的记录;超级管理员看到全部。
+        只写不删。登录、节点变更、所有者变更、授权调整、评论都会留痕。 你能看到的是
+        <b>你拥有所有权的节点</b>范围内的记录;超级管理员看到全部。
       </p>
 
       {/*
@@ -111,11 +111,21 @@ export function AuditPage() {
                   单元格关联起来,于是它念数据时只说「技术部, 2026/9/27, 修改可见范围」,
                   而不说哪一列是什么 —— 一张五列的表等于没法读。
                 */}
-                <th scope="col" className="py-2 font-normal">时间</th>
-                <th scope="col" className="py-2 font-normal">操作者</th>
-                <th scope="col" className="py-2 font-normal">动作</th>
-                <th scope="col" className="py-2 font-normal">目标</th>
-                <th scope="col" className="py-2 font-normal">来源 IP</th>
+                <th scope="col" className="py-2 font-normal">
+                  时间
+                </th>
+                <th scope="col" className="py-2 font-normal">
+                  操作者
+                </th>
+                <th scope="col" className="py-2 font-normal">
+                  动作
+                </th>
+                <th scope="col" className="py-2 font-normal">
+                  目标
+                </th>
+                <th scope="col" className="py-2 font-normal">
+                  来源 IP
+                </th>
               </tr>
             </thead>
             <tbody>

@@ -156,8 +156,7 @@ export function useOwnerCandidates(nodeId: string | undefined, enabled: boolean)
 export function useSetOwner(nodeId: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (ownerId: string) =>
-      apiSend<void>('PATCH', `/nodes/${nodeId}/owner`, { ownerId }),
+    mutationFn: (ownerId: string) => apiSend<void>('PATCH', `/nodes/${nodeId}/owner`, { ownerId }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['org'] });
       void queryClient.invalidateQueries({ queryKey: ['node', nodeId] });
@@ -165,7 +164,7 @@ export function useSetOwner(nodeId: string) {
   });
 }
 
-// ---------------- Excel 导入(§8.5) ----------------
+// ---------------- Excel 导入(§8.4) ----------------
 
 export function useImportTemplate() {
   return useMutation({

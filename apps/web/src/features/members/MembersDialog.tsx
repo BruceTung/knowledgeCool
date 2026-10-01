@@ -1,5 +1,5 @@
 /**
- * 节点成员弹窗(v2.4)—— DESIGN.md §8.5「调岗两步」的第二步。
+ * 节点成员弹窗(v2.4)—— DESIGN.md §8.4「调岗两步」的第二步。
  *
  * ## 它补的是哪个洞
  *
@@ -30,7 +30,12 @@ import { Modal } from '../../components/Modal';
 import { Button, ErrorNote, SelectField } from '../../components/ui';
 import { useModalOpen } from '../../lib/modal-store';
 import { T_META } from '../../lib/typography';
-import { useAddNodeMember, useMemberCandidates, useNodeMembers, useRemoveNodeMember } from './queries';
+import {
+  useAddNodeMember,
+  useMemberCandidates,
+  useNodeMembers,
+  useRemoveNodeMember,
+} from './queries';
 import { describeRemoval } from './removal-note';
 
 function StatusBadge({ status }: { status: NodeMemberView['status'] }) {
@@ -69,12 +74,16 @@ function MemberRow({
           {member.name}
           <StatusBadge status={member.status} />
           {member.isOwnerHere && (
-            <span className={`ml-1 rounded bg-blue-50 px-1 text-blue-700 ring-1 ring-blue-200 ${T_META}`}>
+            <span
+              className={`ml-1 rounded bg-blue-50 px-1 text-blue-700 ring-1 ring-blue-200 ${T_META}`}
+            >
               本节点所有者
             </span>
           )}
           {!member.isOwnerHere && member.isAncestorOwner && (
-            <span className={`ml-1 rounded bg-violet-50 px-1 text-violet-700 ring-1 ring-violet-200 ${T_META}`}>
+            <span
+              className={`ml-1 rounded bg-violet-50 px-1 text-violet-700 ring-1 ring-violet-200 ${T_META}`}
+            >
               上级所有者
             </span>
           )}
@@ -124,9 +133,7 @@ export function MembersDialog({
   const inherited = members.data?.inherited ?? [];
   const directIds = new Set(direct.map((member) => member.userId));
 
-  const addable = (candidates.data ?? []).filter(
-    (candidate) => !directIds.has(candidate.userId),
-  );
+  const addable = (candidates.data ?? []).filter((candidate) => !directIds.has(candidate.userId));
 
   return (
     <Modal
@@ -143,111 +150,109 @@ export function MembersDialog({
         </>
       }
     >
-          {members.isError && <ErrorNote error={members.error} />}
-          {members.isPending && <p className="text-sm text-slate-500">加载中…</p>}
+      {members.isError && <ErrorNote error={members.error} />}
+      {members.isPending && <p className="text-sm text-slate-500">加载中…</p>}
 
-          {members.data !== undefined && (
-            <>
-              {/* ---------- 第 1 段:直接成员 ---------- */}
-              <div>
-                <div className="mb-1 text-sm font-medium text-slate-700">
-                  直接成员 · {direct.length}
-                </div>
-                <p className="mb-2 text-xs leading-relaxed text-slate-500">
-                  他们的<b>组织归属</b>直接挂在这个节点上。这里管的是归属,
-                  不是权限 —— 归属决定"他能授权给谁",权限在另一个弹窗里。
-                </p>
+      {members.data !== undefined && (
+        <>
+          {/* ---------- 第 1 段:直接成员 ---------- */}
+          <div>
+            <div className="mb-1 text-sm font-medium text-slate-700">
+              直接成员 · {direct.length}
+            </div>
+            <p className="mb-2 text-xs leading-relaxed text-slate-500">
+              他们的<b>组织归属</b>直接挂在这个节点上。这里管的是归属, 不是权限 ——
+              归属决定"他能授权给谁",权限在另一个弹窗里。
+            </p>
 
-                {direct.length === 0 ? (
-                  <p className="text-xs text-slate-500">
-                    还没有人归属在这个节点上。
-                  </p>
-                ) : (
-                  direct.map((member) => (
-                    <MemberRow
-                      key={member.userId}
-                      member={member}
-                      showPaths={member.memberPaths}
-                      removing={remove.isPending}
-                      onRemove={
-                        canManage
-                          ? () => {
-                              if (!window.confirm(describeRemoval(member, title))) return;
-                              remove.mutate(member.userId);
-                            }
-                          : undefined
-                      }
-                    />
-                  ))
-                )}
+            {direct.length === 0 ? (
+              <p className="text-xs text-slate-500">还没有人归属在这个节点上。</p>
+            ) : (
+              direct.map((member) => (
+                <MemberRow
+                  key={member.userId}
+                  member={member}
+                  showPaths={member.memberPaths}
+                  removing={remove.isPending}
+                  onRemove={
+                    canManage
+                      ? () => {
+                          if (!window.confirm(describeRemoval(member, title))) return;
+                          remove.mutate(member.userId);
+                        }
+                      : undefined
+                  }
+                />
+              ))
+            )}
 
-                {canManage && (
-                  <div className="mt-3 flex gap-2">
-                    <SelectField
-                      value={picker}
-                      onChange={(event) => {
-                        setPicker(event.target.value);
-                      }}
-                      aria-label="选择要加入的人"
-                    >
-                      <option value="">添加成员…</option>
-                      {addable.map((candidate) => (
-                        <option key={candidate.userId} value={candidate.userId}>
-                          {candidate.name}({candidate.employeeNo})
-                        </option>
-                      ))}
-                    </SelectField>
-                    <Button
-                      className="flex-none"
-                      disabled={picker === '' || add.isPending}
-                      onClick={() => {
-                        add.mutate(
-                          { userId: picker },
-                          {
-                            onSuccess: () => {
-                              setPicker('');
-                            },
-                          },
-                        );
-                      }}
-                    >
-                      加入
-                    </Button>
-                  </div>
-                )}
-
-                {canManage && candidates.isSuccess && addable.length === 0 && (
-                  <p className="mt-1 text-xs text-slate-500">
-                    没有可加入的人 —— 只能加你组织范围内、且尚未归属在这里的在职同事。
-                  </p>
-                )}
-                <ErrorNote error={add.error ?? remove.error} />
+            {canManage && (
+              <div className="mt-3 flex gap-2">
+                <SelectField
+                  value={picker}
+                  onChange={(event) => {
+                    setPicker(event.target.value);
+                  }}
+                  aria-label="选择要加入的人"
+                >
+                  <option value="">添加成员…</option>
+                  {addable.map((candidate) => (
+                    <option key={candidate.userId} value={candidate.userId}>
+                      {candidate.name}({candidate.employeeNo})
+                    </option>
+                  ))}
+                </SelectField>
+                <Button
+                  className="flex-none"
+                  disabled={picker === '' || add.isPending}
+                  onClick={() => {
+                    add.mutate(
+                      { userId: picker },
+                      {
+                        onSuccess: () => {
+                          setPicker('');
+                        },
+                      },
+                    );
+                  }}
+                >
+                  加入
+                </Button>
               </div>
+            )}
 
-              {/* ---------- 第 2 段:下属成员 ---------- */}
-              <div>
-                <div className="mb-1 text-sm font-medium text-slate-700">
-                  下属成员 · {inherited.length}
-                </div>
-                <p className="mb-2 text-xs leading-relaxed text-slate-500">
-                  他们归属在这个节点<b>下面的</b>节点上(这个部门的各个组)。
-                  <b>不能在这里移出</b> —— 请到他们所属的那个节点上去操作。
-                </p>
-                {inherited.length === 0 ? (
-                  <p className="text-xs text-slate-500">下属节点里还没有人。</p>
-                ) : (
-                  inherited.map((member) => (
-                    <MemberRow
-                      key={member.userId}
-                      member={member}
-                      showPaths={member.memberPaths}
-                      removing={false}
-                    />
-                  ))
-                )}
-              </div>
-            </>
-          )}
+            {canManage && candidates.isSuccess && addable.length === 0 && (
+              <p className="mt-1 text-xs text-slate-500">
+                没有可加入的人 —— 只能加你组织范围内、且尚未归属在这里的在职同事。
+              </p>
+            )}
+            <ErrorNote error={add.error ?? remove.error} />
+          </div>
+
+          {/* ---------- 第 2 段:下属成员 ---------- */}
+          <div>
+            <div className="mb-1 text-sm font-medium text-slate-700">
+              下属成员 · {inherited.length}
+            </div>
+            <p className="mb-2 text-xs leading-relaxed text-slate-500">
+              他们归属在这个节点<b>下面的</b>节点上(这个部门的各个组)。
+              <b>不能在这里移出</b> —— 请到他们所属的那个节点上去操作。
+            </p>
+            {inherited.length === 0 ? (
+              <p className="text-xs text-slate-500">下属节点里还没有人。</p>
+            ) : (
+              inherited.map((member) => (
+                <MemberRow
+                  key={member.userId}
+                  member={member}
+                  showPaths={member.memberPaths}
+                  removing={false}
+                />
+              ))
+            )}
+          </div>
+        </>
+      )}
     </Modal>
   );
 }

@@ -111,10 +111,7 @@ export class AuditService {
 
     const items: AuditLogView[] = page.map((row) => ({
       id: row.id.toString(),
-      actor:
-        row.actor_id === null
-          ? null
-          : { id: row.actor_id, name: row.actor_name ?? '未知' },
+      actor: row.actor_id === null ? null : { id: row.actor_id, name: row.actor_name ?? '未知' },
       action: row.action,
       targetType: row.target_type,
       targetId: row.target_id,

@@ -38,7 +38,6 @@ export function SearchPage() {
     rememberSearch(input);
   }
 
-
   return (
     <div className="mx-auto max-w-3xl px-8 py-8">
       <h1 className="text-lg font-semibold text-slate-900">检索</h1>
@@ -127,7 +126,8 @@ export function SearchPage() {
 
       {query.trim() === '' && (
         <p className="mt-6 text-sm text-slate-500">
-          也可以用 <kbd className="rounded border border-slate-300 px-1 text-xs">Ctrl / Cmd + K</kbd>{' '}
+          也可以用{' '}
+          <kbd className="rounded border border-slate-300 px-1 text-xs">Ctrl / Cmd + K</kbd>{' '}
           在任何页面调出命令面板。
         </p>
       )}
@@ -146,10 +146,7 @@ function Highlighted({ text, query }: { text: string; query: string }) {
     <>
       {splitByQuery(text, query).map((segment, index) =>
         segment.hit ? (
-          <mark
-            key={index}
-            className="rounded bg-amber-100 px-0.5 text-slate-900"
-          >
+          <mark key={index} className="rounded bg-amber-100 px-0.5 text-slate-900">
             {segment.text}
           </mark>
         ) : (

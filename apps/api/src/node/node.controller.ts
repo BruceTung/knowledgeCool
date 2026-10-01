@@ -175,10 +175,7 @@ export class NodeController {
    * 两者的风险差一个量级,不该共用一个入口。
    */
   @Post('nodes/bulk/move')
-  bulkMove(
-    @CurrentUser() user: AuthUser,
-    @Body() body: BulkMoveDto,
-  ): Promise<BulkMoveResult> {
+  bulkMove(@CurrentUser() user: AuthUser, @Body() body: BulkMoveDto): Promise<BulkMoveResult> {
     return this.nodes.bulkMove(user, body);
   }
 

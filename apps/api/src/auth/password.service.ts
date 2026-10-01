@@ -15,7 +15,7 @@ import { hash, verify } from '@node-rs/bcrypt';
 export const BCRYPT_MAX_PASSWORD_BYTES = 72;
 
 /**
- * 密码哈希 —— DESIGN.md §9 M2 要求 bcrypt。
+ * 密码哈希 —— DESIGN.md §6.1.2 规定用 bcrypt(cost 12)。
  *
  * 用 `@node-rs/bcrypt`(Rust 实现)而不是 `bcrypt`:
  * 前者提供 `@node-rs/bcrypt-linux-x64-musl` 预编译包,而运行镜像是 node:22-alpine

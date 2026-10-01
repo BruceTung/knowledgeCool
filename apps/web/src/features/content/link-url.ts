@@ -27,9 +27,7 @@ const HAS_SCHEME = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
 const DANGEROUS_SCHEME = /^(javascript|data|vbscript):/i;
 
 /** 归一化的结果。`ok: false` 时 `reason` 是给用户看的一句话。 */
-export type NormalizeUrlResult =
-  | { ok: true; href: string }
-  | { ok: false; reason: string };
+export type NormalizeUrlResult = { ok: true; href: string } | { ok: false; reason: string };
 
 export function normalizeUrl(raw: string): NormalizeUrlResult {
   const trimmed = raw.trim();

@@ -78,10 +78,30 @@ export function EditorToolbar({
       data-print="hide"
       className="flex flex-wrap items-center gap-0.5 border-b border-slate-200 px-8 py-2"
     >
-      {button('B', editor.isActive('bold'), () => editor.chain().focus().toggleBold().run(), '粗体')}
-      {button('I', editor.isActive('italic'), () => editor.chain().focus().toggleItalic().run(), '斜体')}
-      {button('U', editor.isActive('underline'), () => editor.chain().focus().toggleUnderline().run(), '下划线')}
-      {button('S', editor.isActive('strike'), () => editor.chain().focus().toggleStrike().run(), '删除线')}
+      {button(
+        'B',
+        editor.isActive('bold'),
+        () => editor.chain().focus().toggleBold().run(),
+        '粗体',
+      )}
+      {button(
+        'I',
+        editor.isActive('italic'),
+        () => editor.chain().focus().toggleItalic().run(),
+        '斜体',
+      )}
+      {button(
+        'U',
+        editor.isActive('underline'),
+        () => editor.chain().focus().toggleUnderline().run(),
+        '下划线',
+      )}
+      {button(
+        'S',
+        editor.isActive('strike'),
+        () => editor.chain().focus().toggleStrike().run(),
+        '删除线',
+      )}
 
       <span className={TOOL_DIVIDER_CLASS} />
 
@@ -96,16 +116,36 @@ export function EditorToolbar({
 
       <span className={TOOL_DIVIDER_CLASS} />
 
-      {button('•', editor.isActive('bulletList'), () => editor.chain().focus().toggleBulletList().run(), '无序列表')}
-      {button('1.', editor.isActive('orderedList'), () => editor.chain().focus().toggleOrderedList().run(), '有序列表')}
-      {button('"', editor.isActive('blockquote'), () => editor.chain().focus().toggleBlockquote().run(), '引用')}
+      {button(
+        '•',
+        editor.isActive('bulletList'),
+        () => editor.chain().focus().toggleBulletList().run(),
+        '无序列表',
+      )}
+      {button(
+        '1.',
+        editor.isActive('orderedList'),
+        () => editor.chain().focus().toggleOrderedList().run(),
+        '有序列表',
+      )}
+      {button(
+        '"',
+        editor.isActive('blockquote'),
+        () => editor.chain().focus().toggleBlockquote().run(),
+        '引用',
+      )}
       {button(
         '</>',
         editor.isActive('codeBlock'),
         () => editor.chain().focus().toggleCodeBlock().run(),
         '代码块(光标在块内时可选语言)',
       )}
-      {button('⌀', editor.isActive('code'), () => editor.chain().focus().toggleCode().run(), '行内代码')}
+      {button(
+        '⌀',
+        editor.isActive('code'),
+        () => editor.chain().focus().toggleCode().run(),
+        '行内代码',
+      )}
 
       {/*
         语言下拉紧跟在代码块按钮后面 —— 它是"代码块的属性",

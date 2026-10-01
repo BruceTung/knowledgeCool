@@ -246,14 +246,12 @@ export function UsersAdminPage() {
       <section className="rounded-lg border border-slate-200 bg-white">
         <div className="flex items-center gap-3 border-b border-slate-200 px-4 py-3">
           <h2 className="text-sm font-medium text-slate-900">
-          人员 · {users.users.length}
-          {/* 显示总数,让"只看到一部分"这件事在界面上是显式的 */}
-          {users.total > users.users.length && (
-            <span className="ml-1 font-normal text-slate-500">
-              / 共 {users.total} 人
-            </span>
-          )}
-        </h2>
+            人员 · {users.users.length}
+            {/* 显示总数,让"只看到一部分"这件事在界面上是显式的 */}
+            {users.total > users.users.length && (
+              <span className="ml-1 font-normal text-slate-500">/ 共 {users.total} 人</span>
+            )}
+          </h2>
           <div className="flex-1" />
           <input
             value={query}
@@ -324,7 +322,9 @@ export function UsersAdminPage() {
                 */}
                 <span className="flex w-24 flex-none flex-wrap items-center gap-1">
                   {user.isSuperAdmin && (
-                    <span className={`rounded bg-violet-50 px-1 text-violet-700 ring-1 ring-violet-200 ${T_META}`}>
+                    <span
+                      className={`rounded bg-violet-50 px-1 text-violet-700 ring-1 ring-violet-200 ${T_META}`}
+                    >
                       管理员
                     </span>
                   )}
@@ -465,9 +465,7 @@ export function UsersAdminPage() {
         </ul>
 
         {users.users.length === 0 && !users.isPending && (
-          <p className="px-4 py-8 text-center text-sm text-slate-500">
-            没有匹配的人员。
-          </p>
+          <p className="px-4 py-8 text-center text-sm text-slate-500">没有匹配的人员。</p>
         )}
 
         {/*

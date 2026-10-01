@@ -1,6 +1,6 @@
 /**
  * 组织架构导入的**纯逻辑** —— 解析、校验、推导目标结构、算差异。
- * 对应 DESIGN.md §8.5。
+ * 对应 DESIGN.md §8.4。
  *
  * 刻意与 exceljs / Prisma 分开,有两个理由:
  *
@@ -11,7 +11,7 @@
  *    会算出不同结果,而管理员是照着预览做决定的 —— 那种偏差比没有预览更糟。
  *
  * 语义:**增量**(只加不删)。表格里没出现的人与节点一律不动。
- * 这是用户明确选的(§8.5),代价是调岗需要两步(导入新归属 + 界面移出旧归属)。
+ * 这是用户明确选的(§8.4),代价是调岗需要两步(导入新归属 + 界面移出旧归属)。
  *
  * ⚠️ 一个刻意的结构选择:**每一行在解析阶段就被钉死到具体节点上**
  * (`ResolvedRow.node`),后面的差异计算只消费这个结果,不再重新判断"这行属于谁"。
@@ -192,7 +192,7 @@ export function parseRows(raw: readonly RawRow[]): ParseResult {
       continue;
     }
 
-    const dedupeKey = `${no}\u0000${departmentId ?? dept}\u0000${groupId ?? (group ?? '')}`;
+    const dedupeKey = `${no}\u0000${departmentId ?? dept}\u0000${groupId ?? group ?? ''}`;
     if (seen.has(dedupeKey)) {
       ignored.push({ row: source.rowNumber, reason: `重复行(工号 ${no} 已在同一节点下出现过)` });
       continue;
@@ -425,7 +425,8 @@ export function planImport(parsed: readonly ParsedRow[], current: CurrentState):
       existing = found;
     } else if (department.ref.kind === 'existing') {
       existing =
-        (childrenOf.get(department.ref.id) ?? []).find((child) => child.title === groupName) ?? null;
+        (childrenOf.get(department.ref.id) ?? []).find((child) => child.title === groupName) ??
+        null;
     }
 
     const key = existing === null ? `g:${department.key}/${groupName}` : `i:${existing.id}`;
@@ -469,7 +470,8 @@ export function planImport(parsed: readonly ParsedRow[], current: CurrentState):
       if (item.departmentKey !== department.key) continue;
       distinctNames.add(item.row.department);
       const group = item.groupKey === null ? null : department.groups.get(item.groupKey);
-      if (group !== undefined && group !== null) distinctNames.add(`${item.row.department}\u0000${group.name}`);
+      if (group !== undefined && group !== null)
+        distinctNames.add(`${item.row.department}\u0000${group.name}`);
     }
     if (department.ref.kind === 'existing' && departmentNamesConflict(distinctNames)) {
       errors.push({

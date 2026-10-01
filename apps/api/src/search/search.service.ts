@@ -76,7 +76,7 @@ export class SearchService {
 
     const pattern = `%${escapeLike(q)}%`;
 
-    // 所有参数都显式写 ::text / ::int —— M3 的 `substring(x from $n)` 教训:
+    // 所有参数都显式写 ::text / ::int —— `substring(x from $n)` 那一次的教训:
     // 参数类型交给 PostgreSQL 推断时,它可能选到一条语义完全不同的重载。
     const rows = await this.prisma.$queryRaw<RawHit[]>(Prisma.sql`
       SELECT n.id,
