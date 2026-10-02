@@ -1,15 +1,16 @@
+import { EMPLOYEE_NO_PATTERN } from '@knowledgecool/shared';
 import { IsString, Length, Matches } from 'class-validator';
 
 import { MaxUtf8Bytes } from '../../common/validators/max-utf8-bytes.validator.js';
 import { BCRYPT_MAX_PASSWORD_BYTES } from '../password.service.js';
 
-/**
- * 工号格式:1~64 个字母 / 数字 / `.` `_` `-`。
- *
- * 允许点与短横线是因为工号常写成 `KC-2026-001` 或 `kc.001` 这种形式;
- * 不允许空格与中文 —— 那多半是用户填错了(比如把姓名填进工号)。
- */
-export const EMPLOYEE_NO_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
+/*
+  ⚠️ v4.9:工号正则**只在 shared 里定义一次**(`@knowledgecool/shared`)。
+  原来这里与 `org/import.core.ts` 各写了一份、而且规则不同 ——
+  于是会造出"能登录但导不进来"的工号(详见 shared/org.ts 的说明)。
+  这里改为转出,保持既有 import 路径(`./login.dto.js`)不破。
+*/
+export { EMPLOYEE_NO_PATTERN };
 
 /**
  * 登录请求体。

@@ -139,13 +139,21 @@ model Node {
   ///   - **校验并递增**:改名(`NodeService.update`)、单节点移动(`move`)、
   ///     替换授权名单(`replaceGrants`)、替换读者名单(`replaceReaders`) ——
   ///     都是"带 version 条件 + 检查影响行数"的比较并交换(CAS),抢不到就 409
-  ///   - **校验但不递增**:无
-  ///   - **不校验、也不递增**:删除(`remove`)、变更所有者(`setOwner`)、
-  ///     **批量移动(`bulkMove`)** —— 这三条的 DTO 里没有 version 字段。
+  ///   - **不校验、但递增**:变更所有者(`setOwner` / 导入里的换所有者)——
+  ///     `SetOwnerDto` 里**没有** version 字段(所以无法校验、抢不到也不会 409);
+  ///     但写入时**会**把 `version` 加一(`org.service.ts` 的 `setOwner`、
+  ///     `import.service.ts` 的换所有者那一批)。
   ///
-  ///     ⚠️ 原文把"移动"整体写成"校验",那句对**批量移动**是错的:
-  ///     `BulkMoveNodesInput` 根本没有 version 字段,而 `applyMoveTo` 在
-  ///     version 省略时只更新 `updatedBy`。行为与 DTO 自洽,错的是这句注释。
+  ///     ⚠️ v4.23 更正:原文把 `setOwner` 归在"**不校验、也不递增**"里 ——
+  ///     **后半句是错的**。实测两处写入都带 `version: { increment: 1 }`。
+  ///     这个区别有实际意义:"递增"意味着前端手里的旧 version **会**在下次
+  ///     改名/移动时撞出 409(而不是像批量移动那样静默通过)—— 是更安全的一侧。
+  ///   - **校验但不递增**:无
+  ///   - **不校验、也不递增**:删除(`remove`)、**批量移动(`bulkMove`)**
+  ///     —— 这两条的 DTO 里没有 version 字段,且写入时也不递增。
+  ///     `BulkMoveDto` 确实没有 version,而 `applyMoveTo` 在 version 省略时
+  ///     只更新 `updatedBy`。
+  ///
   ///     实际后果:批量移动之后,前端手里的 version 仍是旧的 ——
   ///     乐观锁察觉不到这次改动。这是**已知的欠账**,不是漏洞
   ///     (并发下不会损坏数据,但"后写覆盖前写"是可能的)。
@@ -174,6 +182,12 @@ model Node {
   // 下次 migrate dev 生成 DROP INDEX,静默废掉前缀查询(而权限判定正靠它)。
   @@index([materializedPath(ops: raw("text_pattern_ops"))], map: "nodes_path_idx")
   @@index([ownerId], map: "nodes_owner_idx")
+  // ⚠️ 检索的 WHERE 是 `n.title ILIKE … OR c.text_for_search ILIKE …`。
+  // 只要 OR 里**有一支**走不了索引,整个条件就退化成顺序扫描 ——
+  // 而 `node_contents` 那个 trgm 索引单独立不住这个查询(实测见 migration
+  // 20260928_audit_nodes_indexes 的注释)。所以 `nodes.title` 必须也有一条。
+  // 用 gin_trgm_ops:它服务的是 `ILIKE '%子串%'`,不是等值查询。
+  @@index([title(ops: raw("gin_trgm_ops"))], type: Gin, map: "nodes_title_trgm_idx")
   // ⚠️ v2.12 起**没有** nodes_alive_idx(部分索引)了 —— 它是为软删除服务的,
   // 而回收站已被整体移除(删除即物理删除)。见 migration 20260927120000_drop_trash。
   @@map("nodes")
@@ -311,5 +325,11 @@ model AuditLog {
   actor User? @relation(fields: [actorId], references: [id])
 
   @@index([createdAt(sort: Desc)], map: "audit_created_idx")
+  // ⚠️ 下面两条是给 `queryRows` 那个 WHERE 的 OR 用的
+  // (`actor_id = ? OR target_id = ANY(?) OR detail->>'nodeId' = ANY(?)`)。
+  // 原来只有 created_at 一条 —— 而那个查询**按 id 排序、三个条件字段都没索引**,
+  // 数据量一上来就是全表扫。见 migration 20260928_audit_nodes_indexes。
+  @@index([actorId], map: "audit_actor_idx")
+  @@index([targetId], map: "audit_target_idx")
   @@map("audit_logs")
 }

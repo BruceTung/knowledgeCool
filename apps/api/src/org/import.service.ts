@@ -37,6 +37,7 @@ import {
   type CurrentState,
   type ImportPlan,
   type NodeRef,
+  type RowIssue,
   type UserRef,
   parseRows,
   planImport,
@@ -287,6 +288,28 @@ export class OrgImportService {
     const plan = planImport(parsed.rows, await this.loadState());
     response.preview = plan.preview;
 
+    /*
+      ⚠️ v4.16:负责人的**在职校验也要出现在预览里**,不能只在写入时才报。
+
+      原来这一条只在 `execute`(事务内)拦。实测表现是:
+      **预览 201 且干净 → 管理员确认 → 才拿到 400**。而预览里明明列出了
+      「负责人改成 离职者(KC999)」这条变更 —— 等于先给了一份**注定会失败**的方案,
+      让人以为可以提交。管理员应该在下拉确认之前就看到问题。
+
+      `row: 0` 是本仓库对「不针对某一行的整体校验」的约定 ——
+      前端 (`OrgImportPanel`) 会把它渲染成「整体校验:…」而不是「第 0 行」。
+
+      写入路径在事务内**另有**一道同样的检查(`execute`):那一处才是权威的
+      (挡住"预览之后、写入之前用户被停用"这种竞态);这里这一道是为了**早点说**。
+    */
+    const inactiveOwners = await this.findInactiveOwners(plan);
+    if (inactiveOwners.length > 0) {
+      response.preview = {
+        ...response.preview,
+        errors: [...response.preview.errors, ...inactiveOwners],
+      };
+    }
+
     if (plan.preview.errors.length > 0) {
       if (options.dryRun) return response;
       throw AppError.validation(
@@ -347,6 +370,45 @@ export class OrgImportService {
   // 现状快照
   // ================================================================
 
+  /**
+   * 找出计划里「负责人不是在用状态」的那些账号。
+   *
+   * 与 `OrgService.setOwner` / `createOrgNode` 的 `assertActiveUser` 是**同一条规则**;
+   * 之所以单独有一段查询,是为了让它在**预览**阶段就能报出来(见 `run` 里的说明)。
+   * 两个写入点都覆盖:**新建节点**的 `ownerEmployeeNo` 与**换所有者**的 `owner`。
+   *
+   * ⚠️ 本批**新建**的人不用查 —— 他们建出来就是 `active`(见 `execute` 的建人那一步)。
+   * 这里只查"库里已经存在的账号",所以用 employeeNo / id 两个集合各查各的。
+   */
+  private async findInactiveOwners(plan: ImportPlan): Promise<RowIssue[]> {
+    const employeeNos = new Set<string>();
+    const ids = new Set<string>();
+    for (const node of plan.createNodes) employeeNos.add(node.ownerEmployeeNo);
+    for (const item of plan.setOwners) {
+      if (item.owner.kind === 'new') employeeNos.add(item.owner.employeeNo);
+      else ids.add(item.owner.id);
+    }
+    if (employeeNos.size === 0 && ids.size === 0) return [];
+
+    const users = await this.prisma.user.findMany({
+      where: {
+        OR: [
+          ...(employeeNos.size === 0 ? [] : [{ employeeNo: { in: [...employeeNos] } }]),
+          ...(ids.size === 0 ? [] : [{ id: { in: [...ids] } }]),
+        ],
+      },
+      select: { employeeNo: true, name: true, status: true },
+    });
+
+    return users
+      .filter((user) => user.status !== 'active')
+      .map((user) => ({
+        // row: 0 = 「整体校验」,前端会这么渲染(见 OrgImportPanel)
+        row: 0,
+        reason: `负责人 ${user.name}(${user.employeeNo})不是在用状态 —— 请改成在职人员`,
+      }));
+  }
+
   private async loadState(): Promise<CurrentState> {
     const [nodes, users, assignments] = await Promise.all([
       this.prisma.node.findMany({
@@ -382,7 +444,29 @@ export class OrgImportService {
    * - **id 在应用侧生成**。物化路径里含自身 id,一次 INSERT 就能写对。
    */
   private async execute(operator: Actor, plan: ImportPlan): Promise<OrgImportResult> {
-    const userIdByEmployeeNo = new Map<string, string>();
+    /*
+      ⚠️⚠️ v4.31:`userIdByEmployeeNo` 必须**先装已存在的人**,而不只是本批新建的人。
+
+      它原来只在「建人」那一步被填 —— 也就是**只含本批新建的账号**。
+      而 `plan.createNodes[].ownerEmployeeNo` 是**表格里工号列的原样字符串**
+      (`import.core.ts` 从「负责人 = 是」那一行的工号取的),
+      这个人在库里**可能早就存在**(比如下载模板、加一个新部门、负责人填老员工)。
+      于是 `resolveUserId(string)` 查不到 → 抛
+      **「内部错误:新建的人「KC001」未落地」**,整批导入 400。
+
+      实测(隔离库):建好超管 KC001 之后,导入一张只含三个新部门、负责人都是 KC001 的表 →
+      `导入 -> 400 内部错误:新建的人「KC001」未落地`,**一个节点都没建**。
+      而「负责人」本来就是一个**已存在的人** —— 这是最正常的用法。
+
+      修法:进事务时先把库里的 `employeeNo → id` 装进去,建人那一步再覆盖/追加。
+      两层来源合起来,`resolveUserId` 就能同时解析「已存在」与「本批新建」两种。
+    */
+    const existingUsers = await this.prisma.user.findMany({
+      select: { id: true, employeeNo: true },
+    });
+    const userIdByEmployeeNo = new Map<string, string>(
+      existingUsers.map((user) => [user.employeeNo, user.id]),
+    );
     const nodeIdByKey = new Map<string, string>();
 
     // 全员同一个初始密码 —— 只在事务外算一次
@@ -407,6 +491,41 @@ export class OrgImportService {
               };
             }),
           });
+        }
+
+        /*
+          ⚠️⚠️ v4.15:**所有「负责人」必须在职** —— 与 `OrgService.setOwner` /
+          `createOrgNode` 里的 `assertActiveUser` 是**同一条规则**,导入这条捷径原来漏了。
+
+          Excel 的「负责人」列里填一个**已离职 / 已停用**的工号,原来照样会被写成
+          `owner_id`(新建节点那一批和「换所有者」那一批都写)。后果不是"数据不好看",
+          而是**那个节点从此没人管得了**:
+            · 所有者自己登不上(离职/停用);
+            · `canManage` 认的是"该节点或祖先链上的所有者"(§5.3),而换所有者
+              本身又要求 `canManage` —— 于是**别人也接不过去**,只能超管逐个手改。
+
+          REST 侧的 `setOwner` 一直有这道闸,只有导入绕过去了。
+          放在这里(建完人、写节点之前)是因为两个写入点都要覆盖,而 `resolveUserId`
+          此时已经能解析"本次新建的人"与"库里已存在的人"两种引用。
+
+          按集合查一次,不在循环里 N+1。
+        */
+        const ownerIds = new Set<string>();
+        for (const node of plan.createNodes) ownerIds.add(resolveUserId(node.ownerEmployeeNo));
+        for (const item of plan.setOwners) ownerIds.add(resolveUserId(item.owner));
+        if (ownerIds.size > 0) {
+          const owners = await tx.user.findMany({
+            where: { id: { in: [...ownerIds] } },
+            select: { employeeNo: true, name: true, status: true },
+          });
+          const inactive = owners.filter((owner) => owner.status !== 'active');
+          if (inactive.length > 0) {
+            throw AppError.validation(
+              `这些账号不是在用状态,不能当负责人:${inactive
+                .map((owner) => `${owner.name}(${owner.employeeNo})`)
+                .join('、')}`,
+            );
+          }
         }
 
         // ---- 2. 建节点(先部门、后组) ----

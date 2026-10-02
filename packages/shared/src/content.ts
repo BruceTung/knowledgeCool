@@ -114,3 +114,64 @@ export function isProseMirrorDoc(value: unknown): value is ProseMirrorDoc {
   if (node.content === undefined) return true;
   return Array.isArray(node.content);
 }
+/**
+ * 正文文档树的**嵌套深度**上限。
+ *
+ * ProseMirror 自己也有深度限制,但它是在**解析之后**才生效;
+ * 而这里要防的是"在遍历/序列化阶段就把进程搞崩"。
+ *
+ * ⚠️ 真实编辑器最常见的内容深度是个位数(段落 → 列表 → 列表项)。
+ * 给到 100 已经是"正常内容永远碰不到、恶意构造一定碰得到"的量级。
+ */
+export const MAX_DOC_DEPTH = 100;
+
+/**
+ * 正文文档树的**节点总数**上限。
+ *
+ * 2 MB 的 JSON 大约能装两万个节点,所以这个数对正常内容很宽松;
+ * 它的作用是拦住"一个数组里塞几十万个空节点"这种形状。
+ */
+export const MAX_DOC_NODES = 50_000;
+
+/** 结构检查的结果。ok 为假时 reason 是给人看的说明。 */
+export type DocStructureCheck = { ok: true } | { ok: false; reason: string };
+
+/**
+ * **迭代式**检查文档树的深度与节点数。
+ *
+ * ⚠️⚠️ 必须是迭代的,不能递归 —— 这正是它存在的理由。
+ *
+ * `isProseMirrorDoc` 只查两层(根 + `content` 是不是数组),之后
+ * `countImages` 与 `JSON.stringify` 都会**递归**走整棵树。于是一份
+ * 深度几千层的文档会让它们**爆栈** —— 表现为 **500「服务器内部错误」**,
+ * 而不是 400「正文格式不合法」。实测约 **540 KB**(远低于 2 MB 上限)就能触发。
+ *
+ * 客户端收到 500 只会当成"服务器坏了"并重试,而重试永远不会成功;
+ * 真正的原因(内容结构有问题)从头到尾没说出口。
+ *
+ * 用显式栈遍历:既不爆栈,也能在**超限的那一刻就停**,不必走完整棵树。
+ */
+export function checkDocStructure(doc: ProseMirrorNode): DocStructureCheck {
+  const stack: { node: ProseMirrorNode; depth: number }[] = [{ node: doc, depth: 1 }];
+  let nodes = 0;
+
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (current === undefined) break;
+
+    nodes += 1;
+    if (nodes > MAX_DOC_NODES) {
+      return { ok: false, reason: '正文节点数量过多(超过 ' + String(MAX_DOC_NODES) + ' 个)' };
+    }
+    if (current.depth > MAX_DOC_DEPTH) {
+      return { ok: false, reason: '正文嵌套层级过深(最多 ' + String(MAX_DOC_DEPTH) + ' 层)' };
+    }
+
+    const children = current.node.content ?? [];
+    for (const child of children) {
+      stack.push({ node: child, depth: current.depth + 1 });
+    }
+  }
+
+  return { ok: true };
+}

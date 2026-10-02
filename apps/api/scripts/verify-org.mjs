@@ -60,6 +60,24 @@
 const BASE = process.env.KC_API ?? 'http://127.0.0.1:8080/api/v1';
 const ROOT = process.env.KC_ROOT ?? 'http://127.0.0.1:8080';
 const SEED_PASSWORD = process.env.KC_SEED_PASSWORD ?? 'Kc-verify-2026';
+
+/**
+ * 一张**合法的最小 PNG**(1x1,67 字节)。
+ *
+ * ⚠️ v4.29:原来这里用的是 4 字节的 PNG 魔数 —— 只有签名、没有任何图像数据。
+ * 上传接口 v4.25 起会核对文件头与扩展名,**这样一段残缺字节会被正确拒绝**
+ * (400「这个文件的内容不是图片(文件头认不出来)」),于是这条断言开始失败。
+ *
+ * 失败的是**测试夹具**,不是功能:接口的行为是对的 —— 它本来就该拒绝一段只有 4 字节的 PNG。
+ * 所以这里换成一张真的能解码出来的图,让断言回到「验上传成功」这件事本身。
+ */
+const MINIMAL_PNG = new Uint8Array([
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+  0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+  0x89, 0x00, 0x00, 0x00, 0x0a, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00,
+  0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae,
+  0x42, 0x60, 0x82,
+]);
 const ADMIN_PASSWORD = process.env.KC_ADMIN_PASSWORD ?? 'Kc-admin-2026';
 const INITIAL_PASSWORD = '123456';
 
@@ -1121,11 +1139,7 @@ async function main() {
   check('上传 .svg → 400(SVG 能内嵌脚本,是 XSS 载体)', svgUpload.status === 400);
 
   const form2 = new FormData();
-  form2.append(
-    'file',
-    new Blob([new Uint8Array([137, 80, 78, 71])], { type: 'image/png' }),
-    'ok.png',
-  );
+  form2.append('file', new Blob([MINIMAL_PNG], { type: 'image/png' }), 'ok.png');
   const pngUpload = await fetch(`${BASE}/uploads`, {
     method: 'POST',
     headers: { Cookie: cookie },

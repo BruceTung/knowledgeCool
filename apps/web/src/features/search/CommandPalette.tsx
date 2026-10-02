@@ -17,10 +17,26 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { Modal } from '../../components/Modal';
+import { ApiError } from '../../lib/api';
 import { useDebounced } from '../../lib/use-debounced';
 import { useModalOpen } from '../../lib/modal-store';
 import { T_META } from '../../lib/typography';
 import { useSearch } from './queries';
+
+/**
+ * 结果列表的 id。`aria-controls` 要指向它 —— 一个常量就够了:
+ * 同一时刻只会有一个命令面板打开。
+ */
+const LISTBOX_ID = 'kc-command-palette-listbox';
+
+/**
+ * 每一项的 id。`aria-activedescendant` 需要的是**元素 id**,
+ * 所以用 `hit.nodeId`(UUID,天然唯一)而**不是数组下标** ——
+ * 下标会随结果集变化而指向另一条,读屏会念错项。
+ */
+function optionIdOf(hit: SearchHit | undefined): string | undefined {
+  return hit === undefined ? undefined : `kc-cp-option-${hit.nodeId}`;
+}
 
 export function CommandPalette({ onClose }: { onClose: () => void }) {
   const [query, setQuery] = useState('');
@@ -74,6 +90,26 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
         </>
       }
     >
+      {/*
+        ⚠️⚠️ v4.35:补上 combobox / listbox 的语义。
+        
+        这个输入框**驱动着一个列表**(↑/↓ 移动高亮、Enter 打开当前项),
+        但原来它在无障碍上只是一只**裸文本框**:
+        · 输入框没有 `role="combobox"`,读屏不知道它连着列表;
+        · 没有 `aria-expanded` —— 读屏不知道列表是开是关;
+        · 没有 `aria-controls` / `aria-activedescendant` ——
+        **焦点始终在输入框上**(这是 combobox 的正确做法),
+        所以必须靠 `aria-activedescendant` 告诉读屏「当前选中哪一项」;
+        · 列表是普通 `<ul>`/`<li>`,高亮项只有背景色 ——
+        没有任何 `aria-selected`,读屏完全听不到 ↑/↓ 有没有动。
+        
+        后果:读屏用户按 ↑/↓,屏幕上一个字的反馈都没有 ——
+        他不知道有几条结果、现在停在第几条、Enter 会打开哪一个。
+        
+        ⚠️ `aria-activedescendant` 的值必须是**元素的 id**,
+        所以每项要有稳定 id。用 `hit.nodeId`(UUID,天然唯一),
+        而不是数组下标 —— 下标会随结果变化而指向别的项。
+      */}
       <input
         ref={inputRef}
         value={query}
@@ -107,6 +143,13 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
           }
         }}
         placeholder="搜索页面标题与正文…(中文可直接搜)"
+        /* ⚠️ v4.33：placeholder 不能当无障碍名。 */
+        aria-label="搜索页面标题与正文"
+        role="combobox"
+        aria-expanded={hits.length > 0}
+        aria-controls={LISTBOX_ID}
+        aria-autocomplete="list"
+        aria-activedescendant={hits.length > 0 ? optionIdOf(hits[safeIndex]) : undefined}
         className="w-full flex-none border-b border-slate-200 px-4 py-3 text-sm outline-none placeholder:text-slate-500"
       />
 
@@ -130,17 +173,38 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
           <div className="px-4 py-6 text-center text-sm text-slate-500">
             <p>搜索失败了,不是"没有匹配的内容"。</p>
             <p className="mt-1">
-              {search.error instanceof Error ? search.error.message : '请稍后重试。'}
+              {/*
+                ⚠️ v4.42:与 ErrorNote 同一个坑 —— 不能用 instanceof Error 取 message。
+                网络失败时那是浏览器的英文原文(Failed to fetch),不该摆给中文用户看。
+              */}
+              {search.error instanceof ApiError
+                ? search.error.message
+                : '请求没有送达服务器。请检查网络,或稍后重试。'}
             </p>
           </div>
         ) : hits.length === 0 ? (
           <p className="px-4 py-6 text-center text-sm text-slate-500">没有匹配的内容</p>
         ) : (
-          <ul>
+          /*
+            ⚠️ v4.35:列表要有 listbox / option 语义。
+
+            配合输入框上的 `aria-activedescendant` 才完整:
+            焦点留在输入框,读屏靠「当前激活的是哪个 option」来播报。
+            没有 `role="listbox"` / `role="option"` 的话,`aria-activedescendant`
+            指向的 id 落在普通 `<ul>`/`<li>` 上,读屏**不认**。
+          */
+          <ul id={LISTBOX_ID} role="listbox" aria-label="搜索结果">
             {hits.map((hit, index) => (
               <li key={hit.nodeId}>
                 <button
                   type="button"
+                  id={optionIdOf(hit)}
+                  role="option"
+                  /*
+                    `aria-selected` 是「当前高亮项」的**唯一**无障碍表达 ——
+                    原来只有 `bg-slate-100` 一个背景色,读屏完全听不到 ↑/↓ 动没动。
+                  */
+                  aria-selected={index === safeIndex}
                   onMouseEnter={() => {
                     setActiveIndex(index);
                   }}

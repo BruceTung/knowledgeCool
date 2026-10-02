@@ -52,6 +52,8 @@ export function SearchPage() {
             setInput(event.target.value);
           }}
           placeholder="输入关键词(中文可直接搜)"
+          /* ⚠️ v4.33：placeholder 不能当无障碍名（见 UsersAdminPage 的说明）。 */
+          aria-label="搜索关键词"
           className="min-w-[200px] flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
         />
         <button
@@ -110,6 +112,18 @@ export function SearchPage() {
           <p className="mt-4 text-sm text-slate-500">
             「{search.data.query}」命中 {search.data.hits.length} 条 · {search.data.tookMs}ms
           </p>
+          {/*
+            ⚠️ v4.9:结果被截断时必须说出来。
+
+            服务端最多返回 SEARCH_HIT_LIMIT 条。从前"还有更多"这件事
+            在界面上**完全看不出来** —— 结果看起来和"真的只有这几条"一模一样。
+            现在明确提示,并把"缩小关键词"这条可行动的建议一起给出。
+          */}
+          {search.data.truncated && (
+            <p className="mt-1 text-sm text-amber-700">
+              结果较多,只显示前 {search.data.hits.length} 条 —— 换个更具体的关键词可以缩小范围。
+            </p>
+          )}
           {search.data.hits.length === 0 ? (
             <p className="mt-6 text-sm text-slate-500">没有匹配的内容。</p>
           ) : (

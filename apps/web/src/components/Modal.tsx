@@ -16,7 +16,7 @@
  *
  * 这些都不是"体验优化",是 WCAG。收敛成一个原语之后,新加的模态不可能再漏掉其中任何一条。
  */
-import { useEffect, useId, useRef, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 
 import { Button } from './ui';
 
@@ -75,20 +75,73 @@ export function Modal(props: ModalProps) {
   const panelRef = useRef<HTMLElement | null>(null);
   const titleId = useId();
 
-  // ---- 焦点:打开时移进来,关闭时还回去 ----
+  /*
+    ---- 焦点:打开时移进来,关闭时还回去 ----
+
+    ⚠️⚠️ v4.9:两处都修过。
+
+    **① opener 必须在"第一次渲染时"捕获,不能在 effect 里读。**
+    `document.activeElement` 在 effect 执行时可能**已经不是**打开弹窗的那个元素了:
+    React 会在 **commit 阶段**应用子元素的 `autoFocus`,而 effect 是之后才跑的。
+    于是 `opener` 会变成"弹窗**里面**那个 autoFocus 的元素"——
+    关闭时 `document.contains(opener)` 判定通过(它确实还在文档里,如果面板还没卸载),
+    但它已经是要被移除的节点,焦点还原就落到一个消失了的东西上,等于没还原。
+
+    用 `useRef` + 在**渲染期**赋值(而不是 effect):渲染期读到的
+    `document.activeElement` 一定还是"打开之前"的那个元素。
+
+    **② 进入焦点优先取"第一个有意义的元素",而不是 DOM 顺序第一个。**
+    原来选的是 `querySelector(FOCUSABLE_SELECTOR)`,而**带头部的对话框
+    第一个可聚焦元素是右上角的「关闭」按钮** —— 于是每次打开弹窗,
+    键盘用户的第一落点都是"关闭",而不是内容本身。这对一个表单类弹窗
+    是明显错的:用户按 Tab 想填第一个字段,却先绕过了关闭按钮。
+
+    现在:优先聚焦 `[data-autofocus]`,其次取**正文区**里的第一个可聚焦元素,
+    最后才退回整个面板里的第一个(以及面板本身)。
+  */
+  /*
+    `useState` 的**初始化函数**在组件第一次渲染时执行,而那时
+    `document.activeElement` 一定还是"打开弹窗的那个元素" ——
+    React 要到 commit 阶段才会应用子元素的 `autoFocus`。
+
+    ⚠️ 不能用 `useRef` + 渲染期赋值:那也是"在渲染期间访问 ref",
+    eslint 的 react-hooks/refs 会直接报错,而且它说的对 ——
+    渲染期读 ref 在并发渲染下本来就不安全。
+    `useState` 的初始化函数是被允许的那条路,而且语义正好:
+    "这个值在本次组件生命周期内**只算一次**,之后不再变"。
+  */
+  const [opener] = useState<HTMLElement | null>(() =>
+    typeof document !== 'undefined' && document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null,
+  );
+
   useEffect(() => {
-    const opener = document.activeElement;
     return () => {
       // 还焦点是必须的:用键盘的人关掉弹窗后,焦点若停在 body 上,
       // 他按 Tab 会从页面最开头重新走一遍。
-      if (opener instanceof HTMLElement && document.contains(opener)) opener.focus();
+      if (opener !== null && document.contains(opener)) opener.focus();
     };
-  }, []);
+  }, [opener]);
 
   useEffect(() => {
     const panel = panelRef.current;
     if (panel === null) return;
-    // 优先聚焦第一个可聚焦元素;没有的话聚焦面板本身(它有 tabIndex={-1})。
+
+    // ① 显式指定优先
+    const explicit = panel.querySelector<HTMLElement>('[data-autofocus]');
+    if (explicit !== null) {
+      explicit.focus();
+      return;
+    }
+    // ② 正文区内的第一个(跳过头部那个「关闭」按钮)
+    const body = panel.querySelector<HTMLElement>('[data-modal-body]');
+    const inBody = body?.querySelector<HTMLElement>(FOCUSABLE_SELECTOR);
+    if (inBody !== undefined && inBody !== null) {
+      inBody.focus();
+      return;
+    }
+    // ③ 退路:整块面板里的第一个,再不行就聚焦面板本身(它有 tabIndex={-1})
     const first = panel.querySelector<HTMLElement>(FOCUSABLE_SELECTOR);
     (first ?? panel).focus();
   }, []);
@@ -135,12 +188,46 @@ export function Modal(props: ModalProps) {
     };
   }, [onClose]);
 
-  // ---- 锁背景滚动 ----
+  /*
+    ---- 锁背景滚动 ----
+
+    ⚠️⚠️ v4.12:改锁**真正的滚动容器**,并且**按 CSS 判定**,不按"此刻能不能滚"。
+
+    这个应用的布局是 `html, body, #root { height: 100% }`(styles.css),
+    真正滚动的是 `<main class="overflow-auto">`(AppLayout)。所以:
+
+    · **原来锁 `document.body.style.overflow`** —— `body` 根本滚不动,
+      锁的是一个永远不会滚动的东西。表现:**对话框开着、背后照样能滚**。
+    · **上一版(v4.9)改为"扫所有 scrollHeight > clientHeight 的容器"** ——
+      这条判据是错的:**内容不够长时 `scrollHeight === clientHeight`**,
+      于是 `<main>` 直接被漏掉,兜底又把 `body` 锁了(等于回到原样)。
+      真机实测就是这么翻车的:打开对话框后 `<main>` 的 overflow 仍是 `''`。
+
+    现在改成**给 `<body>` 打一个标记类**,由 CSS 去锁 `main`
+    (见 `styles.css` 的 `body[data-kc-modal-open]` 规则):
+      · 只看 CSS 的 `overflow`,不看当前内容够不够长 —— 与"此刻能不能滚"无关;
+      · 不碰任何 `ref`,也就绕开了 react-hooks/immutability 那条
+        (它禁止"修改通过 ref 拿到的值",而这本来就是别的组件的节点);
+      · 布局真变了(比如以后 `main` 改名)只需要改一条 CSS,
+        不必再在组件里维护一套 DOM 遍历。
+
+    ⚠️ 用**计数**而不是布尔:对话框可以叠加(成员弹窗里再开权限弹窗),
+    用布尔的话第一个关闭时就把锁解了,而上面那个还开着。
+  */
   useEffect(() => {
-    const previous = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
+    const body = document.body;
+    const next = Number(body.dataset.kcModalCount ?? '0') + 1;
+    body.dataset.kcModalCount = String(next);
+    body.dataset.kcModalOpen = 'true';
+
     return () => {
-      document.body.style.overflow = previous;
+      const left = Number(body.dataset.kcModalCount ?? '1') - 1;
+      if (left <= 0) {
+        delete body.dataset.kcModalOpen;
+        delete body.dataset.kcModalCount;
+      } else {
+        body.dataset.kcModalCount = String(left);
+      }
     };
   }, []);
 
@@ -172,7 +259,10 @@ export function Modal(props: ModalProps) {
           </header>
         )}
 
-        <div className={bodyClassName ?? `${bodyMaxHeightClass} space-y-5 overflow-auto px-5 py-4`}>
+        <div
+          data-modal-body
+          className={bodyClassName ?? `${bodyMaxHeightClass} space-y-5 overflow-auto px-5 py-4`}
+        >
           {children}
         </div>
 

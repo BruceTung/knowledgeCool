@@ -157,13 +157,25 @@ export class NodeService {
   async tree(operator: Actor, rootId?: string): Promise<NodeTreeResponse> {
     let scopePath: string | null = null;
     if (rootId !== undefined) {
-      const root = await this.prisma.node.findUnique({
-        where: { id: rootId },
-        select: { materializedPath: true },
-      });
-      // 不存在就 404,**不要静默返回空树** —— 调用方会把空树
-      // 读成"这个子树下面什么都没有",而那是个完全不同的事实。
-      if (root === null) throw AppError.notFound();
+      /*
+        ⚠️⚠️ v4.9:**先判读**再决定怎么回答。
+
+        原来只查路径、查不到就 404 —— 于是这条接口成了一个
+        **受限节点的存在性预言机**:
+          · 节点**不存在**      → 404
+          · 节点**存在但我读不到** → 200 + `nodes: []`
+
+        两种回答形状不同,任何登录用户拿一个 id 试一次就能区分
+        "这个 id 存在吗"。而"它存在"本身就是要保密的信息
+        (§5.6:一处不漏地收口,否则一致性本身就是安全性质)。
+        `members` / `memberCandidates` / `readers` 都已经补过这道闸,
+        只有建树这条漏着。
+
+        补上之后,两种情况对调用方**完全同形**(都是 404)——
+        `requireRead` 正是这么设计的:读不到就当作不存在。
+      */
+      await this.permissions.requireRead(operator, rootId);
+      const root = await this.pluck(rootId);
       scopePath = root.materializedPath;
     }
 
@@ -353,20 +365,43 @@ export class NodeService {
   async create(operator: Actor, input: CreateNodeInput): Promise<NodeDetail> {
     await this.permissions.requireCreateUnder(operator, input.parentId);
 
-    let parentPath: string | null = null;
-    let depth = 0;
-
-    if (input.parentId !== null) {
-      const parent = await this.pluck(input.parentId);
-      parentPath = parent.materializedPath;
-      depth = parent.depth + 1;
-    }
-
     const id = randomUUID();
     const title = input.title?.trim() ?? '';
-    const materializedPath = parentPath === null ? pathOfRoot(id) : pathOfChild(parentPath, id);
 
+    /*
+      ⚠️⚠️ 父路径必须在事务**内**读(与 `move` 同一条原则,见那边的详细说明)。
+
+      原来这里是在事务外 `pluck` 父节点、拿它的 `materializedPath` 当快照,
+      再在事务里用这个快照算新节点的路径。若另一个请求在这两步之间把父节点
+      移到了别处,新节点的 `parent_id` 与 `materialized_path` 就会**互相矛盾**:
+      父子关系是对的,路径却指向一个父节点已经不在的位置。
+
+      这与 v4.7 修掉的「Excel 导入物化路径写错」是**同一类缺陷**,
+      后果也一样:权限靠路径前缀找祖先链,链一断,`canEdit`/`canManage`
+      就对这棵子树判错(既可能失权,也可能**失去受限继承而变成人人可读**),
+      而且不会自愈。`pnpm db:verify` 现在会检查"路径 ↔ 父子一致性",
+      但那只是事后发现 —— 这里要从源头不让它发生。
+
+      为什么 Serializable 救不了:PostgreSQL 的谓词锁只覆盖事务内
+      **实际访问过**的行。原实现的事务从未读过父节点,SSI 看不见这条依赖,
+      本事务又只写自己的新行 —— 两边都能提交。
+    */
     const row = await this.prisma.$transaction(async (tx) => {
+      let parentPath: string | null = null;
+      let depth = 0;
+
+      if (input.parentId !== null) {
+        const fresh = await tx.node.findUnique({
+          where: { id: input.parentId },
+          select: { materializedPath: true, depth: true },
+        });
+        // 父节点在事务内消失了(并发删除):继续写会造出孤儿路径
+        if (fresh === null) throw AppError.notFound();
+        parentPath = fresh.materializedPath;
+        depth = fresh.depth + 1;
+      }
+
+      const materializedPath = parentPath === null ? pathOfRoot(id) : pathOfChild(parentPath, id);
       const position = await nextPositionIn(tx, input.parentId);
       return tx.node.create({
         data: {
@@ -677,7 +712,19 @@ export class NodeService {
    *  只是现在它成了唯一的删除路径。)
    */
   async remove(operator: Actor, nodeId: string): Promise<{ removedCount: number }> {
-    const { row } = await this.permissions.requireManage(operator, nodeId);
+    /*
+      ⚠️ v4.9:用 `requireManageForWrite`(**不判读**)。
+
+      原来走 `requireManage`,而它内部先断 `canRead`。删除从不读内容,
+      可是受限节点上 `canManage` 可以宽于 `canRead`(我是所有者,但链上更靠上的
+      受限祖先没放行我)—— 那时**删除真的执行了(行没了、审计也写进去了),
+      接口却回 404**。调用方以为失败,实际已生效,还会去重试。
+      与 `replaceReaders` / `addMember` 是同一个坑,详见
+      `PermissionService.requireManageForWrite`。
+
+      安全没有放宽:这里断的仍是 `canManage`(该节点或祖先链上的所有者)。
+    */
+    const { row } = await this.permissions.requireManageForWrite(operator, nodeId, '删除节点');
 
     const removedCount = await this.deleteSubtree({
       id: row.id,

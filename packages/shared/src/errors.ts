@@ -27,6 +27,19 @@ export const ERROR_CODES = [
    * 前端完全可以针对它写一条分支,而那条分支永远不会被执行 ——
    * 这比没有这个码更难查。(`seed-dev.mjs` 里那条守着 403 的旧断言就是这么暴露的。)
    */
+  /**
+   * 请求体超过上限(HTTP **413**)。
+   *
+   * ⚠️ v4.9 新增。此前没有这个码,而 `AllExceptionsFilter` 把**所有**无法识别的
+   * 4xx 都兜底成 `VALIDATION_FAILED` —— 于是"上传超限"返回的是
+   * **HTTP 413 却带 `VALIDATION_FAILED` 码**,而 §6.1 明确定义
+   * `VALIDATION_FAILED = 400`。状态码与错误码**互相矛盾**,
+   * 前端按码分支就永远走不到"文件太大"那条提示(它只在 400 分支里)。
+   *
+   * 单独立一个码,而不是让 413 去借 400 —— 因为它是**独立且可行动**的一类:
+   * 用户要做的是"把文件换小",不是"改一下参数"。
+   */
+  'PAYLOAD_TOO_LARGE',
   'RATE_LIMITED',
   'INTERNAL_ERROR',
 ] as const;
@@ -40,6 +53,7 @@ export const ERROR_HTTP_STATUS: Readonly<Record<ErrorCode, number>> = Object.fre
   NOT_FOUND: 404,
   VALIDATION_FAILED: 400,
   VERSION_CONFLICT: 409,
+  PAYLOAD_TOO_LARGE: 413,
   RATE_LIMITED: 429,
   INTERNAL_ERROR: 500,
 });
@@ -54,6 +68,7 @@ export const DEFAULT_ERROR_MESSAGES: Readonly<Record<ErrorCode, string>> = Objec
   NOT_FOUND: '内容不存在',
   VALIDATION_FAILED: '请求参数不正确',
   VERSION_CONFLICT: '该内容已被他人修改,请刷新后重试',
+  PAYLOAD_TOO_LARGE: '请求体过大,请缩小内容后重试',
   RATE_LIMITED: '操作过于频繁,请稍后再试',
   INTERNAL_ERROR: '服务器内部错误',
 });

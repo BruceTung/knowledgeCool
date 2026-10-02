@@ -28,8 +28,30 @@ export const POPOVER_CLASS =
 export function useDismiss(active: boolean, onClose: () => void): RefObject<HTMLDivElement> {
   // React 18 的类型:`useRef<T>(null)` 给 `RefObject<T>`(`current` 允许为 null),
   // 而 `useRef<T | null>(null)` 给的是 `MutableRefObject<T | null>` ——
-  // 后者塞不进 JSX 的 `ref`,会报 "not assignable to Ref"。
+  // 后者塞不进 JSX 的 `ref`,会报 not assignable to Ref。
   const ref = useRef<HTMLDivElement>(null);
+
+  /*
+    ⚠️ v4.34:`onClose` 放进 ref,**不进依赖数组**。
+
+    原来是 `}, [active, onClose]);`。问题在于**两个调用方传的都是每次渲染都会变的新函数**:
+      · `LinkPopover`:`function closePopover(){}` —— 函数声明,每次渲染都是新身份;
+      · `TableMenu`:`() => { setOpen(false); }` —— 内联箭头,同理。
+    于是浮层开着的时候,**每一次渲染都会先移除、再重新挂上 document 级监听**。
+    打字时每敲一个字符就渲染一次,也就是每敲一下都重挂。
+
+    这不只是「多几次调用」的问题:`removeEventListener` 与 `addEventListener` 之间
+    存在一个**瞬间的窗口**,那一刻监听不在。事件恰好落在这个窗口里就会丢 ——
+    表现是「点了外面没关掉」这种偶发,而且无法稳定复现。
+
+    修法是 React 的标准「latest ref」:handler 每次渲染更新进 ref,挂在 document 上的
+    那个闭包**只读 ref**,于是它永远是最新的,而 effect 只需要在 `active` 变化时跑。
+    这样监听的生命周期就与「开/关」一致,而不是与「渲染次数」一致。
+  */
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
 
   useEffect(() => {
     if (!active) return;
@@ -37,12 +59,12 @@ export function useDismiss(active: boolean, onClose: () => void): RefObject<HTML
     function onPointerDown(event: PointerEvent): void {
       const node = ref.current;
       if (node !== null && event.target instanceof Node && !node.contains(event.target)) {
-        onClose();
+        onCloseRef.current();
       }
     }
 
     function onKeyDown(event: KeyboardEvent): void {
-      if (event.key === 'Escape') onClose();
+      if (event.key === 'Escape') onCloseRef.current();
     }
 
     document.addEventListener('pointerdown', onPointerDown, true);
@@ -51,7 +73,7 @@ export function useDismiss(active: boolean, onClose: () => void): RefObject<HTML
       document.removeEventListener('pointerdown', onPointerDown, true);
       document.removeEventListener('keydown', onKeyDown);
     };
-  }, [active, onClose]);
+  }, [active]);
 
   return ref;
 }

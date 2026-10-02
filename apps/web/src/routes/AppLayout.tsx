@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 
-import { ErrorNote } from '../components/ui';
+import { Button, ErrorNote } from '../components/ui';
 import { useLogout, useMe } from '../features/auth/queries';
 import { GrantDialog } from '../features/grants/GrantDialog';
 import { useGrantDialog } from '../features/grants/dialog-store';
@@ -13,6 +13,8 @@ import { OrgTreePanel } from '../features/org/OrgTreePanel';
 import { useOrgTree } from '../features/org/queries';
 import { CommandPalette } from '../features/search/CommandPalette';
 import { hasOpenModal } from '../lib/modal-store';
+import { flushAllPendingSaves } from '../lib/pending-save';
+import { useSessionExpired } from '../lib/session-expiry';
 import { useDocumentTitle } from '../lib/use-document-title';
 import { T_META } from '../lib/typography';
 
@@ -58,6 +60,42 @@ function activeNodeIdOf(pathname: string): string | undefined {
  */
 export function AppLayout() {
   const me = useMe();
+  const sessionExpired = useSessionExpired();
+  const [loggingOut, setLoggingOut] = useState(false);
+
+  /**
+   * 登出 —— **先把没落库的正文冲刷掉,再吊销会话**(v4.8 修)。
+   *
+   * ⚠️⚠️ 原来的顺序是致命的:`logout.mutate` 在 `onSettled` 里才导航,
+   * 也就是**先登出、后卸载编辑器**。而服务端在 `POST /auth/logout` 返回之前
+   * 就已经把 Cookie 吊销、把 `sessions` 行删掉了 —— 于是编辑器卸载时那次
+   * "补保存"是带着**已失效的凭证**发出去的:401,字就这么没了。
+   * 更糟的是登出是程序化导航,**绕过了 `beforeunload`** ——
+   * `NodeDetailPage` 的"返回"链接会弹一次确认,顶栏的"登出"却全程静默。
+   *
+   * 现在的顺序:冲刷 → (冲不干净就问一次) → 登出 → 导航。
+   * 冲刷走的是编辑器自己登记的 `flush`,与它平时自动保存/卸载补保存
+   * **同一条路径**,不是另写一套。
+   */
+  async function handleLogout(): Promise<void> {
+    if (loggingOut) return;
+    setLoggingOut(true);
+    try {
+      // 能冲干净最好;冲不干净**不能默默登出**(那等于替用户决定丢掉这些字)
+      const failed = await flushAllPendingSaves();
+      if (failed > 0) {
+        const proceed = window.confirm(
+          '还有未保存的内容没能写入服务器(可能网络异常)。现在登出会丢掉这些改动,确定继续吗?',
+        );
+        if (!proceed) return;
+      }
+      logout.mutate(undefined, {
+        onSettled: () => void navigate('/login', { replace: true }),
+      });
+    } finally {
+      setLoggingOut(false);
+    }
+  }
   const tree = useOrgTree();
   const logout = useLogout();
   const navigate = useNavigate();
@@ -240,15 +278,11 @@ export function AppLayout() {
               </button>
               <button
                 type="button"
-                disabled={logout.isPending}
+                disabled={loggingOut}
                 className={`${CHROME_BTN} ${CHROME_BTN_OFF} disabled:opacity-50`}
-                onClick={() => {
-                  logout.mutate(undefined, {
-                    onSettled: () => void navigate('/login', { replace: true }),
-                  });
-                }}
+                onClick={() => void handleLogout()}
               >
-                登出
+                {loggingOut ? '登出中…' : '登出'}
               </button>
             </div>
           </div>
@@ -285,6 +319,33 @@ export function AppLayout() {
         )}
 
         <main className="min-w-0 flex-1 overflow-auto bg-white">
+          {/*
+            ⚠️ v4.9:会话过期的**全局**提示。
+
+            在这之前,会话过期只在两处被"看见":`RequireAuth`(而它只在 `me`
+            查询本身失败时反应 —— 会话在人编辑到一半时过期,那个查询早就成功并被缓存了)
+            和编辑器的保存横幅。也就是说**在其他任何页面**上,用户只会看到
+            "加载失败""操作失败"这类泛泛的提示,永远不会知道该去重新登录。
+
+            这条横幅不拦路、不跳转 —— 跳走会把正在编辑的内容一起带走。
+            它只做一件事:如实说明"你掉线了,请重新登录"。
+          */}
+          {sessionExpired && (
+            <div
+              role="alert"
+              className="flex items-center justify-between gap-3 border-b border-amber-200 bg-amber-50 px-8 py-2 text-sm text-amber-900"
+            >
+              <span>登录状态已过期,请重新登录后继续操作(未保存的内容不会被提交)。</span>
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  void navigate('/login');
+                }}
+              >
+                去登录
+              </Button>
+            </div>
+          )}
           <Outlet />
         </main>
       </div>

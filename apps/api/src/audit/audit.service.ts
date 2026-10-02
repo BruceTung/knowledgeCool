@@ -102,7 +102,12 @@ export class AuditService {
     */
     const action = options.action === undefined || options.action === '' ? null : options.action;
 
-    const rows = await this.queryRows(operator, { scopeIds, action, cursor, limit });
+    // ⚠️ 必须多取一条:下面的 `hasMore` 是 `rows.length > limit`,
+    // 而 SQL 用的是 `LIMIT ${limit}` —— 只取 limit 条的话,`rows.length`
+    // 永远不会超过 limit,`hasMore` 恒为 false,`nextCursor` 恒为 null。
+    // 表现是**审计页永远只能看到最近一页,更早的记录翻不出来**,
+    // 而界面上没有任何报错 —— 与 exportCsv 那处「多取一条」的写法对齐。
+    const rows = await this.queryRows(operator, { scopeIds, action, cursor, limit: limit + 1 });
 
     const hasMore = rows.length > limit;
     const page = hasMore ? rows.slice(0, limit) : rows;

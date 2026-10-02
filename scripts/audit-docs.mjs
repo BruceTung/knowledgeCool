@@ -158,6 +158,39 @@ for (const line of apiSection.split('\n')) {
   docRoutes.set(key, `${m[1]} ${m[2]}`);
 }
 
+/*
+  ⚠️ 真实路径必须带上**全局前缀** `/api/v1`。
+
+  Nest 注册的是"控制器前缀 + 方法路径",而 `app.setGlobalPrefix(API_PREFIX)`
+  (apps/api/src/app-setup.ts)会在最前面再拼一段 —— 这个脚本原来只拼了控制器
+  那一段,于是它算出来的"代码路由"本来就都是短一截的。
+
+  后果不是"报错",而是**这条检查没有它看起来那么有牙**:
+  它比对的是"文档短路径 ↔ 代码短路径",两者用同一个错的形状互相印证,
+  于是 §6.2 把真实路径 `/api/v1/health` 写成 `/health` 时,门禁照样全绿
+  (实测:把 §6.2 里的 `/health/ready` 改成一个不存在的路径,
+   脚本只会说"代码里有 `GET /health/ready` 但 §6.2 没写" ——
+   它比的是短路径,永远指不到"真实路径写错了")。
+
+  文档 §6.2 自己写着这个前缀,§9 的验收 curl 也用的是带前缀的真实路径 ——
+  也就是说,唯一漏掉前缀的就是这条检查。带上它之后,文档与代码才是在
+  同一个(真实的)坐标里比对。
+*/
+/*
+  ⚠️ 这里**故意不拼全局前缀** `/api/v1`。
+
+  Nest 注册路由时会先拼控制器前缀、再由 `app.setGlobalPrefix(API_PREFIX)`
+  在最前面补一段;而 §6.2 的表(以及 `apps/web/src/lib/api.ts` 里的 `API_BASE`)
+  **统一用不带前缀的短路径**,前缀在那张表的上方单独交代过一次
+  (§6.2 表尾:"前缀 `/api/v1` 由 `app-setup.ts` 统一加")。
+
+  也就是说"短路径"是这份仓库里**约定俗成的坐标**,前端调用检查也共用它
+  —— 三方(文档 / 控制器 / 前端)在同一个坐标里比对,这才对得上。
+  曾经试过在这里补上前缀,结果是 143 处假漂移:文档 49 条与前端 45 处
+  全部"失配",而那纯粹是坐标不统一造成的,不是真缺陷。
+  => 要改前缀,得三方一起改;单独改这一处只会把检查变成噪声源。
+*/
+
 const codeRoutes = new Map();
 const apiSrc = path.join(ROOT, 'apps/api/src');
 for (const file of fs.readdirSync(apiSrc, { recursive: true })) {
@@ -683,6 +716,25 @@ const headingNumbers = new Set(
     'generated',
     'migrations',
   ]);
+  /*
+    ⚠️ **必须排除被 git 忽略的文件。**
+
+    原来这里只按扩展名与目录名过滤,于是 `.workbuddy/`(在 .gitignore 里,
+    根本不属于仓库内容)会被数进来 —— 门禁在开发机上恒红,而唯一"修好"它的
+    方式是把 3 个私有文件的路径写进 EXTRA_DOCS 豁免名单。那等于用"假装它们是
+    文档"的方式让检查闭嘴:豁免名单一旦塞满不是文档的东西,这条检查对真正
+    多出来的第二篇文档就不再灵敏了。
+
+    这条检查要守的是「**仓库**里只留一篇文档」,所以口径必须是仓库的内容,
+    而"仓库的内容"由 git 定义 —— 与这条检查自己的措辞保持一致。
+    顺带它也修掉一个真问题:别人的机器上有没有 `.workbuddy/` 不影响判定。
+  */
+  const isIgnored = (relPath) =>
+    spawnSync('git', ['check-ignore', '--quiet', '--', relPath], {
+      cwd: ROOT,
+      stdio: 'ignore',
+    }).status === 0;
+
   const found = [];
   const walk = (dir) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -690,7 +742,9 @@ const headingNumbers = new Set(
         if (SKIP_DIRS.has(entry.name)) continue;
         walk(path.join(dir, entry.name));
       } else if (/\.md$/i.test(entry.name)) {
-        found.push(path.relative(ROOT, path.join(dir, entry.name)).replaceAll(path.sep, '/'));
+        const rel = path.relative(ROOT, path.join(dir, entry.name)).replaceAll(path.sep, '/');
+        if (isIgnored(rel)) continue;
+        found.push(rel);
       }
     }
   };

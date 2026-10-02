@@ -12,6 +12,7 @@ import {
 } from '../features/admin/queries';
 import { describeReset } from '../features/admin/reset-note';
 import { useMe } from '../features/auth/queries';
+import { ApiError } from '../lib/api';
 import { toast } from '../lib/toast-store';
 import { useDebounced } from '../lib/use-debounced';
 import { T_META } from '../lib/typography';
@@ -169,7 +170,9 @@ export function UsersAdminPage() {
         },
         onError: (error: unknown) => {
           toast(
-            error instanceof Error ? `改名失败:${error.message}` : '改名失败,请重试。',
+            error instanceof ApiError
+              ? `改名失败:${error.message}`
+              : '改名失败:请求没有送达服务器,请检查网络后重试。',
             'error',
           );
         },
@@ -259,6 +262,12 @@ export function UsersAdminPage() {
               setQuery(event.target.value);
             }}
             placeholder="按工号或姓名搜索"
+            /*
+              ⚠️ v4.33：**placeholder 不能当无障碍名**。它一输入就消失、
+              读屏对它支持不一致，而且表单校验失败时用户回去也找不到字段在说什么。
+              这里补 aria-label —— 与 placeholder **同一句话**，读到的和看到的一致。
+            */
+            aria-label="按工号或姓名搜索"
             className="w-56 rounded-md border border-slate-300 px-3 py-1.5 text-sm outline-none focus:border-blue-500"
           />
         </div>
@@ -287,6 +296,7 @@ export function UsersAdminPage() {
                   <input
                     autoFocus
                     defaultValue={user.name}
+                    aria-label={`重命名「${user.name}」`}
                     className="w-32 rounded border border-blue-400 px-1 py-0.5 text-sm outline-none"
                     onKeyDown={(event) => {
                       if (event.key === 'Enter') commitRename(user, event.currentTarget.value);

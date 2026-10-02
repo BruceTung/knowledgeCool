@@ -108,6 +108,56 @@ ck('§6.4 审计游标传 abc -> 400(不是 500)', badCursor.status === 400, 'st
 const okCursor = await api('GET', '/audit-logs?cursor=1');
 ck('§6.4 审计游标传 1 -> 200', okCursor.status === 200, 'status=' + okCursor.status);
 
+// §6.4 分页**语义**校验:cursor 不只是格式对不对,还必须真的能翻到下一页。
+//
+// 这一条是补上的。原先这里只有上面两条(传 abc 回 400 / 传 1 回 200),
+// 它们只验了**游标的格式校验**,没验**游标是否管用**。于是 audit.service 里
+// list() 少取一条(hasMore 恒 false)那个缺陷长期存在而门禁全绿 ——
+// 表现是审计页永远只能看到最近一页、更早的记录翻不出来,且界面上没有任何报错。
+// 同目录的 verify-org 对 /admin/users 有真实翻页断言,审计这条路径却一直没有。
+const pageSize = 50;
+const auditFirst = await api('GET', '/audit-logs?limit=' + String(pageSize));
+const auditItems = Array.isArray(auditFirst.body?.items) ? auditFirst.body.items : [];
+ck(
+  '§6.4 审计分页:limit 生效且不超过页大小',
+  auditItems.length <= pageSize,
+  'items=' + String(auditItems.length),
+);
+// 最老那条 id 大于 1,说明它前面还有记录 —— 那就**必须**有下一页游标。
+const oldestShown = auditItems.length > 0 ? Number(auditItems[auditItems.length - 1].id) : 0;
+const auditShown = auditItems.length;
+if (auditShown >= pageSize && oldestShown > 1) {
+  ck(
+    '§6.4 审计分页:满一页且前面还有记录时 nextCursor 非 null',
+    typeof auditFirst.body?.nextCursor === 'string' && auditFirst.body.nextCursor !== '',
+    'nextCursor=' + String(auditFirst.body?.nextCursor) + ' oldest=' + String(oldestShown),
+  );
+  const second = await api(
+    'GET',
+    '/audit-logs?cursor=' + encodeURIComponent(String(auditFirst.body?.nextCursor ?? '')),
+  );
+  const secondIds = Array.isArray(second.body?.items) ? second.body.items.map((x) => x.id) : [];
+  const firstIds = auditItems.map((x) => x.id);
+  ck(
+    '§6.4 审计分页:第 2 页与第 1 页不重叠',
+    second.status === 200 && secondIds.every((id) => !firstIds.includes(id)),
+    'p2=' + String(secondIds.length),
+  );
+  ck(
+    '§6.4 审计分页:第 2 页严格接续(首条 < 第 1 页末条)',
+    secondIds.length > 0 && Number(secondIds[0]) < Number(firstIds[firstIds.length - 1]),
+    'p1last=' + String(firstIds[firstIds.length - 1]) + ' p2first=' + String(secondIds[0]),
+  );
+} else {
+  // 记录不足一页时**显式记一条**,而不是静默跳过 ——
+  // 静默跳过会让「这条断言从没跑过」与「这条断言通过了」看起来一样(第 108 轮的教训)。
+  ck(
+    '§6.4 审计分页:记录不足一页,翻页语义本次未覆盖(需要更多数据)',
+    auditShown < pageSize,
+    'items=' + String(auditShown) + ' oldest=' + String(oldestShown),
+  );
+}
+
 // §9.1 pagination: /admin/users returns {users,total,nextCursor}
 const users = await api('GET', '/admin/users?limit=2');
 const shape = users.body ?? {};
@@ -147,10 +197,19 @@ ck(
 );
 
 console.log(results.join(String.fromCharCode(10)));
-console.log(
-  String.fromCharCode(10) +
-    'passed ' +
-    results.filter((r) => r.startsWith('OK')).length +
-    '/' +
-    results.length,
-);
+const passedCount = results.filter((r) => r.startsWith('OK')).length;
+const failedCount = results.length - passedCount;
+console.log(String.fromCharCode(10) + 'passed ' + passedCount + '/' + results.length);
+
+// 失败时必须让调用方看得见。原本这里只打印计数、不设退出码,
+// 于是 passed 11/12 在 CI 或脚本里会被当成成功 —— 与同目录的
+// verify-org.mjs(if (failed > 0) process.exit(1))、
+// verify-robustness.mjs(process.exit(fail === 0 ? 0 : 1)) 不一致。
+// 验收脚本静默通过比它报错更坏:没有任何迹象提示你去看那份输出。
+if (failedCount > 0) {
+  console.log('失败项:');
+  for (const r of results) {
+    if (!r.startsWith('OK')) console.log('  · ' + r);
+  }
+  process.exit(1);
+}

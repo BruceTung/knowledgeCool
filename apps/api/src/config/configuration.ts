@@ -56,6 +56,16 @@ export interface AppConfiguration {
   loginIpMaxFailures: number;
   /** IP 限速窗口(分钟)。默认 15。 */
   loginIpWindowMinutes: number;
+  /**
+   * 上传窗口内允许的次数(小于等于 0 表示关闭)。
+   *
+   * 默认 30。实测过没有它的后果:连传 40 次、**226ms 全部成功**,
+   * 平均 5.7ms 一次 —— 一个已登录账号一分钟能写进几 GB。
+   * 单文件 10MB 的上限拦不住"次数"。见 upload/upload-throttle.ts。
+   */
+  uploadMaxPerWindow: number;
+  /** 上传限速窗口(分钟)。默认 5。 */
+  uploadWindowMinutes: number;
 }
 
 function toInt(value: string | undefined, fallback: number): number {
@@ -76,7 +86,21 @@ export function loadConfiguration(): AppConfiguration {
   return {
     nodeEnv,
     port: toInt(process.env.API_PORT ?? process.env.PORT, 3000),
-    webOrigin: process.env.WEB_ORIGIN ?? 'http://localhost:5173',
+    /*
+      ⚠️⚠️ v4.15:**生产环境没有默认值** —— 这是为了让 app-setup 里那道
+      "WEB_ORIGIN 未配置就报错"的硬失败**真的可达**。
+
+      原来这里无条件兜底成 `http://localhost:5173`,于是 `app-setup` 里
+      `if (allowedOrigins.length === 0) throw …` 那段**是死代码**:
+      兜底值本身非空,条件永远不成立 —— 生产上忘了配 `WEB_ORIGIN` 时,
+      服务**照常启动**,只是 CORS 白名单里只有 `http://localhost:5173`。
+      表现是:浏览器访问真实地址时被 CORS 拦掉,而**服务端一切正常**
+      (curl 能通、日志没报错)—— 排查方向会被引到前端或网络上去。
+
+      现在:生产必须显式配;开发形态仍保留 `localhost:5173` 的便利
+      (与 `pnpm dev` 的 Vite 端口一致),不打扰本地开发。
+    */
+    webOrigin: process.env.WEB_ORIGIN ?? (isProduction ? '' : 'http://localhost:5173'),
     databaseUrl:
       process.env.DATABASE_URL ??
       'postgresql://knowledgecool:knowledgecool@localhost:5432/knowledgecool?schema=public',
@@ -87,6 +111,8 @@ export function loadConfiguration(): AppConfiguration {
     sessionCookieSecure: toBool(process.env.SESSION_COOKIE_SECURE, isProduction),
     // 空字符串表示未配置 —— 由使用方(首登改密)决定怎么处理,这里不做兜底默认值。
     sessionSecret: process.env.SESSION_SECRET ?? '',
+    uploadMaxPerWindow: toInt(process.env.UPLOAD_MAX_PER_WINDOW, 30),
+    uploadWindowMinutes: toInt(process.env.UPLOAD_WINDOW_MINUTES, 5),
     loginMaxAttempts: toInt(process.env.LOGIN_MAX_ATTEMPTS, 5),
     loginLockMinutes: toInt(process.env.LOGIN_LOCK_MINUTES, 15),
     loginIpMaxFailures: toInt(process.env.LOGIN_IP_MAX_FAILURES, 100),

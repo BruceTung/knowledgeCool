@@ -127,14 +127,32 @@ export function Button({
 /**
  * 错误提示。
  *
- * 直接用后端的 message —— §6.1 已保证它是**给人看的中文**,
+ * `ApiError` 直接用后端的 message —— §6.1 已保证它是**给人看的中文**,
  * 而且刻意不区分「不存在」与「无权访问」。前端不做二次包装,
  * 免得把后端精心设计的措辞又改回成能被枚举的信息。
+ *
+ * ⚠️⚠️ v4.42:**不是 `ApiError` 的时候,绝不能把 `error.message` 直接摆出来。**
+ *
+ * 原来这里写的是 `error instanceof ApiError || error instanceof Error ? error.message : …`
+ * —— 那个 `|| Error` 分支把**浏览器的原始英文报错**放到了界面上。
+ * 实测(断掉 API 后用 CDP 拦截 `/api/v1/*`,刷新首页):
+ *
+ *     无法连接到服务
+ *     Failed to fetch          ← fetch() 被拒时浏览器给的原文
+ *
+ * 两层问题:
+ *   1. **是英文**。这是一个中文产品,把 `Failed to fetch` 摆给用户看。
+ *   2. **没说该怎么办**。网络断了/服务挂了,用户需要知道「稍后再试」,
+ *      而不是一个他看不懂、也无从下手的字符串。
+ *
+ * 所以只有**来自后端**的 `ApiError` 才用它自己的措辞;
+ * 其余(网络失败、解析失败、未知异常)统一收敛成一句中文,
+ * 并给出「检查网络或稍后重试」这个可执行的下一步。
  */
 export function ErrorNote({ error, onRetry }: { error: unknown; onRetry?: () => void }) {
   if (error === null || error === undefined) return null;
   const message =
-    error instanceof ApiError || error instanceof Error ? error.message : '发生未知错误';
+    error instanceof ApiError ? error.message : '请求没有送达服务器。请检查网络,或稍后重试。';
   return (
     <div
       role="alert"

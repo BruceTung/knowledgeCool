@@ -89,6 +89,8 @@ export function CommentsPanel({ nodeId }: { nodeId: string }) {
           onChange={(event) => {
             setDraft(event.target.value.slice(0, COMMENT_BODY_MAX_LENGTH));
           }}
+          /* ⚠️ v4.33：placeholder 不能当无障碍名。 */
+          aria-label="写评论"
           onKeyDown={(event) => {
             /*
               ⚠️ **中文输入法组词期间按 Enter 是"选中候选词",不是"发送"。**
@@ -170,6 +172,8 @@ function CommentCard({
             onChange={(event) => {
               setDraft(event.target.value.slice(0, COMMENT_BODY_MAX_LENGTH));
             }}
+            /* ⚠️ v4.33：placeholder 不能当无障碍名。这条是"编辑已有评论"。 */
+            aria-label="编辑评论"
             rows={3}
             className={`w-full resize-none rounded-md border border-slate-300 px-2 py-1.5 outline-none focus:border-blue-500 ${T_BODY}`}
           />

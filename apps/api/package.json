@@ -18,8 +18,8 @@
     "seed:dev": "node scripts/seed-dev.mjs",
     "start": "node dist/main.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "verify:org": "node scripts/verify-org.mjs",
-    "verify:doc": "node scripts/verify-doc-claims.mjs"
+    "uploads:orphans": "node scripts/prune-uploads.mjs",
+    "verify:org": "node scripts/verify-org.mjs"
   },
   "dependencies": {
     "@knowledgecool/shared": "workspace:*",

@@ -4,7 +4,9 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import cookieParser from 'cookie-parser';
 
 import { API_PREFIX } from './common/constants.js';
+import { AppError } from './common/errors/app-error.js';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter.js';
+import { exceedsNestingDepth } from './common/json-depth.js';
 
 /**
  * 请求体大小上限。
@@ -17,6 +19,18 @@ import { AllExceptionsFilter } from './common/filters/all-exceptions.filter.js';
  * 留出余量给 JSON 外壳与转义:2MB 正文最坏情况转义后会膨胀若干倍。
  */
 const BODY_LIMIT = '8mb';
+
+/**
+ * 请求体 JSON 的**括号层数**上限 —— 在解析之前拦,见下面的 `verify`。
+ *
+ * 取 100 与 `MAX_DOC_DEPTH`(正文文档树的层数上限)**同一个量级但更宽松**:
+ * 请求体外壳还会多套一两层(`{"content":{...}}`),所以这里必须比它大;
+ * 但它远小于会爆栈的 ~1000 层,因此照样拦得住。
+ *
+ * ⚠️ 两个数不能互相取代:这个管"解析期别爆栈"(按括号数、不看语义),
+ * `MAX_DOC_DEPTH` 管"文档树本身合不合理"(按 type/节点数,是语义校验)。
+ */
+const MAX_BODY_JSON_DEPTH = 120;
 
 /**
  * 应用装配 —— 启动路径**只有这一处**。
@@ -76,7 +90,62 @@ export function configureApp(app: INestApplication): void {
     // 换到 Fastify 平台时会走到这里 —— 明确报错,而不是让上传/保存静默地失败
     throw new Error('本项目依赖 Express 平台的 body 解析能力,不能用其它平台适配器');
   }
-  expressApp.useBodyParser('json', { limit: BODY_LIMIT });
+  /*
+    ⚠️⚠️ v4.11:**解析前的深度预检 —— 必须挂在这里,不能挂业务层。**
+
+    实测(发一份深度递增的合法 `{type:'doc'}` 树给 `PUT /nodes/:id/content`):
+      深度  500  (15 KB) -> 403   走到了业务校验
+      深度 1000  (30 KB) -> **500**
+      浅结构、88 KB       -> 403   **同体积不崩**
+
+    500 的堆栈落在 `@nestjs/common/utils/strip-proto-keys.util.js` ——
+    **Nest 反序列化/剥离原型键**那一步,**比任何控制器代码都早**。
+    所以 `ContentService.save` 里的 `checkDocStructure` 永远不会被执行:
+    请求还没进业务层就爆栈了。(那条检查仍要有 —— 它管节点数上限与
+    `type=doc` 这类**语义**校验,只是拦不住"解析期爆栈"。)
+
+    */
+  /*
+      ⚠️ **不能走 body-parser 的 `verify`** ——
+      `NestExpressBodyParserOptionsFor` 显式把它 `Omit` 掉了(Nest 自己要用它抓
+      原始 body)。但那只在 `rawBody: true` 时才真的覆盖:`getBodyParserOptions`
+      的源码是 `rawBody === true ? {...options, verify: rawBodyParser} : options`。
+      本项目没有开 `rawBody`,所以传入的 `verify` 会被**原样保留** ——
+      是类型挡住了而已,运行时是通的。所以这里加一次显式断言,并把理由写在上面。
+
+      `verify` 拿到的是**原始 buffer**(那时还没 `JSON.parse`),因此可以用一次
+      纯字符扫描数括号层数 —— 不建对象、不递归,再深的输入也不会让它自己爆栈。
+    */
+  expressApp.useBodyParser('json', {
+    limit: BODY_LIMIT,
+    verify: (_req: { url?: string }, _res: unknown, buf: Buffer) => {
+      /*
+        ⚠️⚠️ v4.39:**所有 JSON 正文都要扫,不能只扫 `/content`。**
+
+        原来这里有一句 `if (!req.url?.includes('/content')) return;`,
+        理由是「只有 /content 可能承载深层结构;其余请求体都很小,不必扫」。
+        **那个理由是错的** —— 深度守卫要防的不是「正文语义上是不是一棵树」,
+        而是「解析期别爆栈」。而爆栈发生在 Nest 的 strip-proto-keys 里,
+        **任何** JSON 端点都会经过它。
+
+        实测(隔离库,逐条打):
+
+          路径                 深度   状态
+          PUT /nodes/:id/content  3000   400 ✅ 被守卫拦住
+          POST /nodes             3000   **500** ❌ RangeError: Maximum call stack size exceeded
+          POST /nodes              200   400    (没到爆栈深度,所以看起来没事)
+
+        也就是说:只要换一个 JSON 端点,同一个攻击就绕过去了 ——
+        而 curl 一行就能做到,不需要任何特殊权限(只是「已登录」)。
+
+        代价方面:这是**纯字符扫描、零分配、不递归**(见 json-depth.ts),
+        每个请求体过一遍的开销远小于 JSON.parse 本身,没有必要为省它而留一个洞。
+      */
+      if (exceedsNestingDepth(buf.toString('utf8'), MAX_BODY_JSON_DEPTH)) {
+        throw AppError.validation(`请求内容嵌套层级过深(超过 ${String(MAX_BODY_JSON_DEPTH)} 层)`);
+      }
+    },
+  } as Parameters<typeof expressApp.useBodyParser<'json'>>[1]);
   expressApp.useBodyParser('urlencoded', { limit: BODY_LIMIT, extended: true });
 
   const config = app.get(ConfigService);

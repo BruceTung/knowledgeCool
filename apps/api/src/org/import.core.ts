@@ -19,6 +19,7 @@
  * 就会把归属写到别的节点上,而且**不报任何错**。
  */
 
+import { EMPLOYEE_NO_PATTERN } from '@knowledgecool/shared';
 import type { OrgImportPreview } from '@knowledgecool/shared';
 
 // ==================================================================
@@ -50,8 +51,16 @@ export function columnIndex(key: ImportColumnKey): number {
 export const IMPORT_SHEET_NAME = '人员名单';
 export const IMPORT_HELP_SHEET_NAME = '填写说明';
 
-/** 工号允许的字符。刻意不用数字类型:工号常带字母前缀与前导零。 */
-const EMPLOYEE_NO_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/;
+/*
+  ⚠️ v4.9:工号正则改用 **shared 里那一份**(与登录 / 首登 / 建号同源)。
+
+  原来这里是 `/^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/` —— 与登录侧的
+  `/^[A-Za-z0-9._-]{1,64}$/` **不是同一条规则**,于是:
+    · `_kc01`(下划线开头)能建号、能登录,却让**整批导入失败**;
+    · 33~64 位工号同样。
+  而导入是整批拒绝的,报错只指向 Excel 行号 —— 管理员看不出
+  "这个工号本来就是系统里建出来的"。详见 shared/org.ts 的说明。
+*/
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

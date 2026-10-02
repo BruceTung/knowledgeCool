@@ -48,9 +48,32 @@ export class HealthService {
 
   async readiness(): Promise<{ httpStatus: number; body: ReadinessResponse }> {
     const [database, redis] = await Promise.all([this.checkDatabase(), this.checkRedis()]);
-    const components = { database, redis };
+    const checked = { database, redis };
 
-    const allUp = Object.values(components).every((component) => component.status === 'up');
+    const allUp = Object.values(checked).every((component) => component.status === 'up');
+
+    /*
+      ⚠️ v4.14:**响应里不带 `error`** —— 这个接口是 `@Public` 的,探针不带凭证,
+      所以任何能访问到这个端口的人都能读到依赖的**原始错误原文**。
+
+      实测(把 redis 指向一个不存在的主机,再未鉴权请求本接口):
+      ```
+        HTTP 503
+        {"status":"degraded","components":{"database":{"status":"up"},
+         "redis":{"status":"down","error":"Connection is closed."}}}
+      ```
+      驱动的原文里通常还有主机名/端口/驱动名一类信息(数据库那侧尤其常见),
+      对一个**无需登录**的接口来说,那是没必要给出去的内部细节。
+
+      ⚠️ **细节一个字都没丢** —— 就在下面的 `logger.warn` 里。
+      有日志权限的人照样看得到"是哪一个依赖、因为什么挂了";
+      不再有权限的人拿到的是"哪个依赖 down"这个**状态**,而不是它的内部信息。
+    */
+    const components: ReadinessResponse['components'] = {
+      database: { status: database.status },
+      redis: { status: redis.status },
+    };
+
     const body: ReadinessResponse = {
       status: allUp ? 'ok' : 'degraded',
       components,
@@ -58,7 +81,7 @@ export class HealthService {
 
     if (!allUp) {
       // 只在降级时记日志,避免每 10 秒一次的探针刷满日志。
-      const down = Object.entries(components)
+      const down = Object.entries(checked)
         .filter(([, component]) => component.status === 'down')
         .map(([name, component]) => `${name}: ${component.error ?? 'unknown'}`);
       this.logger.warn(`就绪检查未通过 —— ${down.join(' | ')}`);

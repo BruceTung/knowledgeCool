@@ -13,16 +13,20 @@
  * 光标进了表格,同一个按钮变成高亮,菜单里多出「表格工具」一组。
  * **一个按钮、两种状态** —— 比铺一排按钮省地方,也不会让工具栏忽宽忽窄。
  *
- * ## ⚠️ 菜单里的按钮一律 `onMouseDown` + `preventDefault()`
+ * ## ⚠️ 菜单里的按钮一律走 `pressHandlers`(鼠标 + 键盘两条路径)
  *
  * 与工具栏其它按钮同一个理由:点按钮会把焦点从编辑器抢走、选区随之丢失,
- * 于是"给这个单元格插一行"会变成"在最外层插一行"。
- * 阻止默认行为就能保住选区 —— 菜单里的按钮**每一个**都要,漏一个就那一处失灵。
+ * 于是"给这个单元格插一行"会变成"在最外层插一行"。阻止默认行为就能保住选区。
+ *
+ * 但**只挂 `onMouseDown` 会让键盘失效**(键盘激活只派发 `click`)——
+ * 见 `press-handlers.ts`。菜单里的按钮**每一个**都要用 `pressHandlers`,
+ * 漏一个就那一处失灵。
  */
 import type { Editor } from '@tiptap/core';
-import { useState, type MouseEvent } from 'react';
+import { useState } from 'react';
 
 import { POPOVER_CLASS, useDismiss } from './popover';
+import { pressHandlers } from './press-handlers';
 
 /** 插入网格的最大行列数。再大就该用"插入后加行列"而不是一次画满。 */
 const GRID_MAX = 6;
@@ -38,12 +42,13 @@ export function TableMenu({ editor, triggerClass }: { editor: Editor; triggerCla
     setOpen(false);
   });
 
-  const guard = (action: () => void) => (event: MouseEvent) => {
-    event.preventDefault();
-    action();
-    // 菜单**不自动关**:连着点"下方插行"三次是常见操作。
-    // 只有删除表格才关(那个动作之后菜单里的按钮全都没意义了)。
-  };
+  /*
+    ⚠️ 菜单里的按钮也要能用键盘触发:原来只挂 `onMouseDown`,而键盘激活
+    只派发 `click` —— 插行、插列、合并、删除表格**全都按不动**。
+    `pressHandlers` 接上两条路径,并用 `detail === 0` 区分,鼠标不会执行两遍。
+    (菜单**不自动关**:连着点"下方插行"三次是常见操作。
+     只有删除表格才关 —— 那个动作之后菜单里的按钮全都没意义了。)
+  */
 
   const canMerge = inTable && editor.can().chain().mergeCells().run();
   const canSplit = inTable && editor.can().chain().splitCell().run();
@@ -64,7 +69,7 @@ export function TableMenu({ editor, triggerClass }: { editor: Editor; triggerCla
       type="button"
       disabled={options.disabled ?? false}
       title={options.title ?? label}
-      onMouseDown={guard(action)}
+      {...pressHandlers(action)}
       className={`flex h-7 items-center justify-center rounded-md border px-2 text-xs whitespace-nowrap transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
         options.danger === true
           ? 'border-red-200 text-red-600 hover:bg-red-50'
@@ -81,11 +86,10 @@ export function TableMenu({ editor, triggerClass }: { editor: Editor; triggerCla
         type="button"
         title={inTable ? '表格工具(插入 / 删除行列、合并、表头)' : '插入表格'}
         aria-expanded={open}
-        onMouseDown={(event) => {
-          event.preventDefault();
+        {...pressHandlers(() => {
           setOpen((prev) => !prev);
           setHover(null);
-        }}
+        })}
         className={`${triggerClass} ${inTable ? 'bg-slate-900 text-white' : ''}`}
       >
         表格
@@ -120,7 +124,7 @@ export function TableMenu({ editor, triggerClass }: { editor: Editor; triggerCla
                     onMouseEnter={() => {
                       setHover({ rows, cols });
                     }}
-                    onMouseDown={guard(() => {
+                    {...pressHandlers(() => {
                       insertTable(rows, cols);
                     })}
                     className={`h-4 w-4 rounded-sm border transition-colors ${

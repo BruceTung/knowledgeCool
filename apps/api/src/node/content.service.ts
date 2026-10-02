@@ -27,6 +27,7 @@ import {
   type NodeContentResponse,
   type ProseMirrorDoc,
   type SaveContentInput,
+  checkDocStructure,
   countImages,
   isProseMirrorDoc,
 } from '@knowledgecool/shared';
@@ -117,6 +118,21 @@ export class ContentService {
     if (!isProseMirrorDoc(input.content)) {
       throw AppError.validation('正文格式不合法:根节点必须是 type=doc 的文档树');
     }
+
+    /*
+      ⚠️⚠️ v4.9:**必须先做迭代式的深度/规模预检**,再走下面那两处递归。
+
+      上面那句 `isProseMirrorDoc` 只查两层(根 + `content` 是不是数组)。
+      之后 `countImages`(递归)与 `JSON.stringify`(引擎递归)都会走整棵树 ——
+      于是一份**深度几千层**的文档会让它们**爆栈**,表现为
+      **500「服务器内部错误」**而不是 400「正文格式不合法」。
+      实测约 **540 KB** 就能触发(远低于 2 MB 上限,所以体积那道闸拦不住它)。
+
+      客户端拿到 500 只会当成"服务器坏了"并重试,而重试永远不会成功 ——
+      真正的原因从头到尾没说出口。这里提前判掉,让它是**明确的 400**。
+    */
+    const structure = checkDocStructure(input.content);
+    if (!structure.ok) throw AppError.validation(structure.reason);
 
     // 每页图片上限。放在**服务端**才是真的闸 —— 前端那道只是即时反馈。
     // 数的是文档树里的 image 节点(递归),所以嵌在表格/引用块里的也算。

@@ -377,25 +377,32 @@ export class OrgService {
 
     await this.permissions.requireCreateUnder(operator, input.parentId);
 
-    let parentPath: string | null = null;
-    let depth = 0;
-    if (input.parentId !== null) {
-      const parent = await this.prisma.node.findUnique({
-        where: { id: input.parentId },
-        select: { materializedPath: true, depth: true },
-      });
-      if (parent === null) throw AppError.notFound();
-      parentPath = parent.materializedPath;
-      depth = parent.depth + 1;
-    }
-
     const id = randomId();
     const ownerId = input.ownerId ?? operator.id;
 
     // 指定的所有者也必须存在且在职 —— 把所有权交给一个离职账号,这个节点就废了
     await this.assertActiveUser(ownerId);
 
+    /*
+      ⚠️⚠️ 父路径必须在事务**内**读 —— 与 `NodeService.create` 和 `move` 同一条原则。
+      事务外读到的只是个快照:若并发把父节点移到别处,这里会用过期路径算出
+      一个"父子关系对、路径却对不上"的新节点,祖先链从此断裂
+      (权限按路径前缀找祖先,链断 = 判权错误,受限继承也可能丢)。
+      详见 `node.service.ts` move() 里对"为什么 Serializable 救不了"的说明。
+    */
     const row = await this.prisma.$transaction(async (tx) => {
+      let parentPath: string | null = null;
+      let depth = 0;
+      if (input.parentId !== null) {
+        const fresh = await tx.node.findUnique({
+          where: { id: input.parentId },
+          select: { materializedPath: true, depth: true },
+        });
+        if (fresh === null) throw AppError.notFound();
+        parentPath = fresh.materializedPath;
+        depth = fresh.depth + 1;
+      }
+
       const last = await tx.node.findFirst({
         where: { parentId: input.parentId },
         orderBy: { position: 'desc' },
@@ -444,7 +451,9 @@ export class OrgService {
     if (isRoot) {
       this.requireSuperAdmin(operator);
     } else {
-      await this.permissions.requireManage(operator, nodeId);
+      // ⚠️ v4.9:写路径用不判读的那一道 —— 否则"改成功了却回 404"。
+      // (下面那句 assertActiveUser 才是这里真正的另一道闸。)
+      await this.permissions.requireManageForWrite(operator, nodeId, '修改所有者');
     }
 
     await this.assertActiveUser(ownerId);
@@ -502,6 +511,30 @@ export class OrgService {
     // 其余读取路径(详情/正文/导出/评论)都回 404,只有这条漏着 ——
     // 一致性本身就是安全性质:一条不一致的路径就是一条侧信道。
     await this.permissions.requireRead(operator, nodeId);
+    return this.buildMembersView(operator, nodeId);
+  }
+
+  /**
+   * 组装成员响应,**不带读判定**。
+   *
+   * ⚠️ 单独分出来是给 `addMember` / `removeMember` 做返回值用的。
+   * 它们**先写库、再组装响应**,而写操作的门槛是 `canManage`(该节点或
+   * 其上级的所有者),它可以**严格宽于**读判定:超管就是这种情况 ——
+   * 在"自己没拥有、没创建、也不在名单里"的**受限**节点上,他改得动,
+   * 却读不到。
+   *
+   * 原来这里直接调 `this.members()`,于是超管的写入**成功了却收到 404**:
+   * 界面报错、而库里已经改了 —— 用户只能进数据库修。
+   * `replaceReaders` 早就踩过同一个坑,原则写在
+   * `permission.service.ts` 的 `buildReadersView` 上:
+   *
+   *   **写操作的成功与否,不能取决于"写完之后还能不能读"。**
+   *
+   * 安全上这不放宽任何东西:能走到这里的调用方刚刚都通过了
+   * `requireManageMember`(比 `requireRead` 严),而 `members()` 那条
+   * 公开读路径仍然照旧先过 `requireRead`。
+   */
+  private async buildMembersView(operator: Actor, nodeId: string): Promise<NodeMembersResponse> {
     const { chain, row } = await this.permissions.chainOf(nodeId);
     const prefix = subtreePrefix(row.materializedPath);
 
@@ -664,7 +697,7 @@ export class OrgService {
       select: { userId: true },
     });
     // 幂等:已经是成员就什么都不做(也不要重复记审计,否则日志会被刷屏)
-    if (existing !== null) return this.members(operator, nodeId);
+    if (existing !== null) return this.buildMembersView(operator, nodeId);
 
     await this.prisma.orgAssignment.create({ data: { userId, nodeId } });
 
@@ -680,7 +713,7 @@ export class OrgService {
       detail: { title: row.title, userId, name: who.name, employeeNo: who.employeeNo },
     });
 
-    return this.members(operator, nodeId);
+    return this.buildMembersView(operator, nodeId);
   }
 
   /**
@@ -724,7 +757,7 @@ export class OrgService {
       },
     });
 
-    return this.members(operator, nodeId);
+    return this.buildMembersView(operator, nodeId);
   }
 
   /** 谁能改这个节点的成员 —— 该节点或其上级的所有者,以及超管。 */
@@ -794,7 +827,7 @@ export class OrgService {
     if (chain.ancestors.length === 0) {
       this.requireSuperAdmin(operator);
     } else {
-      await this.permissions.requireManage(operator, nodeId);
+      await this.permissions.requireManageForWrite(operator, nodeId, '查看可任命的人选');
     }
 
     const myScopes = await this.permissions.scopePathsOf(operator.id);

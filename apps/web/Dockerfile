@@ -33,6 +33,27 @@ RUN pnpm --filter @knowledgecool/shared build \
 FROM nginx:1.27-alpine AS runtime
 
 COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
+# ⚠️⚠️ v4.38:**先清空目标目录,再拷贝。**
+#
+# 原来是直接 `COPY --from=builder /app/apps/web/dist /usr/share/nginx/html`。
+# 而 Docker 的 `COPY` 到**已存在的目录**是**合并**,不是替换 —— 实测过:
+#
+#   基础镜像里先放 /html/assets/old-hash.txt 与 /html/index.html,
+#   再 COPY 一个只有 assets/a.txt 的目录过去,结果是
+#   /html/assets/a.txt + /html/assets/old-hash.txt + /html/index.html
+#   —— **旧文件原样留存**。
+#
+# 这不是理论问题。nginx:alpine 自带的 `index.html` 与 `50x.html` 就是这样留在
+# 生产容器里的(实测:`50x.html` 至今还是基础镜像 2025-04 那份)。
+# 更要紧的是 **hash 会变的产物**:Vite 每次构建输出 `index-<hash>.js`,
+# 换个 hash 就是**新文件名**,于是旧的那份**永远不会被覆盖**,一直堆在镜像里。
+# 症状是「镜像越滚越大」,以及老用户在缓存了旧 `index.html` 时会**继续跑到旧代码**。
+# (本轮之前那个「出厂镜像里 `*.map` 是旧的」也是同一个机制 —— 当时只改了
+#  `vite.config` 的 `sourcemap: false`,但历史产物不会因为新构建而消失。)
+#
+# 所以这里显式先 `rm -rf` 目标目录。基础镜像自带的 index.html / 50x.html
+# 一并清掉 —— 它们对本项目没有用途(路由由 SPA 自己的 index.html 接管)。
+RUN rm -rf /usr/share/nginx/html
 COPY --from=builder /app/apps/web/dist /usr/share/nginx/html
 
 EXPOSE 80

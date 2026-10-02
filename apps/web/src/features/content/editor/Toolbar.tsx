@@ -14,10 +14,10 @@
  */
 import type { Editor } from '@tiptap/core';
 import { MAX_IMAGES_PER_NODE } from '@knowledgecool/shared';
-import type { MouseEvent } from 'react';
 
 import { CodeLanguageSelect } from './CodeLanguageSelect';
 import { LinkPopover } from './LinkPopover';
+import { pressHandlers } from './press-handlers';
 import { TableMenu } from './TableMenu';
 
 /**
@@ -49,22 +49,47 @@ export function EditorToolbar({
   imageCount: number;
 }) {
   const imagesFull = imageCount >= MAX_IMAGES_PER_NODE;
-  /**
-   * ⚠️ 用 `onMouseDown` 而不是 `onClick`,并且 `preventDefault()`。
-   * 点按钮会先把焦点从编辑器抢走,选区随之丢失 ——
-   * 于是"选中一段文字再点加粗"会变成"什么都没加粗"。
-   * 在 mousedown 阶段阻止默认行为就能保住选区。
-   */
-  const guard = (action: () => void) => (event: MouseEvent) => {
-    event.preventDefault();
-    action();
-  };
+  /*
+    ⚠️ 原来这里只用 `onMouseDown` + `preventDefault()`:点按钮会先把焦点
+    从编辑器抢走、选区随之丢失,于是"选中一段文字再点加粗"会变成"什么都没加粗"。
+    那个理由成立,**但那套写法漏掉了键盘** —— 键盘激活 <button> 只派发 `click`
+    ,`mousedown` 永远不发生。于是加粗、标题、列表、代码块、撤销/重做**全都
+    键盘不可达**(WCAG 2.1.1 Level A)。
 
-  const button = (label: string, active: boolean, action: () => void, title: string) => (
+    `pressHandlers` 把两条路径都接上,并用 `detail === 0` 区分它们 ——
+    鼠标点一次不会执行两遍。详细说明见 `editor/press-handlers.ts`。
+  */
+  /*
+    ⚠️ v4.32:`aria-pressed` + `aria-label`。
+
+    1. **切换态原来只靠颜色。** 加粗/斜体/标题/列表这些按钮的「按下」状态
+       仅由 `TOOL_BUTTON_ACTIVE_CLASS`(深底白字)表达 —— **颜色是唯一线索**
+       (WCAG 1.4.1「不能只用颜色传达信息」)。加了 `aria-pressed` 之后,
+       读屏会念出「切换按钮,已按下」,不依赖颜色也能知道状态。
+
+    2. **符号按钮没有可读名。** 可见文字是 `B` / `⌀` / `↶` / `</>` 这类符号,
+       而可读名只写在 `title` 里 —— `title` **不能替代**无障碍名
+       (它只在鼠标悬停时出现,且读屏支持很不一致)。
+       现在把同一份文案同时给 `aria-label`,两处用同一个 `title` 变量,不会漂。
+
+    ⚠️ **`aria-pressed` 只给真正的切换按钮。** 撤销/重做不是「开关」——
+       它们是一次性动作,给它们 `aria-pressed="false"` 会让人以为
+       「撤销」有个可以停留的按下态。所以 `toggling` 单独作参数,
+       而不是靠 `active` 是否为 false 去猜(第 188 行那两个恰恰传的就是 false)。
+  */
+  const button = (
+    label: string,
+    active: boolean,
+    action: () => void,
+    title: string,
+    toggling = true,
+  ) => (
     <button
       type="button"
       title={title}
-      onMouseDown={guard(action)}
+      aria-label={title}
+      {...(toggling ? { 'aria-pressed': active } : {})}
+      {...pressHandlers(action)}
       className={`${TOOL_BUTTON_CLASS} ${active ? TOOL_BUTTON_ACTIVE_CLASS : TOOL_BUTTON_IDLE_CLASS}`}
     >
       {label}
@@ -176,7 +201,7 @@ export function EditorToolbar({
             : `插入图片(还能放 ${String(MAX_IMAGES_PER_NODE - imageCount)} 张)`
         }
         disabled={imageUploading || imagesFull}
-        onMouseDown={guard(onPickImage)}
+        {...pressHandlers(onPickImage)}
         className={`${TOOL_BUTTON_CLASS} ${TOOL_BUTTON_IDLE_CLASS} disabled:cursor-not-allowed disabled:opacity-50`}
       >
         {imageUploading ? '上传中…' : imagesFull ? '图片已满' : '图片'}
@@ -186,8 +211,8 @@ export function EditorToolbar({
 
       <span className={TOOL_DIVIDER_CLASS} />
 
-      {button('↶', false, () => editor.chain().focus().undo().run(), '撤销')}
-      {button('↷', false, () => editor.chain().focus().redo().run(), '重做')}
+      {button('↶', false, () => editor.chain().focus().undo().run(), '撤销', false)}
+      {button('↷', false, () => editor.chain().focus().redo().run(), '重做', false)}
     </div>
   );
 }

@@ -26,6 +26,14 @@ const STATUS_TO_CODE: Readonly<Record<number, ErrorCode>> = Object.freeze({
   403: 'FORBIDDEN',
   404: 'NOT_FOUND',
   409: 'VERSION_CONFLICT',
+  /*
+    ⚠️ v4.9 补上 413。此前没有这一条,于是 Nest 的 `PayloadTooLargeException`
+    (multipart 超过 `client_max_body_size` 时由 multer 抛出)走进下面的兜底
+    分支 —— 它 `status >= 500` 为假,于是被归成 `VALIDATION_FAILED`,
+    而 §6.1 写着 `VALIDATION_FAILED = 400`。结果是
+    **HTTP 413 却带一个定义在 400 上的错误码**,前端按码分支的行为无法预测。
+  */
+  413: 'PAYLOAD_TOO_LARGE',
   429: 'RATE_LIMITED',
   500: 'INTERNAL_ERROR',
 });
@@ -99,14 +107,20 @@ export class AllExceptionsFilter implements ExceptionFilter {
     //    500 会把排查方向引到服务端,浪费很久。
     const parserError = asParserError(exception);
     if (parserError !== null) {
+      /*
+        ⚠️ v4.9:按**解析错误的种类**选错误码,而不是一律 `VALIDATION_FAILED`。
+        `entity.too.large` 由 raw-body 抛出、带 `status: 413` ——
+        它显然不是"参数不正确"(那在 §6.1 里定义成 400)。
+        从前这里虽然把状态码原样透传了 413,错误码却还是 400 那一个,
+        于是响应自相矛盾:同一个 body 里 `status=413` 而 `code=VALIDATION_FAILED(400)`。
+      */
+      const tooLarge = parserError.type === 'entity.too.large';
+      const code: ErrorCode = tooLarge ? 'PAYLOAD_TOO_LARGE' : 'VALIDATION_FAILED';
       return {
-        status: parserError.status,
-        body: buildErrorBody(
-          'VALIDATION_FAILED',
-          parserError.type === 'entity.too.large'
-            ? '请求体过大,请缩小内容后重试'
-            : '请求体解析失败',
-        ),
+        // 状态码一律由**错误码**决定,不再透传驱动层的 status ——
+        // 两者只有一个来源,才不会再次出现"413 配 400 码"这种组合。
+        status: ERROR_HTTP_STATUS[code],
+        body: buildErrorBody(code, tooLarge ? undefined : '请求体解析失败'),
       };
     }
 

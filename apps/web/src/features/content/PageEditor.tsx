@@ -32,6 +32,7 @@ import { Placeholder } from '@tiptap/extensions';
 import { EditorContent, useEditor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 
 import type { Editor, EditorEvents } from '@tiptap/core';
 import {
@@ -43,6 +44,8 @@ import {
 
 import { ApiError, sendBeaconJson } from '../../lib/api';
 import { Button } from '../../components/ui';
+import { registerPendingSave } from '../../lib/pending-save';
+import { isSessionExpiredError } from '../../lib/session-expiry';
 import { useSaveContent } from '../org/queries';
 import { DEFAULT_CODE_LANGUAGE, createLowlighter } from './code-languages';
 import { TabKeymap } from './editor/tab-keymap';
@@ -116,6 +119,7 @@ export function PageEditor({
 }) {
   const save = useSaveContent(nodeId);
   const upload = useImageUpload();
+  const navigate = useNavigate();
 
   const [state, setState] = useState<SaveState>('idle');
   /** 当前页面的图片张数 —— 工具栏据此显示剩余额度并封顶。 */
@@ -187,7 +191,7 @@ export function PageEditor({
    * 写进去 —— 那样闭包会拿到第一次渲染时那一份,里面的 `save` 还是旧的 nodeId。
    * 用 ref 把最新的一份递过去。
    */
-  const flushRef = useRef<((content: ProseMirrorNode, seq: number) => void) | null>(null);
+  const flushRef = useRef<((content: ProseMirrorNode, seq: number) => Promise<void>) | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const updateState = useCallback(
@@ -289,6 +293,28 @@ export function PageEditor({
     flushRef.current = flush;
   }, [flush]);
 
+  /**
+   * 把"这个编辑器还有没有没落库的字"登记到模块级表里,供**登出**等
+   * 发生在别处的操作先冲刷。
+   *
+   * ⚠️ 登记的是**冲刷函数**,不是"脏标记":登出要的是"把它冲干净",
+   * 而脏不脏只有编辑器自己最清楚(它按 `editSeq > savedSeq` 判)。
+   * 这里把待保存快照与当时的计数一起交给 `flush`,与卸载补保存同一条路径 ——
+   * 复用同一条,才不会出现"登出走的那条忘了带 seq"这类分叉。
+   *
+   * 返回值 `true` = 冲干净了。判据是**冲刷之后**计数追平(或本来就没有待写);
+   * `false` 会让登出去弹一次确认(见 `AppLayout`)—— 宁可多问一句。
+   */
+  useEffect(() => {
+    return registerPendingSave(async () => {
+      const pending = snapshotRef.current;
+      // 没有待写内容:本来就没有可丢的东西,算成功
+      if (pending === null || editSeqRef.current <= savedSeqRef.current) return true;
+      await flushRef.current?.(pending, editSeqRef.current);
+      return editSeqRef.current <= savedSeqRef.current;
+    });
+  }, []);
+
   const extensions = useMemo(
     () => [
       StarterKit.configure({
@@ -385,38 +411,72 @@ export function PageEditor({
     };
   }, []);
 
-  /**
-   * 关标签页 / 刷新时的兜底。
-   *
-   * 自动保存有 1.2 秒的防抖窗口,这段时间里关页面同样会丢字,而卸载清理
-   * 在这个场景下不会跑(页面整个没了)。两条一起上:
-   *
-   *   1. `sendBeacon` 把快照交给浏览器投递 —— 页面卸载后它仍会继续发;
-   *   2. **同时**按浏览器规矩弹一次确认。因为 beacon 是否真的送达,
-   *      我们在页面里无法确认,而"多问一句"远比"静默丢字"便宜。
-   *
-   * 只对未保存的改动弹窗 —— 没有 dirty 就完全不打扰。
-   */
   useEffect(() => {
-    function onBeforeUnload(event: BeforeUnloadEvent): void {
-      // ⚠️ 判据是**计数差**。用旧的那个布尔时,"保存 #1 成功之后又输入的字"
-      // 会被判成"干净" —— 关页面既不补发 beacon、也不弹确认,直接丢。
+    /*
+      ⚠️⚠️ v4.21：**beacon 不能在这里发** —— 它必须等到「用户确实要离开」。
+
+      `beforeunload` 只是**问一句**，用户完全可以点「留下」。而原来这段是
+      「先发 beacon，再弹确认」：
+
+        1. 用户打字 → 点关闭 → `beforeunload` 触发；
+        2. **beacon 已经发出去了**（浏览器不会因为用户后来选择留下而撤回它）；
+        3. 用户点「留下」—— 页面留着，但那条内容**已经落库**；
+        4. 而本地 `baseRef` / `savedSeqRef` **一个都没推进**（我们以为没保存成功）；
+        5. 下一次自动保存仍带着**旧的** `baseUpdatedAt` →
+           服务端 `content.service.ts:176` 判 `current.updatedAt > base` → **409**。
+
+      后果不是「多一次报错」那么轻：编辑器进入 `conflict` 态，
+      而 `conflict` 唯一的出路是「重新加载」（`window.location.reload`），
+      于是用户**丢掉手上没保存的字**，还被告诉「别人改过这篇文档」——
+      而那个人其实是他自己那条 beacon。
+
+      所以顺序反过来：**先让浏览器弹确认，只有在「确实要走了」的那一刻才发 beacon。**
+      问题是 `beforeunload` **不告诉我们用户选了哪个** —— 标准里没有这个回调。
+
+      做法：**把 beacon 推迟到 `pagehide` / `unload`** —— 那两个事件只在页面
+      真的被卸载时才触发，用户点「留下」时不会发生。`sendBeacon` 本就为这个
+      时机设计（它由浏览器接管投递，页面没了也会发出去）。
+    */
+    function flushBeacon(): void {
+      // ⚠️ 判据是**计数差**。用旧的那个布尔时，「保存 #1 成功之后又输入的字」
+      // 会被判成「干净」—— 关页面既不补发 beacon、也不弹确认，直接丢。
       if (editSeqRef.current <= savedSeqRef.current) return;
       const pending = snapshotRef.current;
-      if (pending !== null) {
-        sendBeaconJson(`/nodes/${nodeId}/content`, {
-          content: pending,
-          baseUpdatedAt: baseRef.current,
-        });
-      }
+      if (pending === null) return;
+      sendBeaconJson(`/nodes/${nodeId}/content`, {
+        content: pending,
+        baseUpdatedAt: baseRef.current,
+      });
+    }
+
+    // 只负责「问一句」，**不发** beacon。
+    function onBeforeUnload(event: BeforeUnloadEvent): void {
+      if (editSeqRef.current <= savedSeqRef.current) return;
       event.preventDefault();
-      // 老浏览器要求 returnValue 有值才弹;现代浏览器看 preventDefault。
+      // 老浏览器要求 returnValue 有值才弹；现代浏览器看 preventDefault。
       event.returnValue = '';
     }
 
+    /*
+      这两个才是「真的走了」。`pagehide` 覆盖 bfcache 与移动端
+      （某些浏览器在 `unload` 上不可靠）；`unload` 兜住其余情形。
+      两个都挂上，用一个标志防止重复投递 —— `savedSeq` 在这里并不会推进
+      （beacon 的响应我们收不到），所以没有这个标志就会发两次。
+    */
+    let beaconSent = false;
+    function onPageHide(): void {
+      if (beaconSent) return;
+      beaconSent = true;
+      flushBeacon();
+    }
+
     window.addEventListener('beforeunload', onBeforeUnload);
+    window.addEventListener('pagehide', onPageHide);
+    window.addEventListener('unload', onPageHide);
     return () => {
       window.removeEventListener('beforeunload', onBeforeUnload);
+      window.removeEventListener('pagehide', onPageHide);
+      window.removeEventListener('unload', onPageHide);
     };
   }, [nodeId]);
 
@@ -498,13 +558,43 @@ export function PageEditor({
       )}
 
       {state === 'error' && (
-        <div className="mx-8 mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-          {/*
-            文案分两种(见 flush 里那段说明):参数校验类错误**重试不会成功**,
-            说"继续输入会自动重试"是误导。用 `ApiError.code` 区分 ——
-            那是 §6.1 的稳定契约,不是去猜 message 的措辞。
-          */}
-          {saveError instanceof ApiError && saveError.code === 'VALIDATION_FAILED' ? (
+        /*
+          ⚠️ v4.9:这里现在分**三种**,而不是两种。
+
+          「保存失败」原来只剩一个兜底分支,文案是「内容还留在编辑器里,
+          继续输入会自动重试」。那句话对网络抖动是对的 —— 但对**会话过期**
+          是灾难性的:重试永远不会成功(每次都还是 401),而用户按这句话
+          一直输入、一直等,直到关掉页面才发现字全丢了。
+
+          而且它**看不出区别**:用户没有任何线索去怀疑"其实是我掉线了"。
+          现在按 `ApiError.code` 分成三类 —— 那是 §6.1 的稳定契约,
+          不是去猜 message 的措辞:
+            · `UNAUTHORIZED`     → 会话过期:重试不会成功,要重新登录;
+            · `VALIDATION_FAILED` → 内容本身不合法:改内容才有用;
+            · 其余(网络等)     → 自动重试**确实**有意义。
+        */
+        <div
+          role="alert"
+          className="mx-8 mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
+        >
+          {isSessionExpiredError(saveError) ? (
+            <>
+              <b>保存失败:登录状态已过期。</b>
+              <span className="mt-1 block">
+                这张页面上的改动还在,但**不会再自动重试**了 —— 请重新登录后回来继续编辑。
+              </span>
+              <span className="mt-2 block">
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    void navigate('/login');
+                  }}
+                >
+                  去重新登录
+                </Button>
+              </span>
+            </>
+          ) : saveError instanceof ApiError && saveError.code === 'VALIDATION_FAILED' ? (
             <>
               <b>这篇内容没能保存:</b>
               {saveError.message}
@@ -532,6 +622,7 @@ export function PageEditor({
         ref={fileInputRef}
         type="file"
         accept="image/png,image/jpeg,image/gif,image/webp,image/avif"
+        aria-label="选择要插入的图片"
         className="hidden"
         onChange={(event) => {
           const file = event.target.files?.[0];

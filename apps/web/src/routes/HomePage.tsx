@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 
 import { ErrorNote } from '../components/ui';
@@ -16,9 +17,23 @@ import { usePersonal } from '../lib/personal-store';
  *   1. 公司有哪些部门(卡片网格,点进去就是该部门的节点)
  *   2. 我在哪几段里(我的组织归属 —— 决定了我能改什么)
  */
-/** 相对时间。「3 分钟前」比「2026/9/27 02:35」好读,而且不占宽度。 */
-function relativeTime(at: number): string {
-  const minutes = Math.floor((Date.now() - at) / 60000);
+/**
+ * 相对时间。「3 分钟前」比「2026/9/27 02:35」好读,而且不占宽度。
+ *
+ * ⚠️⚠️ v4.9:`now` 由**调用方传进来**,不再在这里读 `Date.now()`。
+ *
+ * 原来它在函数体里直接读时钟 —— 有两个问题:
+ *   1. 这违反仓库自己定下的规则:**时钟只在回调或 effect 里读**。
+ *      渲染期读时钟意味着同一个 props 在不同时刻会渲染出不同结果,
+ *      与 React 的"渲染是纯函数"假设相冲突(并发渲染下会被放大)。
+ *   2. 更要紧的是**它永远不刷新**:「3 分钟前」会一直停在那个数,直到
+ *      某个别的 state 恰好触发重渲染 —— 用户看着一个不动的"3 分钟前",
+ *      自然以为这一页卡住了。
+ *
+ * 现在由 `useNow` 提供`now`,它按固定间隔推进,于是时间戳会**真的走字**。
+ */
+function relativeTime(at: number, now: number): string {
+  const minutes = Math.floor((now - at) / 60000);
   if (minutes < 1) return '刚刚';
   if (minutes < 60) return String(minutes) + ' 分钟前';
   const hours = Math.floor(minutes / 60);
@@ -28,9 +43,33 @@ function relativeTime(at: number): string {
   return new Date(at).toLocaleDateString('zh-CN');
 }
 
+/**
+ * 一个**会自己走**的"现在"。
+ *
+ * `setInterval` 放在 effect 里(而不是渲染期读时钟),并由 effect 负责清理。
+ * 间隔取 30 秒:相对时间的刻度是"分钟",30 秒足以让「3 分钟前」及时变成
+ * 「4 分钟前」,又不会为了一个几乎不变的文案每秒重渲染整页。
+ *
+ * ⚠️ 卸载时必须 `clearInterval` —— 否则离开首页后这个定时器还在跑,
+ * 每次都 `setState` 到一个已卸载的组件上。
+ */
+function useNow(): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setNow(Date.now());
+    }, 30_000);
+    return () => {
+      clearInterval(timer);
+    };
+  }, []);
+  return now;
+}
+
 export function HomePage() {
   const me = useMe();
   const tree = useOrgTree();
+  const now = useNow();
 
   /*
     ⚠️ 这两行必须在**早退之前**(v2.14)。
@@ -110,7 +149,9 @@ export function HomePage() {
                   <span className="min-w-0 flex-1 truncate text-sm text-slate-800">
                     {titleOf.get(item.id) ?? item.title}
                   </span>
-                  <span className="flex-none text-xs text-slate-500">{relativeTime(item.at)}</span>
+                  <span className="flex-none text-xs text-slate-500">
+                    {relativeTime(item.at, now)}
+                  </span>
                 </Link>
               </li>
             ))}

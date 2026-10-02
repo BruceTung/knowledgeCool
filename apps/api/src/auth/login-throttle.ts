@@ -168,7 +168,23 @@ export class LoginThrottleService {
           );
 
     if (!accountLocked && !ipLocked) return UNLOCKED;
-    return { locked: true, retryAfterSeconds: this.lockSeconds };
+
+    /*
+      ⚠️ v4.9:两个窗口是**不同**的(账号锁 `lockSeconds`、IP 锁 `ipWindowSeconds`),
+      所以必须按**实际锁住的那个**回报等待时间。
+
+      原来这里恒返回 `this.lockSeconds` —— 默认配置里两者相等(15 分钟),
+      于是这个错误一直看不出来;一旦把 IP 窗口调成别的值(比如 1 分钟),
+      IP 锁就会**告诉用户错误的等待时间**(让他白等,或以为已经解开了)。
+      两个都锁住时取**较大的那个** —— 那是他真正要等到的时刻。
+    */
+    return {
+      locked: true,
+      retryAfterSeconds: Math.max(
+        accountLocked ? this.lockSeconds : 0,
+        ipLocked ? this.ipWindowSeconds : 0,
+      ),
+    };
   }
 
   /**
@@ -194,11 +210,27 @@ export class LoginThrottleService {
     threshold: number,
     windowSeconds: number,
   ): Promise<boolean> {
+    /*
+      ⚠️⚠️ v4.9:`INCR` 与 `EXPIRE` 必须**原子**。
+
+      原来是 `incr()` 之后、**只在 `value === 1` 时**再补一句 `expire()`。
+      这两步之间只要出一次岔子(命令失败、连接在两步之间掉了、进程被重启),
+      那个计数键就**永远没有 TTL** —— 而它再也回不到 `value === 1`
+      (值只会一直涨),于是**永远没有第二次机会给它设过期**。
+
+      后果是一条被静默废掉的保护性质:文档里写的"零星打错不会累积"
+      (窗口内失败才计数、窗口一到就清零)从此失效 ——
+      计数键永久累积,那么**之后的每一次失败都会直接触发锁定**,
+      也就是"昨天打错过一次,今天再错一次就锁 15 分钟"。
+
+      用 `SET key 0 EX window NX` 先把键**带着 TTL**建出来(NX = 键已存在则不动),
+      再 `INCR` —— 建键与设过期是**一条命令**,不存在中间态。
+      仍保持"只有第一次才设过期"的语义:后续失败命中 NX 分支什么都不做,
+      不会让攻击者靠持续失败无限续期。
+    */
     const failures = await this.run('incr', async (client) => {
-      const value = await client.incr(failureKey);
-      // 只有第一次才设过期:每次失败都续期的话,持续攻击会让计数永不过期。
-      if (value === 1) await client.expire(failureKey, windowSeconds);
-      return value;
+      await client.set(failureKey, 0, 'EX', windowSeconds, 'NX');
+      return client.incr(failureKey);
     });
 
     if (failures === null || !reachedThreshold(failures, threshold)) return false;

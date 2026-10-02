@@ -10,6 +10,7 @@ import {
 } from '@knowledgecool/shared';
 
 import { recordAudit } from '../audit/record.js';
+import { isUniqueViolation, runSerializable } from '../common/db/serializable.js';
 import { AppError } from '../common/errors/app-error.js';
 import { idsOfPath, renderPath } from '../common/node-path.js';
 import { Prisma } from '../generated/prisma/client.js';
@@ -112,6 +113,20 @@ export class AuthService {
    * 并发下的正确性:两个请求同时到达时必须只有一个能成功,
    * 所以把「再查一次是否为空」放进事务 —— 事务外那次检查只为快速失败,不作依据。
    *
+   * ⚠️⚠️ **事务必须是 Serializable**(v4.8 修)。原来这里用的是
+   * `$transaction`,而它的默认隔离级别是 **READ COMMITTED** ——
+   * 在这个级别下,两个并发请求各自 `count()` 都读到 0(互相看不见对方
+   * 那个还没提交的 INSERT),于是**两边都能提交,库里出现两个超管**。
+   * 原注释声称"只有一个能成功",那句话在 READ COMMITTED 下是不成立的:
+   * 快照隔离只能保证"读不到未提交的写",保证不了"读到的不会被别人改"。
+   * 这类"先数一数、再写"的形状正是 `runSerializable` 存在的理由
+   * (见 `common/db/serializable.ts` 开头的说明),仓库别处都走它。
+   *
+   * 另一道兜底是 `employeeNo` 上的唯一约束:即便两个名字不同的请求错开
+   * 提交窗口,同工号也会撞 P2002。那时它被映射成与"已初始化"同一个 403
+   * —— 否则会漏出一个 500,并且告诉调用方"这个工号已存在"(等于确认了
+   * 系统已经初始化过,而这一步本该是原子的)。
+   *
    * 首个管理员的密码是他**自己设的**,不是内置初始密码,所以
    * `mustChangePassword` 为 `false`。
    */
@@ -125,7 +140,7 @@ export class AuthService {
 
     const passwordHash = await this.passwords.hash(input.password);
 
-    const user = await this.prisma.$transaction(async (tx) => {
+    const user = await runSerializable(this.prisma, async (tx) => {
       if ((await tx.user.count()) > 0) {
         throw AppError.forbidden('系统已完成初始化,不能重复创建首位管理员');
       }
@@ -140,6 +155,13 @@ export class AuthService {
         },
         select: USER_PUBLIC_SELECT,
       });
+    }).catch((error: unknown) => {
+      // 同工号撞唯一约束:并发下它同样意味着"已经有人抢先建好了首位管理员",
+      // 所以对外与"已初始化"是同一件事,不能漏成 500。
+      if (isUniqueViolation(error)) {
+        throw AppError.forbidden('系统已完成初始化,不能重复创建首位管理员');
+      }
+      throw error;
     });
 
     const session = await this.sessions.issue(user.id, meta);

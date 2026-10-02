@@ -14,8 +14,10 @@
  *
  * ## 选区为什么会丢、怎么保住
  *
- * 触发按钮用 `onMouseDown` + `preventDefault()`(与工具栏其它按钮一致),所以打开时
- * 选区还在。用户点进输入框之后编辑器失焦,但 **ProseMirror 的选区存在自己的 state 里**,
+ * 触发按钮走 `pressHandlers`(与工具栏其它按钮一致):鼠标路径在 `mousedown` 里
+ * `preventDefault()`,所以打开时选区还在;键盘路径(`click` 且 `detail === 0`)
+ * 也接上了 —— 否则"插入链接"这个入口**键盘完全不可达**。
+ * 用户点进输入框之后编辑器失焦,但 **ProseMirror 的选区存在自己的 state 里**,
  * 不会随 DOM 焦点消失 —— 提交时 `.focus()` 会把它恢复回来。
  * 这也是为什么这里**不能**用 `window.getSelection()` 去取选区。
  */
@@ -25,6 +27,7 @@ import { useState } from 'react';
 import { Button, TextField } from '../../../components/ui';
 import { normalizeUrl } from '../link-url';
 import { POPOVER_CLASS, useDismiss } from './popover';
+import { pressHandlers } from './press-handlers';
 
 export function LinkPopover({
   editor,
@@ -86,20 +89,43 @@ export function LinkPopover({
     let chain = editor.chain().focus();
     if (hasExistingLink) chain = chain.extendMarkRange('link');
 
+    /*
+      ⚠️⚠️ v4.14:`run()` 的返回值**必须看**。
+
+      Tiptap 的 `setLink` 在协议不被允许时是 `return false`(不是抛错、也不是部分成功):
+      ```js
+        setLink: (attributes) => ({ chain }) => {
+          if (!this.options.isAllowedUri(href, …)) return false;
+      ```
+      原来这里把三个分支的 `run()` 结果全部丢掉,**紧接着无条件 `closePopover()`** ——
+      于是命令什么都没做、气泡却关掉了:用户以为链接加上了,**其实一个都没有**,
+      而且没有任何提示。
+
+      `normalizeUrl` 现在已经是白名单(与 Tiptap 口径对齐),所以正常路径不会走到这里;
+      但**这一层是兜底**:任何我们没预料到的拒绝,都会在这里变成一句人话,
+      而不是一次静默的"看起来成功了"。
+    */
+    let applied: boolean;
     if (keepOriginalText && (hasExistingLink || !selection.empty)) {
       // 有现成的文字:只把链接挂上去(或改地址),不动文字
-      chain.setLink({ href }).run();
+      applied = chain.setLink({ href }).run();
     } else if (keepOriginalText) {
       // 空选区 + 没有现成链接:插入一段以地址为文字的链接
-      chain
+      applied = chain
         .insertContent({ type: 'text', text: href, marks: [{ type: 'link', attrs: { href } }] })
         .run();
     } else {
       // 文字被改过:整段替换(没有选区时 deleteSelection 是空操作)
-      chain
+      applied = chain
         .deleteSelection()
         .insertContent({ type: 'text', text: trimmed, marks: [{ type: 'link', attrs: { href } }] })
         .run();
+    }
+
+    if (!applied) {
+      // **不关气泡** —— 关掉就等于告诉用户"成功了",而实际上什么都没发生。
+      setError('这个地址没有被编辑器接受,链接未添加。请换一个地址再试。');
+      return;
     }
 
     closePopover();
@@ -116,11 +142,10 @@ export function LinkPopover({
         type="button"
         title="插入 / 编辑链接"
         aria-expanded={open}
-        onMouseDown={(event) => {
-          event.preventDefault();
+        {...pressHandlers(() => {
           if (open) closePopover();
           else openPopover();
-        }}
+        })}
         className={`${triggerClass} ${active ? 'bg-slate-900 text-white' : ''}`}
       >
         链接

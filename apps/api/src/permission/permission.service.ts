@@ -194,6 +194,93 @@ export class PermissionService {
   }
 
   /**
+   * 「能读吗」的**快路径**,专供检索那种「大量节点、只要一个布尔」的场景。
+
+  ## 为什么需要它 —— 实测出来的
+
+  检索在「命中多、可读少」时会逐条调 `access()`。那条路径实测:
+
+  ```
+  600 个命中、可读 3 条   ->  接口 ~700ms
+    其中 chainOf 等价     ->  386ms（2 次 DB 查询 × 600）
+  ```
+  **约 55% 的耗时在 `chainOf` 上,而缓存从来没有跳过它。**
+
+  原因在 `access()` 的结构:那句 `await this.chainOf(nodeId)` 在函数**开头**,
+  而缓存查找在它**之后** —— `chainOf` **无条件先跑**。缓存只省掉 `compute()`,
+  省不掉那两次 DB 查询。
+
+  ## 为什么单独开一条路径,而不是改 `access()`
+
+  `access()` 的返回值里有 `chain` 与 `row`,别的调用方(节点详情、评论、改名)都要用。
+  把那些也塞进缓存,**失效面就从「三个布尔」扩大到「节点与祖先链的快照」** ——
+  而失效一旦漏掉,表现是**静默越权**,不是报错。
+  所以这里只缓存**三个布尔**,并给检索单独一条不需要 chain 的入口 ——
+  **收益最大,而失效面一点没变。**
+   */
+  async canReadFast(operator: Actor, nodeId: string): Promise<boolean> {
+    // 先取节点(1 次查询,而不是 chainOf 的 2 次),拿它的物化路径算世代号
+    const self = await this.pluck(nodeId);
+    const generation = await this.generationOf(rootIdOfPath(self.materializedPath));
+
+    if (generation !== null) {
+      const cached = await this.readCacheAt(generation, operator.id, nodeId);
+      // ⚠️ 命中就直接返回 —— **完全不碰 chainOf**。这正是省下来的那部分。
+      if (cached !== null) return cached.canRead;
+    }
+
+    // 未命中:回落到完整判定(它会自己把结果写进缓存)。
+    return (await this.access(operator, nodeId)).canRead;
+  }
+  /**
+   * **批量**「能读吗」—— 检索热路径专用。
+
+  ## 为什么要批量
+
+  `canReadFast()` 已经把 `chainOf` 拿掉了(那部分约 386ms / 55%),
+  但它每个命中仍要 `pluck()` 一次。实测:
+
+  ```
+  600 次单点 pluck   ->  219ms
+  1 次批量取 600 行   ->    2ms      （快约 110 倍）
+  ```
+  所以这里**一次把节点取齐**(只取算缓存键要用的 `id` 与 `materialized_path`),
+  再逐个查缓存。返回值里**只含缓存命中的那些**;没命中的由调用方回源
+  (回源会顺带写缓存,所以第二次检索就基本全命中了)。
+
+  ## 语义与 `access()` 一致
+
+  缓存键(世代号、用户、节点)与读写都复用同一套 `readCacheAt`/`writeCacheAt`,
+  所以**失效行为一点没变** —— 改权限照样 INCR 世代号,旧键立刻作废。
+  返回 `Map<nodeId, boolean>`;缺失的键表示「没判定出来」,**不是 false**。
+  ⚠️ 调用方**不能**把「缺失」当成「不可读」—— 那会把该看见的内容藏起来。
+  正确用法是:先批量拿命中的,再对缺失的逐个回源。
+   */
+  async canReadBatch(operator: Actor, nodeIds: readonly string[]): Promise<Map<string, boolean>> {
+    const out = new Map<string, boolean>();
+    if (nodeIds.length === 0) return out;
+
+    // 一次取齐:只要算世代号需要的两列。
+    const rows = await this.prisma.node.findMany({
+      where: { id: { in: [...nodeIds] } },
+      select: { id: true, materializedPath: true },
+    });
+    const pathOf = new Map(rows.map((row) => [row.id, row.materializedPath]));
+
+    for (const nodeId of nodeIds) {
+      const path = pathOf.get(nodeId);
+      // 节点不存在(batchHits 理论上都来自同一次查询,不该发生)—— 留给调用方回源。
+      if (path === undefined) continue;
+
+      const generation = await this.generationOf(rootIdOfPath(path));
+      if (generation === null) continue;
+
+      const cached = await this.readCacheAt(generation, operator.id, nodeId);
+      if (cached !== null) out.set(nodeId, cached.canRead);
+    }
+    return out;
+  }
+  /**
    * 断言可读(v2.12)。
    *
    * ⚠️ 读不到时抛的是 **404 而不是 403**。403 会确认「这里确实有个东西,
@@ -214,12 +301,67 @@ export class PermissionService {
     return context;
   }
 
-  /** 断言可管(决定这个节点还有谁能改)。 */
+  /**
+   * 断言可管 —— **读路径**的门。
+   *
+   * 先 `canRead` 再 `canManage`:读不到的节点连"你没有管理权限"都不该说,
+   * 那句话本身就承认了它存在(§5.6 的存在性侧信道)。
+   *
+   * ⚠️ **写路径不要用这个**,用 `requireManageForWrite` —— 理由见那边。
+   */
   async requireManage(operator: Actor, nodeId: string): Promise<AccessContext> {
     const context = await this.access(operator, nodeId);
     if (!context.canRead) throw AppError.notFound();
     if (!context.canManage) {
       throw AppError.forbidden('只有该节点或其上级的所有者才能修改权限');
+    }
+    return context;
+  }
+
+  /**
+   * 断言可管 —— **写路径**的门。与 `requireManage` 只差一条:**不判 `canRead`**。
+   *
+   * ## 为什么必须分开
+   *
+   * `canManage` 可以**严格宽于** `canRead`:受限节点(§5.6)上就是如此 ——
+   * 一个人可能是某个受限节点的所有者,却因为链上更靠上的受限祖先没有放行他
+   * 而读不到它。这时用 `requireManage` 就会出现最坏的一种结果:
+   *
+   *   **写操作真的执行了,响应却是 404。**
+   *
+   * 调用方据 404 认为"失败了",于是重试、或者去别处绕 —— 而库里已经改了。
+   * `replaceReaders` 与 `addMember`/`removeMember` 都踩过这个坑,
+   * 原则写在 `buildReadersView` 上:
+   *
+   *   **写操作的成功与否,不能取决于"写完之后还能不能读"。**
+   *
+   * ## 安全上不放宽任何东西
+   *
+   * 这里仍然断 `canManage`(该节点或祖先链上的所有者,部门一级则另有超管专属)。
+   * 少掉的只是"顺便确认他读得到"—— 而**要读**的接口各自另有 `requireRead`,
+   * 那条路径一点没动。所以并不存在"因为不判读,所以谁都能管"。
+   *
+   * ⚠️ 调用点仍要自己保证:响应体里**不要**回填只有读得到才该看到的内容。
+   * 本方法只解决"写成功却报 404"这一件事。
+   */
+  async requireManageForWrite(
+    operator: Actor,
+    nodeId: string,
+    /*
+      ⚠️ 被拒绝的**操作名**,用来把 403 文案写准。
+
+      原来这里一律说「才能修改权限」—— 而这条闸**也被删除节点用**
+      (`node.service.ts` 的 `remove`)。用户删东西时收到「你才能修改权限」,
+      会把人引到「我是不是没权限改权限」上去,与他实际做的事完全对不上。
+
+      规则本身一个字没动,只是让文案说出**他刚才想做的那件事**。
+      见 DESIGN 的这一条(用户裁定:「该规则也覆盖删除」)。
+    */
+    action = '修改权限',
+  ): Promise<AccessContext> {
+    const context = await this.access(operator, nodeId);
+    if (!context.canManage) {
+      throw AppError.forbidden(`只有该节点或其上级的所有者才能${action}`);
     }
     return context;
   }
@@ -237,6 +379,20 @@ export class PermissionService {
       if (!operator.isSuperAdmin) throw AppError.forbidden('只有管理员能新建部门');
       return;
     }
+
+    /*
+      ⚠️ 这里**刻意没有** `isSuperAdmin` 分支 —— 2026-10-02 由用户明确裁定。
+
+      超管的权力被有意限制为:「**只能建顶层节点,其余只读**」。
+      · 建顶层节点(parentId === null):上面那条分支已放行 —— 组织架构归管理层管;
+      · 在**已存在**节点下建:超管**不在例外之列**,必须是真的有归属或拥有该节点的人。
+
+      所以「超管在别人负责的部门下建不了文档」不是缺陷,而是**设计**。
+      这与 `canManage`(纯函数,无超管分支)的口径一致 ——
+      超管既建不了别人部门下的东西,也删不了、改不了别人的节点。
+
+      「读」另外受 `requireRead` 约束,**保密语义完全不受影响**。
+    */
 
     const context = await this.access(operator, parentId);
     if (context.canEdit) return;

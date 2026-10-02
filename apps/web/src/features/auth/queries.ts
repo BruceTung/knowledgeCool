@@ -13,6 +13,7 @@ import type {
 } from '@knowledgecool/shared';
 
 import { ApiError, apiFetch, apiSend } from '../../lib/api';
+import { clearSessionExpired } from '../../lib/session-expiry';
 
 export interface SetupState {
   required: boolean;
@@ -69,6 +70,13 @@ export function useLogin() {
     onSuccess: (result) => {
       if (result.kind === 'password-change-required') return;
 
+      /*
+        ⚠️ v4.9:登录成功要把"会话已过期"的标记清掉。
+        否则那条全局横幅会一直挂着 —— 用户明明已经重新登录成功了,
+        界面还在说"请重新登录",比不提示更让人困惑。
+      */
+      clearSessionExpired();
+
       // 清掉上一个身份残留的缓存再取新的。只 invalidate ['me'] 是不够的:
       // 组织树里带着"我能不能改"的标记,换了人就全错了。
       queryClient.clear();
@@ -84,6 +92,8 @@ export function useSetup() {
   return useMutation({
     mutationFn: (input: SetupInput) => apiSend<AuthUser>('POST', '/auth/setup', input),
     onSuccess: () => {
+      // 首管建成即已登录,同样要清掉可能残留的过期标记
+      clearSessionExpired();
       queryClient.clear();
       void queryClient.invalidateQueries({ queryKey: ['me'] });
       void queryClient.invalidateQueries({ queryKey: ['setup-state'] });

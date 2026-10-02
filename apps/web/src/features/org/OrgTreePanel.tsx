@@ -291,11 +291,39 @@ export function OrgTreePanel({
     );
   }
 
+  /**
+   * 提交改名。
+   *
+   * ⚠️⚠️ v4.9:**失败时不能收起输入框。**
+   *
+   * 原实现第一行就 `setRenamingId(null)` —— **无条件**关掉输入框。
+   * 于是改名失败时(409 乐观锁冲突、403、网络断开)会发生两件坏事:
+   *   ① 用户刚敲进去的新标题**直接没了** —— 输入框已经卸载,那个值
+   *      只存在于 DOM 里,再也拿不回来;
+   *   ② 他唯一的线索是侧栏底部那条错误提示,而树很长时**根本看不见**
+   *      (提示在面板底部,输入框在树的某个深处)。
+   *
+   * 这与 `NodeDetailPage` / `UsersAdminPage` 早先修过的是**同一个坑**,
+   * 那两处都改成了"只在 `onSuccess` 里清状态"。这里照同样的做法 ——
+   * 三处行为一致,才不会让人以为"树上的改名比较危险"。
+   * (成功路径由 `invalidate` 重取树,标题会自然更新。)
+   */
   function handleRename(node: OrgTreeNode, value: string): void {
-    setRenamingId(null);
     const next = value.trim();
-    if (next === '' || next === node.title) return;
-    updateNode.mutate({ nodeId: node.id, title: next, version: node.version });
+    // 没改、或改成了空 —— 直接收起,不必发请求
+    if (next === '' || next === node.title) {
+      setRenamingId(null);
+      return;
+    }
+    updateNode.mutate(
+      { nodeId: node.id, title: next, version: node.version },
+      {
+        onSuccess: () => {
+          setRenamingId(null);
+        },
+        // 失败**不**清 `renamingId`:输入框留在原地,用户能直接改一改重试
+      },
+    );
   }
 
   function handleDelete(node: OrgTreeNode): void {
@@ -352,9 +380,29 @@ export function OrgTreePanel({
         // 屏幕阅读器会念出一个永远为 false 的"已折叠"。
         {...(node.children.length > 0 ? { 'aria-expanded': isExpanded } : {})}
         aria-level={node.depth + 1}
-        // 漫游 tabindex:整棵树只有**一个**可 Tab 进入的点。
-        // 未聚焦过时落在当前打开的那一篇上,否则落在第一个节点上。
-        tabIndex={focusedId === node.id || (focusedId === null && isActive) ? 0 : -1}
+        /*
+          漫游 tabindex:整棵树只有**一个**可 Tab 进入的点。
+
+          ⚠️⚠️ v4.9:**必须有一个兜底**,否则整棵树键盘进不去。
+
+          原来的判据是 `focusedId === node.id || (focusedId === null && isActive)` ——
+          只看"聚焦过"或"是当前打开的节点"。而**在 `/`、`/search`、`/audit`
+          这些页面上根本没有 active 节点**,同时用户还没在树里聚焦过任何一行,
+          于是 `focusedId === null && isActive` 对**每一行**都是 false ——
+          **整棵树一个 tab stop 都没有,键盘永远进不去**。
+
+          补上第三项:都没聚焦过、也没有 active 节点时,落在**第一行**上。
+          这样"漫游 tabindex"那条规则在任何页面上都成立(始终恰好一个 tab stop)。
+        */
+        tabIndex={
+          focusedId !== null
+            ? focusedId === node.id
+              ? 0
+              : -1
+            : isActive || node.id === visibleIds[0]
+              ? 0
+              : -1
+        }
         onFocus={() => {
           setFocusedId(node.id);
         }}
@@ -527,16 +575,37 @@ export function OrgTreePanel({
           </span>
 
           {renamingId === node.id ? (
+            /*
+              ⚠️⚠️ v4.9:这个输入框里的按键**必须阻止冒泡**。
+
+              它是 `role="treeitem"` 那一行**里面**的一个元素,而那一行的
+              `onKeyDown` 处理 Enter / 方向键 / Home / End。不拦住的话:
+                · **Enter** 会先提交改名,再冒泡上去被当成"打开这个节点" ——
+                  一次按键干了两件事,而且第二件把用户带离了当前位置;
+                · **方向键 / Home / End** 会被那一行 `preventDefault()` 掉,
+                  于是**改名时挪不动光标**(想改中间几个字都做不到)。
+
+              所以这里一律 `stopPropagation()`:输入框是"编辑中"的上下文,
+              行级快捷键在这一刻没有意义。
+            */
             <input
               autoFocus
               defaultValue={node.title}
+              /* ⚠️ v4.33：树里重命名的输入框，补无障碍名（带上原标题便于分辨）。 */
+              aria-label={`重命名「${node.title}」`}
               className="min-w-0 flex-1 rounded-md border border-sky-400/60 bg-white/10 px-2 py-1 text-base text-white outline-none"
-              onClick={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                event.stopPropagation();
+              }}
               onKeyDown={(event) => {
+                // 所有按键都留在输入框里,不要给行级的树导航处理
+                event.stopPropagation();
                 if (event.key === 'Enter') handleRename(node, event.currentTarget.value);
                 if (event.key === 'Escape') setRenamingId(null);
               }}
-              onBlur={(event) => handleRename(node, event.target.value)}
+              onBlur={(event) => {
+                handleRename(node, event.target.value);
+              }}
             />
           ) : (
             <span className="min-w-0 flex-1 truncate py-1" title={node.title}>
@@ -581,6 +650,29 @@ export function OrgTreePanel({
               所以真正的出路是把这些动作放在节点页上 —— 那里现在已经有「重命名」
               与「可见范围」等按钮,不依赖悬停。
             */
+            /*
+              ⚠️⚠️ v4.36:这 6 个操作按钮全部 `tabIndex={-1}`,**不占 tab 停靠点**。
+
+              背景:上面那段注释已经说明树用「漫游 tabindex」——整棵树**只该有 1 个**
+              可 Tab 进入的点。但这一排按钮在 `role="treeitem"` **里面**,各自都是独立的
+              tab 停靠点,于是实测变成:
+
+                treeitems=7, focusableTotal=31, perRow=[30,6,6,6,6,0,0]
+
+              也就是**每行 6 个**、整棵树 31 个。要用 Tab 穿过一棵 20 行的树得按 120 多次,
+              而 §7.7 声称的是「单一 roving tab stop」—— 声明与实际不符。
+
+              `tabIndex={-1}` 之后它们:鼠标**照样**能点(`onClick` 不受影响)、
+              `group-hover` / `focus-within` 照样唤出,只是不再抢 Tab 键。
+
+              ⚠️ **那键盘用户怎么够到这些动作?** 这是这次改动必须回答的问题 ——
+              答案是**不靠这排悬浮按钮**,而靠已经存在的两条路径:
+                · 选中一行(树内 ↑/↓)→ 按 Enter 打开节点页,节点页上已经有
+                  「重命名」「可见范围」等按钮,不依赖悬停;
+                · 新建 / 删除等操作在节点页与超管界面里都有入口。
+              这也正是原注释里那句「真正的出路是把这些动作放在节点页上」的落实。
+              (触屏本来就没有 hover,原本也只能走节点页 —— 现在两者一致了。)
+            */
             <span className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5 rounded bg-white pl-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
               {canCreateUnder(node) && (
                 <>
@@ -588,6 +680,7 @@ export function OrgTreePanel({
                     type="button"
                     aria-label={'在「' + node.title + '」下新建页面'}
                     title="在此新建页面"
+                    tabIndex={-1}
                     className={ROW_ACTION_CLASS}
                     onClick={(event) => {
                       event.stopPropagation();
@@ -600,6 +693,7 @@ export function OrgTreePanel({
                     type="button"
                     aria-label={'在「' + node.title + '」下新建子空间'}
                     title="在此新建子空间 / 组"
+                    tabIndex={-1}
                     className={ROW_ACTION_CLASS}
                     onClick={(event) => {
                       event.stopPropagation();
@@ -615,6 +709,7 @@ export function OrgTreePanel({
                   type="button"
                   aria-label={'「' + node.title + '」的权限设置'}
                   title="权限设置"
+                  tabIndex={-1}
                   className={ROW_ACTION_CLASS}
                   onClick={(event) => {
                     event.stopPropagation();
@@ -629,6 +724,7 @@ export function OrgTreePanel({
                   type="button"
                   aria-label={'「' + node.title + '」的成员'}
                   title="成员(组织归属):这个节点下都有谁"
+                  tabIndex={-1}
                   className={ROW_ACTION_CLASS}
                   onClick={(event) => {
                     event.stopPropagation();
@@ -643,6 +739,7 @@ export function OrgTreePanel({
                   type="button"
                   aria-label={'重命名「' + node.title + '」'}
                   title="重命名"
+                  tabIndex={-1}
                   className={ROW_ACTION_CLASS}
                   onClick={(event) => {
                     event.stopPropagation();
@@ -659,6 +756,7 @@ export function OrgTreePanel({
                   // 而删除现在是**不可恢复**的。留着旧文案会让用户以为还能捞回来。
                   aria-label={'删除「' + node.title + '」'}
                   title="删除(不可恢复)"
+                  tabIndex={-1}
                   className={ROW_ACTION_DANGER_CLASS}
                   onClick={(event) => {
                     event.stopPropagation();

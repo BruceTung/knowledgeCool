@@ -218,17 +218,39 @@ function NodeDetailView({ nodeId }: { nodeId: string }) {
   if (detail.isPending || content.isPending) {
     return <p className="p-8 text-sm text-slate-500">加载中…</p>;
   }
+  /*
+    ⚠️ v4.9:这两个失败页**必须带重试入口**。
+
+    `ErrorNote` 的 `onRetry` 是**可选**参数,全仓库只有 4 处传了它,
+    而 NodeDetail 的"详情/正文加载失败"这两处**没传** —— 于是文档打不开时
+    页面上只有一句错误,用户唯一的出路是**手动刷新整页**。
+    而 AppLayout 里那条注释还声称"SearchPage / AuditPage / NodeDetailPage
+    三处都给了 ErrorNote + 重试",与实际不符。
+
+    详情失败和正文失败是**独立**的两个查询,所以各自重试各自的 ——
+    只重试一个的话,另一个仍是失败的,页面还是打不开。
+  */
   if (detail.isError) {
     return (
       <div className="p-8">
-        <ErrorNote error={detail.error} />
+        <ErrorNote
+          error={detail.error}
+          onRetry={() => {
+            void detail.refetch();
+          }}
+        />
       </div>
     );
   }
   if (content.isError) {
     return (
       <div className="p-8">
-        <ErrorNote error={content.error} />
+        <ErrorNote
+          error={content.error}
+          onRetry={() => {
+            void content.refetch();
+          }}
+        />
       </div>
     );
   }
@@ -295,6 +317,8 @@ function NodeDetailView({ nodeId }: { nodeId: string }) {
                 <input
                   autoFocus
                   defaultValue={node.title}
+                  /* ⚠️ v4.33：重命名输入框没有可见标签，补无障碍名。 */
+                  aria-label="页面标题"
                   className="w-full rounded-md border border-blue-400 px-2 py-1 text-2xl font-semibold outline-none"
                   onKeyDown={(event) => {
                     if (event.key === 'Enter') commitTitle(event.currentTarget.value);

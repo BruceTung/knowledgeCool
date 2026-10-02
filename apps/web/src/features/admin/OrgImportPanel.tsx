@@ -169,6 +169,7 @@ export function OrgImportPanel() {
             ref={fileRef}
             type="file"
             accept=".xlsx"
+            aria-label="选择组织架构表格文件(.xlsx)"
             className="text-sm text-slate-600"
             onChange={(event) => {
               const picked = event.target.files?.[0] ?? null;
