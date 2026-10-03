@@ -23,11 +23,11 @@
  *    这两句必须出现在确认框里,否则"我把他移出去了,怎么他还能改"会变成
  *    一个反复出现的困惑。
  */
-import { USER_STATUS_LABELS, type NodeMemberView } from '@knowledgecool/shared';
+import type { NodeMemberView } from '@knowledgecool/shared';
 import { useState } from 'react';
 
 import { Modal } from '../../components/Modal';
-import { Button, ErrorNote, SelectField } from '../../components/ui';
+import { Button, ErrorNote, SelectField, UserStatusBadge } from '../../components/ui';
 import { useModalOpen } from '../../lib/modal-store';
 import { T_META } from '../../lib/typography';
 import {
@@ -37,19 +37,6 @@ import {
   useRemoveNodeMember,
 } from './queries';
 import { describeRemoval } from './removal-note';
-
-function StatusBadge({ status }: { status: NodeMemberView['status'] }) {
-  if (status === 'active') return null;
-  const tone =
-    status === 'departed'
-      ? 'bg-amber-50 text-amber-700 ring-amber-200'
-      : 'bg-slate-100 text-slate-500 ring-slate-200';
-  return (
-    <span className={`ml-1 rounded px-1 ring-1 ${tone} ${T_META}`}>
-      {USER_STATUS_LABELS[status]}
-    </span>
-  );
-}
 
 /** 一行「人」。`onRemove` 为空表示这一段只读。 */
 function MemberRow({
@@ -72,7 +59,7 @@ function MemberRow({
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm text-slate-800">
           {member.name}
-          <StatusBadge status={member.status} />
+          <UserStatusBadge status={member.status} />
           {member.isOwnerHere && (
             <span
               className={`ml-1 rounded bg-blue-50 px-1 text-blue-700 ring-1 ring-blue-200 ${T_META}`}

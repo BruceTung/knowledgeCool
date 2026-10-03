@@ -641,6 +641,7 @@ export class OrgService {
         id: true,
         name: true,
         employeeNo: true,
+        status: true,
         assignments: { select: { node: { select: { materializedPath: true } } } },
       },
       orderBy: [{ employeeNo: 'asc' }],
@@ -650,6 +651,9 @@ export class OrgService {
       userId: row.id,
       name: row.name,
       employeeNo: row.employeeNo,
+      // v5.44:补状态。上面 `where: { status: 'active' }` 已保证恒为在职,
+      // 但类型要求这个字段,而"筛选条件保证"不等于"类型告诉调用方这件事"。
+      status: toUserStatus(row.status),
       scopePaths: row.assignments.map((assignment) => assignment.node.materializedPath),
     });
 
@@ -857,39 +861,75 @@ export class OrgService {
     }
 
     const myScopes = await this.permissions.scopePathsOf(operator.id);
-    const node = await this.prisma.node.findUnique({
+    // 一次取全:既要知道子树路径用于范围过滤,也要知道**当前负责人是否还在职**
+    // (决定要不要放宽范围)。两次查会让人以为它们是两件事。
+    const current = await this.prisma.node.findUnique({
       where: { id: nodeId },
-      select: { materializedPath: true },
+      select: { materializedPath: true, ownerId: true },
     });
-    if (node === null) throw AppError.notFound();
+    if (current === null) throw AppError.notFound();
 
-    // 范围取"我的组织范围"与"该节点子树"的**交集** —— 候选人既要是我的下属,
-    // 也要是这个节点相关的人。
-    const rows = await this.prisma.user.findMany({
-      where: { status: 'active' },
+    /*
+      ⚠️ v5.44(P0-5 的延伸):候选人范围**从「必须有归属」放宽为「在职即可」**。
+      =
+      原来的判据是"有归属,且归属落在该节点子树或我的范围内"。它有一个
+      **把自己锁死**的后果:
+
+        部长离职 → 他名下的一级部门**没有新部长** → 谁能当新部长?
+        那些**还没被设进任何组织归属**的在职员工 —— 他们 `assignments` 是空的,
+        原来那个 filter 直接把他们全滤掉,于是候选人列表**空掉**,
+        界面上"更换所有者为…"是一个**只有标题的空下拉框**。
+
+      也就是说:组织架构越是"缺人"的时候,这个功能越不可用 ——
+      而那正是最需要它的时刻。这是"范围约束"被用成了"必须有关系"。
+
+      为什么不索性全公司的人都能选:那会让部长能把**市场部**的人拉来当自己组的
+      组长,§5.3 规则三(横向防越权)就没了。
+
+      所以这一版的判据是 **在职 ∧ (有相关归属 ∨ 本节点已经缺人)**:
+        · 正常情况下(有在职负责人在)规则照旧,范围约束仍然有效;
+        · 节点缺人时,任何**在职**账号都可以被选进来 ——
+          这是"填上这个坑"的唯一途径,而选人这件事仍然由
+          `setOwner` 的门槛(超管 / 祖先链所有者)把着。
+      离职与停用**一律不出现**(下面 select 里的 status 过滤),
+      它们的 id 也不该出现在下拉框里 —— 让管理员选一个必然失败选项。
+    */
+    const all = await this.prisma.user.findMany({
       select: {
         id: true,
         name: true,
         employeeNo: true,
+        status: true,
         assignments: { select: { node: { select: { materializedPath: true } } } },
       },
       orderBy: [{ employeeNo: 'asc' }],
     });
 
-    return rows
-      .filter((row) =>
-        row.assignments.some(
-          (assignment) =>
-            isWithinSubtree(assignment.node.materializedPath, node.materializedPath) ||
-            myScopes.some((scopePath) =>
-              isWithinSubtree(assignment.node.materializedPath, scopePath),
-            ),
-        ),
+    // **已经在任的人不算"缺人"** —— 范围约束照旧,不然就等于对每个节点都放开了。
+    const needReplacement =
+      (all.find((row) => row.id === current.ownerId)?.status ?? 'active') !== 'active';
+
+    return all
+      .filter((row) => row.status === 'active')
+      .filter(
+        (row) =>
+          needReplacement ||
+          row.assignments.some(
+            (assignment) =>
+              isWithinSubtree(assignment.node.materializedPath, current.materializedPath) ||
+              myScopes.some((scopePath) =>
+                isWithinSubtree(assignment.node.materializedPath, scopePath),
+              ),
+          ),
       )
       .map((row) => ({
         userId: row.id,
         name: row.name,
         employeeNo: row.employeeNo,
+        // v5.44:带上状态。筛选后这里恒为 'active',但**类型上仍要带** ——
+        // 界面要用它标注(见 GrantDialog 的置灰逻辑),而 `GrantCandidate`
+        // 是三个候选列表共用的类型,不能只在某一条路径上给。
+        status: toUserStatus(row.status),
         scopePaths: row.assignments.map((a) => a.node.materializedPath),
       }));
   }

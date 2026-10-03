@@ -23,6 +23,18 @@ export const AUDIT_ACTIONS = [
    * 任何 `recordAudit` 用到的 action 都必须在这里有位置。
    */
   'auth.login.locked',
+  /**
+   * 账号**身份已验证**但因状态被拒(离职 / 停用)(v5.44)。
+   *
+   * ⚠️ 与 `auth.login.locked` 分开记,因为它们要回答的问题不同:
+   * 锁定是"有人反复猜密码",状态被拒是"这个人回来了,但门已经关了"。
+   * 后者是离职管理的**必备线索** —— 现实中离职员工回头敲门是常态,
+   * 而"他知不知道自己已经被移出系统"正是管理员最需要知道的事。
+   *
+   * 刻意**不含**密码是否正确这类信息:能触发这条,说明密码已经对了,
+   * 但"他密码对"这件事本身不该成为一条可查询的审计记录。
+   */
+  'auth.login.rejected',
   'auth.logout',
   'auth.password.change',
   // 节点
@@ -62,6 +74,7 @@ export const AUDIT_ACTION_LABELS: Readonly<Record<string, string>> = Object.free
   'auth.setup': '初始化管理员',
   'auth.login': '登录',
   'auth.login.locked': '登录失败锁定',
+  'auth.login.rejected': '离职/停用账号尝试登录',
   'auth.logout': '登出',
   'auth.password.change': '修改密码',
   'node.create': '新建节点',

@@ -11,28 +11,18 @@
  *   3. **候选人是被过滤过的**。服务端只返回操作者组织范围内的人(§5.3 规则三),
  *      组长看不到别的部门的人 —— 这不是前端藏的,是服务端就没给。
  */
-import type { GrantCandidate, NodeGrantView } from '@knowledgecool/shared';
+import { USER_STATUS_LABELS, type GrantCandidate, type NodeGrantView } from '@knowledgecool/shared';
 import { useState } from 'react';
 
 import { Modal } from '../../components/Modal';
-import { Button, ErrorNote, SelectField } from '../../components/ui';
+import { Button, ErrorNote, SelectField, UserStatusBadge } from '../../components/ui';
 import { useModalOpen } from '../../lib/modal-store';
-import { T_META } from '../../lib/typography';
 import { useMe } from '../auth/queries';
 import { useOwnerCandidates, useSetOwner } from '../admin/queries';
 import { useGrantCandidates, useNodeGrants, useSaveGrants } from './queries';
 
-function DepartedBadge() {
-  return (
-    <span
-      className={`ml-1 rounded bg-amber-50 px-1 text-amber-700 ring-1 ring-amber-200 ${T_META}`}
-    >
-      已离职
-    </span>
-  );
-}
-
 /** 一行「人」。三段共用同一套视觉,差别只在右侧有没有移除按钮。 */
+/** 状态徽章现在接受 `UserStatus` 而非布尔 —— 见 `UserStatusBadge` 的注释(为何抽成共用)。 */
 function PersonRow({
   name,
   employeeNo,
@@ -56,7 +46,7 @@ function PersonRow({
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm text-slate-800">
           {name}
-          {departed === true && <DepartedBadge />}
+          {departed === true && <UserStatusBadge status="departed" />}
         </div>
         <div className="truncate text-xs text-slate-500">
           {employeeNo}
@@ -181,6 +171,40 @@ export function GrantDialog({
               employeeNo={grants.data.owner.employeeNo}
               departed={grants.data.owner.departed}
             />
+
+            {/*
+              ⚠️ v5.44:负责人空缺告警 —— 这条是本轮改动里**最该有的一条**。
+
+              为什么它不能只是一个标签:`canManage` 是
+              「本人是 ownerId」或「我在祖先链某环上是 ownerId」。
+              负责人离职后他登不进来,那一环就是**空的** ——
+              如果上面没有别的在职所有者,整棵子树没人改得了,
+              而界面看不出任何异常:树照常渲染,节点点得开,
+              只是这里有一个没人会主动看的灰色标签。
+
+              → 所以它必须出现在**打开弹窗的第一眼**,而不是
+              让人自己把「他离职了」和「所以我改不了」连起来。
+            */}
+            {(() => {
+              /*
+                ⚠️ 用 IIFE 取一次局部变量,而不是在 JSX 里写
+                `grants.data.vacatedBy !== null && ...grants.data.vacatedBy.xxx` ——
+                后者每次访问都重新收窄,TypeScript 无法把可选属性一路带下去
+                (它要报 `possibly undefined`)。取一次就好,顺带也让这段更可读。
+              */
+              const vacated = grants.data.vacatedBy;
+              if (!vacated) return null;
+              return (
+                <p className="mt-2 rounded-md bg-amber-50 px-3 py-2 text-sm leading-relaxed text-amber-800 ring-1 ring-amber-200">
+                  <strong>
+                    {vacated.nodeId === nodeId
+                      ? `「${vacated.title}」的负责人 ${vacated.ownerName} 已离职`
+                      : `上一级「${vacated.title}」的负责人 ${vacated.ownerName} 已离职`}
+                  </strong>
+                  ,这个节点及其下所有内容现在没有人能改。请尽快改派给在职人员。
+                </p>
+              );
+            })()}
             {canAppointOwner && (
               <div className="mt-2 flex gap-2">
                 <SelectField
@@ -190,9 +214,20 @@ export function GrantDialog({
                 >
                   <option value="">更换所有者为…</option>
                   {(owners.data ?? []).map((candidate) => (
-                    <option key={candidate.userId} value={candidate.userId}>
+                    <option
+                      key={candidate.userId}
+                      value={candidate.userId}
+                      // 离职的人**不出现**在这个列表里(ownerCandidates 已按在职过滤),
+                      // 所以这里只需要在"有归属"时提示 —— 让管理员知道这个人的分量。
+                      // ⚠️ 别在这里再按 status 过滤一次:那会让"为什么没有他"
+                      // 变成一个界面上无法回答的问题(后端已在传 status,
+                      // 若这里过滤,界面上就只能看到一个空下拉框)。
+                      disabled={candidate.status !== 'active'}
+                    >
                       {candidate.name}（{candidate.employeeNo}）
                       {candidate.scopePaths.length > 0 && ` · ${candidate.scopePaths.join('、')}`}
+                      {candidate.status !== 'active' &&
+                        ` · ${USER_STATUS_LABELS[candidate.status]}`}
                     </option>
                   ))}
                 </SelectField>

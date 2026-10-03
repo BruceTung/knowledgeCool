@@ -479,6 +479,44 @@ export class PermissionService {
       ...grants.map((g) => g.grantedBy),
     ]);
 
+    /*
+      ⚠️ v5.44:找出「链上最近的、负责人已离职的那一环」。
+      =
+      `ancestors` 是根 → 父,所以**反过来**找第一个才是"最近的"。
+      它为什么重要(不只是界面提示):
+
+        `canManage` 是「本人是 ownerId」或「我在祖先链某环上是 ownerId」。
+        负责人离职之后他登不进来,于是**这一环等于空缺** ——
+        如果上面没有别的在职所有者,整棵子树就没有人能改,
+        而界面上看不出任何异常:树照常渲染,节点点得开,只是「权限」弹窗里
+        有一个没人会主动去看的灰色标签。
+
+      → 所以这里把结论**提到响应的第一层**:needsNewOwner。
+      它不改变判定,只负责让人**看见**。
+    */
+    //
+    // `inheritedUsers` 与 `chain.ancestors` **同序**(都由 ancestors.map 产出),
+    // 所以直接按下标一起走,不引入第二个索引来源 ——
+    // 一旦让两个数组"分别反着找",下标就必然对不上,而那种错不会报错。
+    const ownerDeparted = owner.status === 'departed';
+    let vacated: { nodeId: string; title: string; ownerName: string } | null = ownerDeparted
+      ? { nodeId, title: row.title, ownerName: owner.name }
+      : null;
+
+    if (vacated === null) {
+      // 从**最近**的祖先往回找:ancestors 是根 → 父,所以倒着遍历。
+      for (let i = chain.ancestors.length - 1; i >= 0; i -= 1) {
+        if (inheritedUsers[i]?.status === 'departed') {
+          vacated = {
+            nodeId: chain.ancestors[i].id,
+            title: chain.ancestors[i].title,
+            ownerName: inheritedUsers[i].name,
+          };
+          break;
+        }
+      }
+    }
+
     return {
       nodeId,
       owner: toOwnerView(owner),
@@ -489,6 +527,8 @@ export class PermissionService {
         ownerName: inheritedUsers[index]?.name ?? '未知',
         departed: inheritedUsers[index]?.status === 'departed',
       })),
+      needsNewOwner: vacated !== null,
+      vacatedBy: vacated,
       grants: grants.map((grant) => ({
         userId: grant.userId,
         name: briefs.get(grant.userId)?.name ?? '未知',
@@ -606,6 +646,12 @@ export class PermissionService {
         userId: row.id,
         name: row.name,
         employeeNo: row.employeeNo,
+        // v5.44:上面 `not: 'disabled'` 意味着**离职的人会落进这个列表** ——
+        // 他们确实还能被授权(§5.3 允许保留历史授权,只是界面上标注),
+        // 所以这里必须如实把状态带出去,让界面能说明"他已离职,授权仍然有效"。
+        // ⚠️ 别顺手改成 `status: 'active'` —— 那会让"离职后仍保留授权"
+        // 这个既有行为静默消失,而有人在依赖它(离职不是删除)。
+        status: row.status === 'departed' ? ('departed' as const) : ('active' as const),
         scopePaths: row.assignments.map((assignment) => assignment.node.materializedPath),
       }));
   }

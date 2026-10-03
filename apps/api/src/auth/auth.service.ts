@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   type AuthUser,
@@ -91,6 +91,15 @@ export interface LoginOutcome {
  */
 @Injectable()
 export class AuthService {
+  /**
+   * v5.44:离职/停用账号尝试登录要 `warn` 一条。
+   *
+   * ⚠️ 为什么是 `warn` 而不是 `error`:它不是故障,而是一个**正常的业务结果** ——
+   * 离职员工回头敲门,系统正确地拒了他。用 `error` 会把正常事件混进故障日志,
+   * 真出问题时反而找不到那一条。真正的故障(哈希算错、库连不上)才走 `error`。
+   */
+  private readonly logger = new Logger(AuthService.name);
+
   /** 时序对齐用的假哈希,首次需要时才计算并缓存。 */
   private dummyHash: Promise<string> | null = null;
 
@@ -220,7 +229,7 @@ export class AuthService {
     const hashToCheck = user?.passwordHash ?? (await this.getDummyHash());
     const passwordOk = await this.passwords.verify(input.password, hashToCheck).catch(() => false);
 
-    if (user === null || !passwordOk || user.status !== 'active') {
+    if (user === null || !passwordOk) {
       const outcome = await this.throttle.recordFailure(input.employeeNo, ip);
 
       // 只在**账号真实存在**时留痕。否则任何未登录的人都可以用捏造的工号
@@ -238,6 +247,49 @@ export class AuthService {
 
       // 同一句话、同一个状态码,不给枚举者任何区分依据。
       throw new AppError('UNAUTHORIZED', '工号或密码不正确');
+    }
+
+    /*
+      ⚠️ v5.44:从这一行往下,**身份已经证明了**(工号存在 + 密码正确),
+      所以接下来的分支可以、也**应该**说人话 —— 离线的同事提交正确密码却看到
+      「工号或密码不正确」时,只能以为是自己记错了密码,于是去改密码、
+      或者干脆不再来了。那不是防枚举,是让真实故障变成了用户的自我怀疑。
+
+      ⚠️ **但顺序不能倒**:上面那个"工号不存在 / 密码错误"的合流判断必须
+      **先**执行完。理由是防枚举 —— 它的保护对象是"还没证明身份的人"。
+      一个连密码都打不对的人,不该从响应里看出「这个工号存在,而且已经离职了」。
+      真正的枚举器会用同一个错误去试「密码错」,得到的是**同一句话**,
+      所以它无法区分「工号不存在」「密码不对」「账号已离职」这三种情况。
+      而一个**知道正确密码的人**才能看到离职提示 —— 他本来就知道这个工号存在。
+
+      → 结论:统一文案保护的是「不知道密码的人」,而知道密码的人本来就不需要被保护。
+      以前把离职和"密码错"合流在一起,保护对象划错了,代价是让真实故障变得难懂。
+    */
+
+    if (user.status !== 'active') {
+      /*
+        刻意**不计入登录失败次数**:密码是对的,不是"登录没成功"——
+        计入的话,同事反复重试会被自己的账号锁住(5 次即锁 15 分钟),
+        而他每次看到的都是"密码正确但不让进",锁了更没人知道为什么。
+        锁定机制要防的是猜密码,不是防一个走错门的人。
+      */
+      this.logger.warn(
+        `离职/停用账号尝试登录:employeeNo=${user.employeeNo} status=${user.status} ip=${ip ?? '未知'}`,
+      );
+      await recordAudit(this.prisma, {
+        actorId: null,
+        action: 'auth.login.rejected',
+        targetType: 'user',
+        targetId: user.id,
+        detail: { employeeNo: user.employeeNo, status: user.status },
+        ip,
+      });
+      throw new AppError(
+        'UNAUTHORIZED',
+        user.status === 'departed'
+          ? '账号已离职,无法登录。如为误改,请联系管理员改回在职。'
+          : '账号已停用,无法登录。如需恢复,请联系管理员。',
+      );
     }
 
     // 成功了就把这个账号的失败计数与锁清掉,免得零星几次打错累积成"某天突然被锁"。

@@ -11,6 +11,10 @@ import type {
   SelectHTMLAttributes,
 } from 'react';
 
+import { USER_STATUS_LABELS, type UserStatus } from '@knowledgecool/shared';
+
+import { T_META } from '../lib/typography';
+
 import { ApiError } from '../lib/api';
 
 /**
@@ -206,5 +210,31 @@ export function FullScreenNote({ children }: { children: ReactNode }) {
     <main className="flex min-h-full items-center justify-center bg-slate-50 p-8">
       <p className="text-sm text-slate-500">{children}</p>
     </main>
+  );
+}
+
+/**
+ * 账号状态徽章 —— 「已离职 / 已停用」的**唯一**实现(v5.44)。
+ *
+ * ⚠️ 为什么要抽上来:此前同一枚徽章在两处各写一遍 ——
+ * `GrantDialog` 里叫 `DepartedBadge`(只处理 departed),
+ * `MembersDialog` 里叫 `StatusBadge`(两个状态都处理)。
+ * 两处的**配色不一样**,于是同一个人在同一页面的两个弹窗里
+ * 看起来是两种状态 —— 而它们指的是同一个人。
+ *
+ * → 判断标准:这个东西**在几个地方出现**不重要,
+ * 重要的是**同一个人在不同地方必须长得一样**。
+ * 只要它承担了"把状态传达给人"这个职责,分歧就是 bug。
+ */
+export function UserStatusBadge({ status }: { status: UserStatus }) {
+  if (status === 'active') return null;
+  const tone =
+    status === 'departed'
+      ? 'bg-amber-50 text-amber-700 ring-amber-200'
+      : 'bg-slate-100 text-slate-500 ring-slate-200';
+  return (
+    <span className={`ml-1 rounded px-1 ring-1 ${tone} ${T_META}`}>
+      {USER_STATUS_LABELS[status]}
+    </span>
   );
 }
