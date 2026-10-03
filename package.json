@@ -24,7 +24,9 @@
     "lint:fix": "eslint . --fix",
     "seed:dev": "pnpm --filter @knowledgecool/api run seed:dev",
     "typecheck": "pnpm --filter @knowledgecool/shared run build && pnpm -r --if-present run typecheck",
-    "verify:org": "pnpm --filter @knowledgecool/api run verify:org"
+    "verify:org": "pnpm --filter @knowledgecool/api run verify:org",
+    "admin:init": "pnpm --filter @knowledgecool/api run init:admin",
+    "admin:init:dry": "pnpm --filter @knowledgecool/api run init:admin -- --dry-run"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
