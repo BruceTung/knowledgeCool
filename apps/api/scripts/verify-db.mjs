@@ -151,6 +151,48 @@ async function main() {
     failures.push('nodes_tree_idx 未包含 position,同级排序无法走索引');
   }
 
+  /*
+    ⚠️ v5.43 新增(P1-5):物化路径 ↔ parent_id 的一致性。
+    =
+    `materialized_path` 是**权限判定的性能基础**:`PermissionService.chainOf`
+    靠它取祖先链,一旦它与 `parent_id` 不一致,取出来的链就是错的,
+    而错链的表现是**静默的越权或失权** —— 不报错,只是有人能改了不该他改的东西。
+
+    导入功能曾把物化路径写成"一级节点"(真实发生过),而这个不变式
+    **此前没有任何地方检查**:schema 的 CHECK 约束管不了跨行不变式,
+    类型检查看不见数据,现有门禁也都不查 —— 于是一致地通过了全部门禁。
+
+    SQL 与 REMAINING.md §2 给的一致。它查两件事:
+      1. depth 是否等于路径里的层级数
+      2. 非根节点的路径是否等于「父节点路径 + / + 自己 id」
+    每返回一行 = 一条断掉的祖先链 = 一处权限误判。
+  */
+  const brokenChains = (
+    await client.query(
+      `SELECT n.id, n.depth, n.materialized_path
+         FROM nodes n
+        WHERE n.depth <> length(n.materialized_path)
+                       - length(replace(n.materialized_path, '/', '')) - 1
+           OR (n.parent_id IS NOT NULL
+               AND n.materialized_path <> (SELECT p.materialized_path || '/' || n.id
+                                            FROM nodes p WHERE p.id = n.parent_id))
+        LIMIT 20`,
+    )
+  ).rows;
+
+  // 总节点数:给上面那行"自洽 ✓"一个对照,否则 0 处断裂看不出是"查过了"还是"库里没数据"
+  const nodeCount = (await client.query('SELECT count(*)::int AS n FROM nodes')).rows[0]?.n ?? 0;
+
+  if (brokenChains.length > 0) {
+    failures.push(
+      `物化路径与 parent_id 不一致:${brokenChains.length} 处(最多列 20)。` +
+        '每一处都是一条断掉的祖先链,也就是一处权限误判。' +
+        '修法:按 parent_id 自顶向下重算 materialized_path / depth。' +
+        ' 首批: ' +
+        brokenChains.map((r) => `${r.id}(depth=${r.depth}, path=${r.materialized_path})`).join(' '),
+    );
+  }
+
   // 组织归属是复合主键(user_id, node_id):重复归属必须由数据库挡住,
   // 因为导入是"幂等追加"的语义,靠应用层去重一旦漏了就会长出重复行。
   const assignmentPk = (
@@ -191,6 +233,12 @@ async function main() {
   console.log('  CHECK :', count(checks, REQUIRED_CHECKS));
   const leftovers = tables.filter((t) => FORBIDDEN_TABLES.includes(t));
   console.log('  v1 残留:', leftovers.length === 0 ? '无 ✓' : leftovers.join(', '));
+  console.log(
+    '  祖先链一致性:',
+    brokenChains.length === 0
+      ? `全部 ${String(nodeCount)} 个节点的 depth 与 materialized_path 自洽 ✓`
+      : `${String(brokenChains.length)} 处断裂 ✗`,
+  );
   console.log('');
   console.log('  中文检索方案实测(『空间成员按职责划分』搜『空间』):');
   console.log(

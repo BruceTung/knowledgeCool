@@ -73,6 +73,21 @@ export function CommentsPanel({ nodeId }: { nodeId: string }) {
             ))}
           </ul>
         )}
+
+        {/*
+          ⚠️ v5.43(P2-2):被上限截断时必须**如实说**,不能沉默地少显示一批。
+          没有这一条的话,"这里一共 250 条讨论、界面只显示 200 条"与
+          "这里一共就 200 条"在用户眼里**完全一样** —— 他会以为看完了。
+
+          ⚠️ 不给"加载更多":那要加游标契约与按钮(完整的分页改造),
+          而 COMMENT_THREADS_MAX = 200 远高于现实里的评论数(生产最大 32 条)。
+          这一条是"上限存在时不要装作没发生",不是完整的分页方案。
+        */}
+        {data.truncated && (
+          <p className="mt-4 border-t border-slate-200 pt-3 text-sm leading-relaxed text-slate-500">
+            讨论太多,这里只显示了最早的 {data.threads.length} 条(共 {data.total} 条)。
+          </p>
+        )}
       </div>
 
       <div className="flex-none border-t border-slate-200 p-3">

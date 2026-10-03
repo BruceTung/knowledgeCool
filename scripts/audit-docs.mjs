@@ -538,10 +538,33 @@ function normalizeClientPath(raw) {
     cwd: ROOT,
     encoding: 'utf8',
   });
-  if (generated.status !== 0) {
+
+  /*
+    ⚠️ 三种结局必须分开说,不能都报「表格不一致」—— v3.0 修。
+
+    `spawnSync` 起不来时(status 为 `null` 而不是非零数,stdout/stderr 也可能是
+    `undefined`)是这个检查器**自己跑不动**,与「文档漂移了」是两件完全不同的事。
+    混在一起的后果是:检查器一旦起不来,报出来的却是「文档与代码不一致」,
+    **把人引去改文档,而真正的问题在检查器**。这是最坏的一种失败 ——
+    它让人去修一个没问题的地方。
+
+    所以这里逐条判:`error` 存在 = 进程没起来;`signal` 非空 = 被信号杀掉;
+    两者都没有而 `status !== 0` 才是真的「子命令检出了不一致」。
+  */
+  if (generated.error !== undefined) {
+    fail(
+      '**检查器自己起不来**,不是文档有问题 —— 跑 `node scripts/gen-doc.mjs --check` 看真原因' +
+        `\n  原因:${generated.error.message}`,
+    );
+  } else if (generated.signal !== null) {
+    fail(`**检查器被信号 ${String(generated.signal)} 杀掉**,不是文档有问题`);
+  } else if (generated.status !== 0) {
+    // ⚠️ `?? ''` 是必需的:spawn 成功但没写 stderr 时它是 `undefined`,
+    // 直接 `.trim()` 会抛 TypeError —— 那会把「检查失败」伪装成「检查器崩了」。
+    const detail = (generated.stderr ?? '').trim();
     fail(
       '文档里的事实表格与代码不一致 —— 跑 `node scripts/gen-doc.mjs` 重新生成' +
-        (generated.stderr === '' ? '' : '\n' + generated.stderr.trim()),
+        (detail === '' ? '' : '\n' + detail),
     );
   } else {
     notes.push(`生成块:接口/数据模型/环境变量/前端路由四张表已与代码比对`);
@@ -729,6 +752,36 @@ const headingNumbers = new Set(
     而"仓库的内容"由 git 定义 —— 与这条检查自己的措辞保持一致。
     顺带它也修掉一个真问题:别人的机器上有没有 `.workbuddy/` 不影响判定。
   */
+  /*
+    ⚠️ v5.43 加固:git 不可用时**如实说**,不要静默退化。
+
+    原来直接 `spawnSync('git', …).status === 0`。而 `spawnSync` 起不来时
+    `status` 是 `null`(`null === 0` 为假),于是**每一个路径都返回"未被忽略"** ——
+    包括 `.workbuddy/`、`.env`、`node_modules/` 里的东西。
+
+    那个退化的后果很具体:`.workbuddy/`(在 .gitignore 里,根本不属于仓库内容)
+    会被数成"仓库里的第三篇文档",门禁恒红,而唯一"修好"它的方式是把私有文件的
+    路径写进 EXTRA_DOCS —— 那等于用"假装它们是文档"的方式让检查闭嘴,
+    豁免名单一旦塞满不是文档的东西,这条检查对真正多出来的第二篇文档就不再灵敏。
+
+    也就是说:git 一挂,这条检查不是"变松",而是**变得没法用** ——
+    而它变没法用的表现是"一堆莫名其妙的漂移",没人会想到是 git 的问题。
+
+    现在起不来就直接失败,并说清是哪一步。
+  */
+  const gitUsable = (() => {
+    const probe = spawnSync('git', ['--version'], { cwd: ROOT, stdio: 'ignore' });
+    return probe.error === undefined;
+  })();
+
+  if (!gitUsable) {
+    fail(
+      '**git 不可用**,无法判定哪些文件属于仓库 —— 「文档数量」这条检查在' +
+        '这种状态下会数进 .workbuddy/ 等被忽略的内容并恒红,所以这里直接失败。' +
+        ' 装好 git 或在 PATH 里给出它再重跑。',
+    );
+  }
+
   const isIgnored = (relPath) =>
     spawnSync('git', ['check-ignore', '--quiet', '--', relPath], {
       cwd: ROOT,
@@ -764,6 +817,13 @@ const headingNumbers = new Set(
       'REMAINING.md',
       '临时的工作交接清单(还剩什么没做),不是设计文档,做完即删;' +
         '破例放进仓库是因为开发机是网吧机器 —— 桌面与临时目录会被还原,放在仓库外第二天就没了。',
+    ],
+    [
+      'OPTIMIZATION-BACKLOG-2026-10-03.md',
+      '2026-10-03 代码评审产出的优化项清单(P0/P1/P2),带日期文件名,' +
+        '所以不会与将来新的清单混在一起。性质同 REMAINING:一轮工作的交接与待办,' +
+        '不是设计依据 —— 设计依据只有 DESIGN.md。' +
+        '**同样做完即删**:那批项全部落地后,连同它记录的那些"已定性不改的取舍"一起并入 DESIGN.md §11。',
     ],
   ]);
 

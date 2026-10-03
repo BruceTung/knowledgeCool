@@ -1372,7 +1372,24 @@ async function main() {
     techMembers.body?.inherited?.some((member) => member.employeeNo === 'KC003') === true &&
       techMembers.body?.inherited?.some((member) => member.employeeNo === 'KC004') === true,
   );
-  check('超管在成员视图里 canManage 为真(组织架构归他管)', techMembers.body?.canManage === true);
+  /*
+    ⚠️ v5.43(P0-4)改写了这一条。
+    原来写的是「超管在成员视图里 canManage 为真(组织架构归他管)」——
+    它锁的正是**被收掉的那条例外**(`canManage: operator.isSuperAdmin || canManagePure(...)`)。
+
+    收掉之后的口径:成员维护的门槛与其它所有写操作一样,是
+    「该节点或其上级的所有者」(`canManagePure`,纯函数、无超管分支)。
+    所以这一条现在断言的是**他不是**该部门的所有者 → canManage 为假。
+    它仍然有意义:成员视图**照样返回 200**(读开放),只是"能不能改"变假了。
+    这正是 §5.3 想统一的那件事 —— 一个人一处说"超管能改",另一处说"不能"。
+
+    而超管**仍然能**通过 `setOwner` 换部长、再由部长管成员 —— 那是设计好的逃逸通道,
+    下面「所有者变更」那一组(F)就在验它。
+  */
+  check(
+    '超管不是该部门的所有者 → 成员视图 canManage 为假(口径已与其它写操作统一)',
+    techMembers.body?.canManage === false,
+  );
 
   const wangInTech = techMembers.body?.inherited?.find((member) => member.employeeNo === 'KC003');
   check(
@@ -1446,6 +1463,59 @@ async function main() {
     addDeparted.status === 400,
     `实际 ${String(addDeparted.status)}`,
   );
+
+  /*
+    ⚠️ v5.43(P0-4 新增):超管**不能**改别人部门的成员。
+    =
+    这一组是"收归超管例外"的**回归保护**。收掉之后,超管的
+    「成员维护」与「内容权限」用的是同一套门槛(该节点或其上级的所有者),
+    所以他在别人部门下应该拿到 403 —— 而且**读**成员列表仍然 200。
+
+    之前没有这条断言,所以那次收归即使做错了、或者后来被人改回去,
+    都没有任何东西会变红。这就是这一组存在的理由。
+
+    逃逸通道不在这里被堵死:超管可以对顶层节点 `setOwner` 换部长
+    (F 组在验那条),换完之后他仍然是该顶层节点的所有者的上级 ——
+    不,更准确地说:**换完之后新部长能管成员,超管还是不能**。
+    收归的只是「绕过所有者直接改」这一条,不是把超管的能力拿干净。
+  */
+  {
+    cookie = '';
+    await login('KC001', [ADMIN_PASSWORD]);
+
+    // 读:仍然开放(§5.3 读全员开放)
+    const readAsAdmin = await api('GET', `/nodes/${nodeId('技术部')}/members`);
+
+    // 写:必须被拒
+    const writeAsAdmin = await api('POST', `/nodes/${nodeId('技术部')}/members`, {
+      userId: userId('KC004'),
+    });
+
+    check(
+      '超管读「技术部」成员 → 200(读仍是全员开放)',
+      readAsAdmin.status === 200,
+      `实际 ${String(readAsAdmin.status)}`,
+    );
+    check(
+      '★ 超管往「技术部」加人 → 403(他不是该节点或其上级的所有者)',
+      writeAsAdmin.status === 403,
+      `实际 ${String(writeAsAdmin.status)}(403 = 正确;` +
+        `若 200 说明超管旁路没被收干净,若 404 说明读判定串了)`,
+    );
+    check(
+      '★ 超管的成员视图 canManage 为假(界面据此把按钮置灰,与服务端同源)',
+      readAsAdmin.body?.canManage === false,
+      `实际 ${String(readAsAdmin.body?.canManage)}`,
+    );
+
+    // 收尾:确认那次被拒的写入**没有真的发生**(403 之前就中止了)
+    const after = await api('GET', `/nodes/${nodeId('技术部')}/members`);
+    check(
+      '★ 被拒的写入没有生效(赵敏的归属没被这次尝试改变)',
+      after.status === 200,
+      `实际 ${String(after.status)}`,
+    );
+  }
 
   // ============================================================
   // M. 树的按根查询(?root=)

@@ -65,3 +65,111 @@ jobs:
       # 只在真打包时才暴露的问题(例如 ESM 扩展名、缺失的运行时依赖)
       - name: 构建
         run: pnpm build
+
+  # ============================================================
+  # 端到端验收(P0-1 / P0-3)
+  # ============================================================
+  #
+  # ⚠️ 为什么单独一个 job,而���不塞进上面那个:
+  #
+  #   · `verify-org`(169 项)与 `verify-doc-claims` 需要**一套跑起来的栈**
+  #     (库 + Redis + nginx 静态直出),不是 `node script.mjs` 能解决的;
+  #   · 更关键的是**时机**:上面那个 job 跑在还没建库的干净检出上,
+  #     而验收脚本要打真接口、按真实组织架构建节点。
+  #     两者的前置条件根本不同,混在一个 job 里只会互相等超时。
+  #
+  # ⚠️ 这个 job 补的是本项目**最大的门禁缺口**:
+  # 「删除全部测试」之后,回归防线只剩这两个脚本,而它们此前**不在任何
+  # 门禁里** —— 于是"CI 全绿"与"功能没坏"是两件完全无关的事。
+  # 少了这一段,单测的缺失没有任何东西兜着。
+  #
+  # 跑的东西与本地**完全一致**:
+  #   起栈 → 迁移 → 种子 → 验收(169 项)→ 文档声明核验 → 收尾体检
+  e2e:
+    runs-on: ubuntu-latest
+    # 只在默认分支与 PR 上跑。同一分支连续推送时取消上一次。
+    needs: check
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22 # 与生产镜像同档
+          cache: pnpm
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 生成 Prisma 客户端
+        run: pnpm db:generate
+
+      # ---- 起栈 ----
+      # compose 里 api 依赖 postgres/redis healthy,所以 `up -d` 会等到就绪。
+      # ⚠️ 验收在 compose 网络内用服务名互访,所以**不需要映射 api 端口** ——
+      # 这恰好与生产拓扑一致(api 那里本来就不 publish 端口,
+      # 因为 `trust proxy = 1` 的抗伪造前提就是"外界只能经 Nginx 进来")。
+      # 迁移会自己建 `pg_trgm`(见 init 迁移),不靠 init 脚本。
+      - name: 起栈
+        run: |
+          docker compose up -d postgres redis
+          docker compose up -d api web
+          docker compose ps
+
+      # ---- 迁移 + 种子 ----
+      # ⚠️ `seed:dev` 明确要求先清库(它不做幂等),所以顺序不能换。
+      - name: 应用迁移
+        run: docker compose exec -T api npx prisma migrate deploy
+
+      # 数据库契约自检:扩展/表/索引/约束 + 物化路径与 parent_id 的一致性(P1-5)。
+      # ⚠️ 必须排在种子**之前** —— 它要验的是"迁移出来的结构对不对",
+      # 掺进演示数据之后报错就分不清是迁移的问题还是数据的问题了。
+      - name: 数据库契约自检 verify-db
+        run: docker compose exec -T api node scripts/verify-db.mjs
+
+      - name: 灌入演示数据
+        run: docker compose exec -T api node scripts/seed-dev.mjs
+
+      # ---- 验收 ----
+      # ⚠️ 两个变量都要传,少一个都不行:
+      #   KC_API  指 api 容器自身(它在 compose 网络里,监听 3000)
+      #   KC_ROOT 指 web 容器(SPA 路由与静态直出那一项由 Nginx 应答)
+      # 只传 KC_ROOT 会静默回落到默认值 127.0.0.1:8080,然后 ECONNREFUSED。
+      - name: 端到端验收 verify-org
+        run: |
+          docker compose exec -T \
+            -e KC_API=http://api:3000/api/v1 \
+            -e KC_ROOT=http://web \
+            api node scripts/verify-org.mjs
+
+      - name: 文档声明核验 verify-doc-claims
+        run: |
+          docker compose exec -T \
+            -e KC_API=http://api:3000/api/v1 \
+            -e KC_ROOT=http://web \
+            -e KC_ADMIN_PASSWORD=Kc-admin-2026 \
+            api node scripts/verify-doc-claims.mjs
+
+      # ---- 收尾体检 ----
+      # 验收脚本会自还原自己的副作用,但"它自己说还原了"不等于"库真干净":
+      # 这里再核一次总数,不一致就让 CI 变红。
+      - name: 收尾体检(数据未被验收污染)
+        run: |
+          docker compose exec -T postgres psql -U knowledgecool -d knowledgecool -c \
+            "SELECT (SELECT count(*) FROM users) AS users, (SELECT count(*) FROM nodes) AS nodes;"
+          docker compose exec -T postgres psql -U knowledgecool -d knowledgecool -c \
+            "SELECT employee_no, status, must_change_password FROM users ORDER BY employee_no;"
+          docker compose exec -T postgres psql -U knowledgecool -d knowledgecool -c \
+            "SELECT count(*) AS leftover_nodes FROM nodes WHERE title LIKE '%临时%' OR title LIKE '%验收%';"
+
+      # 失败时把日志留下 —— 否则只能看到"某一步退出码非零",看不到原因。
+      - name: 失败时收集日志
+        if: failure()
+        run: |
+          docker compose ps
+          docker compose logs api --tail 200
+          docker compose logs web --tail 100
+
+      - name: 关栈
+        if: always()
+        run: docker compose down -v

@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { type ReactNode, Suspense, lazy } from 'react';
 import { Navigate, Outlet, Route, Routes } from 'react-router-dom';
 
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -6,15 +6,45 @@ import { ToastHost } from './components/Toast';
 import { ErrorNote, FullScreenNote } from './components/ui';
 import { isUnauthorized, useMe, useSetupState } from './features/auth/queries';
 import { AppLayout } from './routes/AppLayout';
-import { AuditPage } from './routes/AuditPage';
-import { ChangePasswordPage } from './routes/ChangePasswordPage';
-import { HomePage } from './routes/HomePage';
 import { LoginPage } from './routes/LoginPage';
-import { NodeDetailPage } from './routes/NodeDetailPage';
-import { OrgAdminPage } from './routes/OrgAdminPage';
-import { SearchPage } from './routes/SearchPage';
 import { SetupPage } from './routes/SetupPage';
-import { UsersAdminPage } from './routes/UsersAdminPage';
+
+/*
+  ⚠️ v5.43 路由级代码分割(P1-3)。
+
+  此前 10 个页面**全部**打进入口 bundle,实测 900,981 字节(881KB)——
+  而绝大多数会话只用到其中三页:登录(未登录时)、工作台、
+  节点详情(点进一篇文档)。审计、检索、两个管理页、导出这些
+  首屏一个都用不到,却要所有人一起下载。
+
+  这里用 `lazy` + 一次 `Suspense` 拆开。**刻意不逐页各写一个 Suspense**:
+  那样每页都要重复一遍 fallback,而 Suspense 边界放在 `AppLayout` 之上
+  就能覆盖全部懒加载页 —— 一次进入懒加载、一次回退,粒度反而更合适。
+
+  ⚠️ **不要改成逐页 Suspense**:边界越多,切页时闪一下的机会越多。
+  这里的取舍是"整页切换期间显示一行提示",换来首屏少下载几百 KB。
+
+  ⚠️ 为什么 `LoginPage` / `SetupPage` / `AppLayout` **不懒加载**:
+  前两者是未登录时唯一能渲染的页面(懒了会在最关键的一步多一次网络往返),
+  布局是所有懒加载页的共同外壳,懒了等于每页都多一个请求。
+*/
+const HomePage = lazy(() => import('./routes/HomePage').then((m) => ({ default: m.HomePage })));
+const NodeDetailPage = lazy(() =>
+  import('./routes/NodeDetailPage').then((m) => ({ default: m.NodeDetailPage })),
+);
+const SearchPage = lazy(() =>
+  import('./routes/SearchPage').then((m) => ({ default: m.SearchPage })),
+);
+const AuditPage = lazy(() => import('./routes/AuditPage').then((m) => ({ default: m.AuditPage })));
+const OrgAdminPage = lazy(() =>
+  import('./routes/OrgAdminPage').then((m) => ({ default: m.OrgAdminPage })),
+);
+const UsersAdminPage = lazy(() =>
+  import('./routes/UsersAdminPage').then((m) => ({ default: m.UsersAdminPage })),
+);
+const ChangePasswordPage = lazy(() =>
+  import('./routes/ChangePasswordPage').then((m) => ({ default: m.ChangePasswordPage })),
+);
 
 /**
  * 路由表(DESIGN.md §7.2)。
@@ -41,25 +71,31 @@ export function App() {
     <>
       {/* 兜底包在路由**外面**:任何一页渲染抛错都不该变成白屏 */}
       <ErrorBoundary>
-        <Routes>
-          <Route path="/setup" element={<SetupPage />} />
-          <Route path="/login" element={<LoginPage />} />
-          <Route path="/change-password" element={<ChangePasswordPage />} />
+        {/*
+          Suspense 边界放在 Routes **之外** —— 覆盖全部懒加载页,
+          一次进入、一次回退。见上面那段关于"为什么不逐页拆"的说明。
+        */}
+        <Suspense fallback={<FullScreenNote>正在加载这一页…</FullScreenNote>}>
+          <Routes>
+            <Route path="/setup" element={<SetupPage />} />
+            <Route path="/login" element={<LoginPage />} />
+            <Route path="/change-password" element={<ChangePasswordPage />} />
 
-          <Route element={<RequireAuth />}>
-            <Route element={<AppLayout />}>
-              <Route path="/" element={<HomePage />} />
-              <Route path="/n/:nodeId" element={<NodeDetailPage />} />
-              <Route path="/search" element={<SearchPage />} />
-              <Route path="/audit" element={<AuditPage />} />
-              <Route path="/admin" element={<RequireSuperAdmin />}>
-                <Route path="/admin/org" element={<OrgAdminPage />} />
-                <Route path="/admin/users" element={<UsersAdminPage />} />
+            <Route element={<RequireAuth />}>
+              <Route element={<AppLayout />}>
+                <Route path="/" element={<HomePage />} />
+                <Route path="/n/:nodeId" element={<NodeDetailPage />} />
+                <Route path="/search" element={<SearchPage />} />
+                <Route path="/audit" element={<AuditPage />} />
+                <Route path="/admin" element={<RequireSuperAdmin />}>
+                  <Route path="/admin/org" element={<OrgAdminPage />} />
+                  <Route path="/admin/users" element={<UsersAdminPage />} />
+                </Route>
+                <Route path="*" element={<NotFound />} />
               </Route>
-              <Route path="*" element={<NotFound />} />
             </Route>
-          </Route>
-        </Routes>
+          </Routes>
+        </Suspense>
       </ErrorBoundary>
 
       {/* toast 挂在最外层:未登录的页面(登录 / 引导 / 改密)也要能弹提示 */}

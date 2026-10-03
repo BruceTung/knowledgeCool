@@ -118,45 +118,81 @@ export class SearchService {
     for (;;) {
       // 所有参数都显式写 ::text / ::int —— `substring(x from $n)` 那一次的教训:
       // 参数类型交给 PostgreSQL 推断时,它可能选到一条语义完全不同的重载。
+      //
+      /*
+        ⚠️⚠️ v5.43 改查询形状(P1-2):跨表 OR → UNION ALL + 二次排序。
+        =
+        原来是 `WHERE (n.title ILIKE ? OR c.text_for_search ILIKE ?)`。
+        那个写法有个**结构性缺陷**:PostgreSQL 只能对**单表**的多个条件做
+        BitmapOr,跨表(这里还带 LEFT JOIN)的 OR 拿不到 BitmapOr,
+        于是整个 WHERE 退化成 Seq Scan —— 实测带 COALESCE 与不带都是 Seq Scan,
+        而 `node_contents_trgm_idx`(GIN gin_trgm_ops)与 `nodes_title_trgm_idx`
+        这两条索引**一个都用不上**。索引建了等于没建。
+
+        改成 UNION ALL 之后,两支各自在自己的表上匹配:
+          · 标题那支走 nodes_title_trgm_idx
+          · 正文那支走 node_contents_trgm_idx
+        合并之后再统一排序 —— 「命中位置(标题 > 正文) > 相似度 > 更新时间 > id」
+        这套排序键与原来**完全一致**,所以结果集与排序都不变,变的只是执行计划。
+
+        为什么是 UNION ALL 而不是 UNION:去重交给外层的 `GROUP BY` ——
+        同一节点可能标题与正文都命中,UNION ALL 会给两行,外层按 id 聚合;
+        用 UNION 的话去重发生在排序之前,`title_hit` / `sim` 取哪一行就不确定了。
+
+        为什么不在 WHERE 里包 COALESCE(原注释里那条经验仍然成立):
+        表达式索引建在**裸列**上,套了函数规划器就认不出。
+      */
       const rows = await this.prisma.$queryRaw<RawHit[]>(Prisma.sql`
-        SELECT n.id,
-               n.title,
-               n.materialized_path,
-               COALESCE(c.text_for_search, '') AS text_for_search,
-               n.updated_at,
-               (n.title ILIKE ${pattern}::text) AS title_hit
-          FROM nodes n
-          LEFT JOIN node_contents c ON c.node_id = n.id
+        WITH matched AS (
           /*
-            ⚠️ WHERE 里**不包 COALESCE**(2026-09-28)。
+            ⚠️ 两支都是 LEFT JOIN node_contents,不是一支 JOIN 一支不 JOIN。
 
-            原来写 COALESCE(c.text_for_search, '') ILIKE ? —— 而表达式索引
-            「node_contents_trgm_idx」 建在**裸列** text_for_search 上,
-            套了函数之后规划器就认不出、用不上索引。真库 EXPLAIN 实测:
-            带 COALESCE 与去掉 COALESCE 的谓词**都是 Seq Scan** ——
-            因为 OR 的另一支 n.title ILIKE 在 nodes.title 上根本没有索引
-            (见 migration 20260928120000_audit_nodes_indexes)。
+            最初写成「标题那支不 JOIN」—— 于是那一支的 SELECT 里
+            引用 text_for_search 时落进了**没有别名 c 的作用域**,
+            整条查询报 42P01(missing FROM-clause entry)。
+            真机第一次跑就 500 了一次(v5.43 部署时抓到)。
 
-            **语义没有变**:「node_contents.text_for_search」 是 NOT NULL 列,
-            它只在 LEFT JOIN 没配到行时才是 NULL,而
-              · 标题命中时   true  OR NULL = true  -> 入选(与原来一致)
-              · 标题不命中时 false OR NULL = NULL  -> 不入选(与原来一致)
-            NULL 在 WHERE 里等价于「不满足」,所以四种组合的入选结果完全相同。
-
-            COALESCE 只保留在 SELECT 与 ORDER BY —— 那两处**不参与索引匹配**,
-            去掉反而会让排序值变成 NULL,那才是真的改变行为。
+            两支都 LEFT JOIN 的好处是:标题命中的行照样能取到正文,
+            排序里的 similarity(标题, 正文) 才有意义 ——
+            否则「标题命中但正文没命中」的那些行,相似度会被当成 0。
           */
-         WHERE (n.title ILIKE ${pattern}::text
-                OR c.text_for_search ILIKE ${pattern}::text)
+          SELECT n.id,
+                 n.title,
+                 n.materialized_path,
+                 c.text_for_search,
+                 n.updated_at,
+                 true AS title_hit
+            FROM nodes n
+            LEFT JOIN node_contents c ON c.node_id = n.id
+           WHERE n.title ILIKE ${pattern}::text
+          UNION ALL
+          SELECT n.id,
+                 n.title,
+                 n.materialized_path,
+                 c.text_for_search,
+                 n.updated_at,
+                 false AS title_hit
+            FROM nodes n
+            JOIN node_contents c ON c.node_id = n.id
+           WHERE c.text_for_search ILIKE ${pattern}::text
+        )
+        SELECT id,
+               title,
+               materialized_path,
+               COALESCE(text_for_search, '') AS text_for_search,
+               updated_at,
+               bool_or(title_hit) AS title_hit
+          FROM matched
+         GROUP BY id, title, materialized_path, text_for_search, updated_at
          ORDER BY
-           (CASE WHEN n.title ILIKE ${pattern}::text THEN 2 ELSE 0 END)
-           + (CASE WHEN COALESCE(c.text_for_search, '') ILIKE ${pattern}::text THEN 1 ELSE 0 END) DESC,
+           (CASE WHEN bool_or(title_hit) THEN 2 ELSE 0 END)
+           + (CASE WHEN COALESCE(text_for_search, '') ILIKE ${pattern}::text THEN 1 ELSE 0 END) DESC,
            GREATEST(
-             similarity(n.title, ${q}::text),
-             similarity(COALESCE(c.text_for_search, ''), ${q}::text)
+             similarity(title, ${q}::text),
+             similarity(COALESCE(text_for_search, ''), ${q}::text)
            ) DESC,
-           n.updated_at DESC,
-           n.id ASC
+           updated_at DESC,
+           id ASC
          LIMIT ${BATCH}::int OFFSET ${offset}::int
       `);
 

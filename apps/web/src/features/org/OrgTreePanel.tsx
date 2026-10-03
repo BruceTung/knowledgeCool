@@ -28,6 +28,17 @@ import {
   locateNode,
   type OrgTreeNode,
 } from './tree-utils';
+import {
+  ROW_ACTION_CLASS,
+  ROW_ACTION_DANGER_CLASS,
+  TREE_BADGE_CLASS,
+  TREE_TOGGLE_CLASS,
+  kindBadge,
+  kindBadgeClass,
+  treeGuideLeftPx,
+  treeIndentPx,
+  treeRowClass,
+} from './tree-row-styles';
 
 /** 拖拽落点的三种语义:上四分之一=前,下四分之一=后,中间=成为子节点。 */
 type DropZone = 'before' | 'into' | 'after';
@@ -49,31 +60,10 @@ interface OrgTreePanelProps {
   onOpenMembers: (nodeId: string, title: string) => void;
 }
 
-/** 节点类型的中文短标。 */
-function kindBadge(node: OrgTreeNode): string {
-  if (node.depth === 0) return '部';
-  if (node.kind === 'space') return '组';
-  return '页';
-}
-
 /**
- * 行内操作按钮的统一规格。
- *
- * ⚠️ 这几个按钮原来是**各写各的** —— 有的带 `text-xs`,有的不写
- * (于是继承父级的字号),于是一行里 6 个按钮出现两种字号。
- * 这就是「图标、字体大小、字样都不对称」最直接的来源(用户 2026-09-27 反馈)。
- *
- * v2.8:点击区 24px、字形跟着内容档。Atlassian 的规范里
- * "配合图标时用 Medium 字重",所以这里也给 `font-medium` —— 字形小、
- * 又细的时候,图标会显得脏。
- *
- * ⚠️ v2.17:点击区 24 → **28px**(`h-7 w-7`),并换成深底上的配色。
- * 24px 只是**下限**,而行本身已经从 36px 放到 44px —— 按钮也跟着长一点,
- * 行内才不会显得"大行小按钮"。悬停底色从 `slate-200` 换成 `white/10`:
- * 浅灰的半透明块压在深底上会发灰发脏。
+ * 行内操作按钮的统一规格已搬去 `tree-row-styles.ts`(v5.43,P1-1)——
+ * 它们与行高、缩进是一组量,散在两处就一定会走散。
  */
-const ROW_ACTION_CLASS = `flex h-7 w-7 flex-none items-center justify-center rounded-md text-sm font-medium text-slate-400 transition-colors hover:bg-white/15 hover:text-white`;
-const ROW_ACTION_DANGER_CLASS = `flex h-7 w-7 flex-none items-center justify-center rounded-md text-sm font-medium text-slate-400 transition-colors hover:bg-red-500/20 hover:text-red-300`;
 
 export function OrgTreePanel({
   tree,
@@ -350,15 +340,18 @@ export function OrgTreePanel({
       只放大字号而不放开行高,汉字会挤在一起反而更难读 —— 两者必须一起动。
       44px 与"点击目标 ≥ 24px"那条下限不冲突(它只是下限),
       而"在一条 44px 的行里鼠标不容易点偏"正是用户要的"更直观"。
+
+      ⚠️ v5.43:行高、缩进、引导线、徽章与按钮的类名都搬去了
+      `tree-row-styles.ts`(P1-1)。它们是**一组互相耦合的量** ——
+      改缩进步长就必须同步改引导线位置,叶子占位块必须与箭头同宽 ——
+      散在 JSX 里只能靠注释维系,那个注释已经被改错过两次。
     */
-    const rowClass = [
-      `group relative flex h-11 items-center gap-2 rounded-lg pr-2 ${T_NAV} transition-colors`,
-      // 选中行用 CSS 类(青色指示条 + 由内向外渐隐的底色),不用纯色块 ——
-      // 纯 `bg-white` 在深底上是一块刺眼的白砖,把整列的层次全压平了。
-      isActive ? 'kc-tree-active' : 'text-slate-300 hover:bg-white/10',
-      forbidden && dragId !== null ? 'opacity-40' : '',
-      target === 'into' ? 'ring-2 ring-sky-400' : '',
-    ].join(' ');
+    const rowClass = treeRowClass({
+      isActive,
+      dragging: dragId !== null,
+      forbidden,
+      dropZone: target,
+    });
 
     return (
       /*
@@ -429,7 +422,7 @@ export function OrgTreePanel({
             // 下面的引导线落在 `18 + level*16` —— 正好是**上一级箭头的中点**,
             // 所以竖线看起来是从父节点的展开箭头正中延伸下来的。
             // 两者若不同步,表现是整列竖线系统性偏几像素,而且没人知道该改哪边。
-            paddingLeft: `${String(Math.min(node.depth, 8) * 16 + 4)}px`,
+            paddingLeft: `${String(treeIndentPx(node.depth))}px`,
           }}
           onClick={() => void navigate(`/n/${node.id}`)}
           onDragStart={(event) => {
@@ -488,7 +481,7 @@ export function OrgTreePanel({
               key={`guide-${String(level)}`}
               aria-hidden
               className="kc-tree-guide pointer-events-none absolute inset-y-0 w-px"
-              style={{ left: `${String(18 + level * 16)}px` }}
+              style={{ left: `${String(treeGuideLeftPx(level))}px` }}
             />
           ))}
 
@@ -528,7 +521,7 @@ export function OrgTreePanel({
                 悬停时给一层底色,是为了让"这里可点"这件事**看得见** ——
                 只有字形变色的话,用户仍然不知道该往哪儿瞄准。
               */
-              className="flex h-7 w-7 flex-none cursor-pointer items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-white/15 hover:text-white"
+              className={`flex ${TREE_TOGGLE_CLASS} flex-none cursor-pointer items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-white/15 hover:text-white`}
               onClick={(event) => {
                 event.stopPropagation();
                 toggleExpanded(node.id);
@@ -554,7 +547,7 @@ export function OrgTreePanel({
             // 没有子节点时占同宽的位,否则同一列的徽章会参差不齐
             // ⚠️ 必须与上面那个箭头的尺寸**同步**(v2.17 起是 28px),
             // 否则叶子节点的徽章会比有子节点的往左错 4px,整列看起来是歪的。
-            <span className="h-7 w-7 flex-none" />
+            <span className={`${TREE_TOGGLE_CLASS} flex-none`} />
           )}
 
           {/*
@@ -563,13 +556,7 @@ export function OrgTreePanel({
             原来那种 `bg-blue-50`(接近纯白)在深色树里是一块刺眼的小白点。
           */}
           <span
-            className={`flex h-6 w-6 flex-none items-center justify-center rounded-md text-sm font-medium ${
-              node.depth === 0
-                ? 'bg-sky-500/20 text-sky-200 ring-1 ring-sky-400/30'
-                : node.kind === 'space'
-                  ? 'bg-teal-500/20 text-teal-200 ring-1 ring-teal-400/30'
-                  : 'bg-white/10 text-slate-300'
-            }`}
+            className={`flex ${TREE_BADGE_CLASS} flex-none items-center justify-center rounded-md text-sm font-medium ${kindBadgeClass(node)}`}
           >
             {kindBadge(node)}
           </span>

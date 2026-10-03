@@ -31,6 +31,7 @@
 import { Injectable } from '@nestjs/common';
 import {
   COMMENT_BODY_MAX_LENGTH,
+  COMMENT_THREADS_MAX,
   type Actor,
   type CommentListResponse,
   type CommentView,
@@ -69,15 +70,52 @@ export class CommentService {
    *
    * v2.12 起**要过读判定** —— 受限节点的评论也不该被未授权的人看到。
    * (评论正文常常比文档本身更直白,漏掉这一条等于保密只做了一半。)
+   *
+   * ⚠️ v5.43 加了**上限**(P2-2)。原来这里 `findMany` 不带 `take`,
+   * 于是"一页要渲染多少条评论"完全取决于数据 —— 正常时是几条,
+   * 吵起来就是几百条,每个都要查作者、判权限、再序列化成 JSON。
+   *
+   * 两条刻意的取舍:
+   *   1. **只截顶层,回复跟着走。** 阶段一只允许一层嵌套(P2 见 `create`),
+   *      顶层取前 N 条、再按这 N 条的 id 取回复,一个回复都不会落到截断之外。
+   *      若先对全量扁平结果 `take`,会出现"顶层在、回复没了"的残缺对话。
+   *   2. **`total` 仍是全量计数**,不含回复也只有这 N 条的 visible 部分 ——
+   *      它是节点树角标的依据,截断它会让角标说谎。
+   *      顺带一个查询换来"上限不是新的信息泄漏面":能读这页的人本来就能
+   *      看到"这里一共多少条讨论",少看到几条正文不构成新的信息。
    */
   async list(operator: Actor, nodeId: string): Promise<CommentListResponse> {
     await this.permissions.requireRead(operator, nodeId);
 
-    const rows = await this.prisma.comment.findMany({
-      where: { nodeId },
-      orderBy: { createdAt: 'asc' },
-      select: COMMENT_SELECT,
-    });
+    // ⚠️ 先查一层(limit+1)而不是"查 N 条再 count" ——
+    // 后者是两次查询,而且 count 的那次在长列表页上会越来越慢。
+    // 多取一条就足以判断有没有被截断,总数另有一次 count 拿。
+    const [threadRows, total] = await Promise.all([
+      this.prisma.comment.findMany({
+        where: { nodeId, parentId: null },
+        orderBy: { createdAt: 'asc' },
+        select: COMMENT_SELECT,
+        take: COMMENT_THREADS_MAX + 1,
+      }),
+      // ⚠️ 计数**包含回复** —— 它要与原来的 `rows.length` 保持一致,
+      // 否则节点树角标会在有回复的页面上偏小(那是一个会被当成"少了几条"的回归)。
+      this.prisma.comment.count({ where: { nodeId } }),
+    ]);
+
+    const truncated = threadRows.length > COMMENT_THREADS_MAX;
+    const page = truncated ? threadRows.slice(0, COMMENT_THREADS_MAX) : threadRows;
+
+    // 回复:只取这批顶层的,`parentId IN (...)` 走的是 comments_node_idx 之外的
+    // parent_id 过滤,但一层回复的量级很小,这里不额外分页。
+    const parentIds = page.map((row) => row.id);
+    const replyRows =
+      parentIds.length === 0
+        ? []
+        : await this.prisma.comment.findMany({
+            where: { nodeId, parentId: { in: parentIds } },
+            orderBy: { createdAt: 'asc' },
+            select: COMMENT_SELECT,
+          });
 
     // 祖先所有者能处置任何人的评论;作者本人能处置自己的。两者有其一即可。
     const access = await this.permissions.access(operator, nodeId);
@@ -110,21 +148,20 @@ export class CommentService {
     };
 
     const repliesOf = new Map<string, CommentView[]>();
-    for (const row of rows) {
+    for (const row of replyRows) {
       if (row.parentId === null) continue;
       const bucket = repliesOf.get(row.parentId) ?? [];
       bucket.push(toView(row, []));
       repliesOf.set(row.parentId, bucket);
     }
 
-    const threads = rows
-      .filter((row) => row.parentId === null)
-      .map((row) => toView(row, repliesOf.get(row.id) ?? []));
+    const threads = page.map((row) => toView(row, repliesOf.get(row.id) ?? []));
 
     return {
       nodeId,
-      total: rows.length,
+      total,
       threads,
+      truncated,
     };
   }
 

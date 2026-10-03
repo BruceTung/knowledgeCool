@@ -609,18 +609,19 @@ export class OrgService {
       title: row.title,
       direct: views.filter((view) => directIds.has(view.userId)),
       inherited: views.filter((view) => !directIds.has(view.userId)),
-      canManage: operator.isSuperAdmin || canManagePure(operator, chain),
+      // ⚠️ v5.43:与 requireManageMember 同一套口径(P0-4),不再有超管旁路。
+      // 界面用它决定"成员"按钮要不要可点 —— 与服务端判定同源,不会自相矛盾。
+      canManage: canManagePure(operator, chain),
     };
   }
 
   /**
    * 能加到这个节点下的人 —— **已按操作者的组织范围过滤**。
    *
-   * 为什么不复用授权候选人(`PermissionService.candidates`):两者的**门槛不同**。
-   * 授权的要求是 `canManage`(超管不在此列 —— 他改不了别人的内容权限),
-   * 而成员维护对**超管是放行的**(组织架构本来就归他管,何况他的组织归属
-   * 可能是空的,过不了范围检查)。
-   * 复用的话会出现「超管能改成员、但候选列表是空的」这种自相矛盾的界面。
+   * 为什么不复用授权候选人(`PermissionService.candidates`):两者的**候选来源**不同。
+   * 授权要求 `canManage`,而超管在 `canManage` 里没有旁路(P0-4 已收归),
+   * 所以两条路径的门槛现在**一致**了 —— 差别只剩候选过滤的宽严:
+   * 授权按"操作者的组织范围"过滤,成员维护按"该节点子树"过滤。
    *
    * 规则与 `ownerCandidates` 一致:门槛用同一套,候选人用同一套过滤。
    */
@@ -652,7 +653,10 @@ export class OrgService {
       scopePaths: row.assignments.map((assignment) => assignment.node.materializedPath),
     });
 
-    // 超管不受组织范围约束 —— 见方法注释。
+    // 超管不受组织范围约束 —— 但注意这只是**候选列表**的宽严,
+    // 他能不能改这些成员由 requireManageMember 决定(v5.43 已收掉那条旁路)。
+    // 保留这个分支是为了界面可用性:超管的组织归属通常是空的,
+    // 若也按范围过滤,他会看到一个空列表,却连一个人都加不了。
     if (operator.isSuperAdmin) return rows.map(toCandidate);
 
     const myScopes = await this.permissions.scopePathsOf(operator.id);
@@ -673,7 +677,18 @@ export class OrgService {
    * 把某人加到某个节点下(**追加**一条归属,不是整表替换)。
    *
    * 与授权一样受**组织范围约束**(§5.3 规则三):组长不该能把别的部门的人
-   * 拉进自己组。超管豁免 —— 他的组织归属可能是空的,而且组织架构维护本就是他的职责。
+   * 拉进自己组。
+   *
+   * ⚠️ **v5.43 收掉了这里的超管豁免**(P0-4)。原来写的是
+   * `!operator.isSuperAdmin && !(await isInOperatorScope(...))`。
+   *
+   * 为什么连**范围检查**也要收:门槛已经由 `requireManageMember` 统一成
+   * 「该节点或其上级的所有者」,超管不再有旁路。那么给他开范围豁免,
+   * 只会造成一种自相矛盾的局面:**他能通过这个接口把任意部门的任何人
+   * 加进任意节点** —— 只要他 somehow 成了那个节点的所有者(比如
+   * `setOwner` 之后),他的组织范围本该限制他,现在却完全不受限。
+   * 一旦收口到 `canManage`,范围检查就应当**对所有人一视同仁**,
+   * 否则"组织范围"这道横向防线上就多了一个洞。
    *
    * ⚠️ 这里**不做"移出旧归属"** —— 调岗是两步,第二步由管理员显式选择在哪一层移出。
    * 顺手替人删归属会让"他到底还在不在原部门"变得不可预测。
@@ -684,10 +699,7 @@ export class OrgService {
 
     await this.assertActiveUser(userId);
 
-    if (
-      !operator.isSuperAdmin &&
-      !(await this.permissions.isInOperatorScope(operator.id, userId))
-    ) {
+    if (!(await this.permissions.isInOperatorScope(operator.id, userId))) {
       const who = await this.pluckUser(userId);
       throw AppError.forbidden(`不能把「${who.name}」加到这里 —— 他不在你的组织范围内`);
     }
@@ -760,9 +772,23 @@ export class OrgService {
     return this.buildMembersView(operator, nodeId);
   }
 
-  /** 谁能改这个节点的成员 —— 该节点或其上级的所有者,以及超管。 */
+  /**
+   * 谁能改这个节点的成员 —— **只有该节点或其上级的所有者**。
+   *
+   * ⚠️ **v5.43 收掉了这里的超管例外**(P0-4)。原来第一行是
+   * `if (operator.isSuperAdmin) return;`,于是超管能增删任何节点的成员,
+   * 而同一条既定原则在 `requireCreateUnder` 里已经收掉了(他只能建顶层节点,
+   * 其余只读)—— 同一个"超管能做什么"的口径散在两处且互相矛盾。
+   *
+   * 为什么必须收:`canManage` 是**纯函数,无超管分支**(`permission.service.ts`
+   * 的设计如此),所以整个权限模型的口径是「所有者及其上级」。
+   * 成员维护属"写",留着一个超管旁路,等于在唯一的越权口子上开口子。
+   *
+   * **取舍(用户已确认)**:收掉后,若部长离职且账号被停用,暂时没人能改该部门成员。
+   * 逃逸通道仍在 —— 超管可以对顶层节点 `setOwner` 换一位部长,再由新部长管成员。
+   * 也就是说:超管不是"不能管",而是"不能绕过所有者直接改"。
+   */
   private requireManageMember(operator: Actor, chain: Parameters<typeof canManagePure>[1]): void {
-    if (operator.isSuperAdmin) return;
     if (!canManagePure(operator, chain)) {
       throw AppError.forbidden('只有该节点或其上级的所有者才能调整成员');
     }
