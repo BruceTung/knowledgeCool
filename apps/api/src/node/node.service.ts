@@ -537,6 +537,18 @@ export class NodeService {
         再做路径重写。这是本文件里唯一一处"读必须在事务内"的地方;
         `deleteSubtree` 每轮重查剩余行,遵循的是同一条原则。
       */
+      /*
+        ⚠️ v5.45(P0 修复):防环判定也必须用**事务内**的自身路径。
+        原来这里用的是 `row.materializedPath` —— 事务外那份,
+        它可能已经不是当前路径了。而防环判错的后果比路径写坏更直接:
+        把节点搬进自己的子孙下面,树成环。
+      */
+      const selfNow = await tx.node.findUnique({
+        where: { id: nodeId },
+        select: { materializedPath: true },
+      });
+      if (selfNow === null) throw AppError.notFound();
+
       let effectiveNewParentPath = newParentPath;
       if (input.newParentId !== null) {
         const fresh = await tx.node.findUnique({
@@ -547,7 +559,7 @@ export class NodeService {
         if (fresh === null) throw AppError.notFound();
         if (
           input.newParentId === nodeId ||
-          fresh.materializedPath.startsWith(subtreePrefix(row.materializedPath))
+          fresh.materializedPath.startsWith(subtreePrefix(selfNow.materializedPath))
         ) {
           throw AppError.validation('不能把节点移动到它自己或它的子节点下');
         }
@@ -556,7 +568,6 @@ export class NodeService {
 
       await applyMoveTo(tx, {
         nodeId,
-        row,
         newParentId: input.newParentId,
         newParentPath: effectiveNewParentPath,
         actorId: operator.id,
@@ -662,18 +673,27 @@ export class NodeService {
       if (freshTarget === null) throw AppError.notFound();
 
       for (const id of ids) {
-        const row = rows.get(id);
-        if (row === undefined) continue;
+        const stale = rows.get(id);
+        if (stale === undefined) continue;
+        /*
+          ⚠️ v5.45(P0 修复):与 `move()` 同一条理由 —— 自身路径必须在
+          **事务内**重读。原来用的是事务外那份 `rows`,防环判错就会把
+          节点搬进自己的子孙下,树成环。
+        */
+        const selfNow = await tx.node.findUnique({
+          where: { id },
+          select: { materializedPath: true, title: true },
+        });
+        if (selfNow === null) continue;
         // 防环也要按**新**路径重判一次:目标可能已经被移进了某个选中节点的子树
         if (
           target === id ||
-          freshTarget.materializedPath.startsWith(subtreePrefix(row.materializedPath))
+          freshTarget.materializedPath.startsWith(subtreePrefix(selfNow.materializedPath))
         ) {
-          throw AppError.validation(`「${row.title}」不能移动到它自己或它的子节点下`);
+          throw AppError.validation(`「${selfNow.title}」不能移动到它自己或它的子节点下`);
         }
         await applyMoveTo(tx, {
           nodeId: id,
-          row,
           newParentId: target,
           newParentPath: freshTarget.materializedPath,
           actorId: operator.id,
@@ -899,8 +919,6 @@ async function applyMoveTo(
   tx: Prisma.TransactionClient,
   params: {
     nodeId: string;
-    /** 判定那一步取回来的行 —— 与 PermissionService 的判据同一份数据。 */
-    row: AccessContext['row'];
     newParentId: string | null;
     newParentPath: string | null;
     actorId: string;
@@ -910,7 +928,44 @@ async function applyMoveTo(
     position?: number;
   },
 ): Promise<void> {
-  const { nodeId, row, newParentId, newParentPath, actorId } = params;
+  const { nodeId, newParentId, newParentPath, actorId } = params;
+
+  /*
+    ⚠️⚠️ v5.45(P0 修复):被移动节点**自己的** `materialized_path` / `depth`
+    在这里、**事务内**重读,不用调用方在事务外取的那份。
+    =
+    原来 `row` 是参数,而它来自 `move()` 开头的 `requireEdit` —— **事务外**。
+    整棵子树的路径重写以 `row.materializedPath` 为基准:
+
+        UPDATE nodes SET materialized_path = newPath || substr(materialized_path, oldPrefix.length + 1) ...
+       WHERE id = ? OR materialized_path LIKE oldPrefix || '%'
+
+    那个 `substr` 的偏移量是从 `oldPrefix.length` 算的。所以只要
+    **这个值在事务开始前已经过期**,偏移就整体错位。
+
+    2026-10-04 在真实库上算过:`/uuid1/uuid2` 长度 74,若它的祖先
+    被移到另一个父节点下,同一节点的真实路径变成 111 字符,
+    此时 `substr(真实路径, 75)` 返回**空串** —— 于是整棵子孙的路径
+    被截成只剩新前缀,全部塌缩到父节点那一层。
+    `WHERE` 里的 `LIKE oldPrefix || '%'` 同样匹配不到(它们已在新位置),
+    于是子孙**原地不动**。结果:`parent_id` 与 `materialized_path` 彻底脱钩,
+    祖先链断裂 —— 而 `canRead` 是逐环检查的,链上少了那个 `restricted`
+    祖先就**直接放行**,变成静默越权。它也不会自愈。
+
+    为什么 `runSerializable` 救不了:谓词锁只覆盖事务内**实际读过**的行。
+    这里用的是事务外的快照,SSI 看不见"这次读"与别人的写之间的依赖。
+
+    ⚠️ 所以这不只是"补一次重读",而是**把 row 从签名里删掉** ——
+    让"忘了在事务内重读"这件事在类型上不可能发生。
+    下一个调用方想传一个事务外的行进来,编译就过不去。
+  */
+  const self = await tx.node.findUnique({
+    where: { id: nodeId },
+    select: { materializedPath: true, depth: true },
+  });
+  // 事务内消失了:并发把它删了。此时继续写会造出孤儿路径。
+  if (self === null) throw AppError.notFound();
+  const row = self;
 
   if (params.version !== undefined) {
     const claimed = await tx.node.updateMany({
@@ -919,7 +974,23 @@ async function applyMoveTo(
     });
     if (claimed.count === 0) throw AppError.versionConflict();
   } else {
-    await tx.node.update({ where: { id: nodeId }, data: { updatedBy: actorId } });
+    /*
+      ⚠️ v5.45(P0 修复):没有 CAS 时也要**递增** version。
+      =
+      原来这里只写 `updatedBy`,`version` 原地不动 —— 后果不是"少一次校验",
+      而是**这次移动对其他客户端完全不可见**:它们手里的 `version` 依然是旧值,
+      于是下一次改名/改可见性会**拿着过期的版本号却仍然成功**,
+      乐观锁在跨端协作下等于没有。
+
+      而且它还是上面那个数据损坏缺陷(P0-2)的一条触发路径:
+      别的操作靠 `version` 抢占,而批量移动对版本号毫无影响,撞不上。
+
+      → 递增**不需要**比对,成本为零,却能让所有并发客户端正确察觉冲突。
+    */
+    await tx.node.update({
+      where: { id: nodeId },
+      data: { version: { increment: 1 }, updatedBy: actorId },
+    });
   }
 
   const newPath = newParentPath === null ? pathOfRoot(nodeId) : pathOfChild(newParentPath, nodeId);

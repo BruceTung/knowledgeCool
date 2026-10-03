@@ -34,6 +34,7 @@ import {
 
 import { AppError } from '../common/errors/app-error.js';
 import { Prisma } from '../generated/prisma/client.js';
+import { PermissionService } from '../permission/permission.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 
 /**
@@ -71,7 +72,24 @@ interface RawAuditRow {
 
 @Injectable()
 export class AuditService {
-  constructor(private readonly prisma: PrismaService) {}
+  /*
+    ⚠️ v5.45(P0 修复):`PermissionService` 是**新增的依赖**。
+    =
+    原来这个类只有 `PrismaService` —— 结构上就**没有能力**做读判定,
+    于是它走的是 `visibleNodeIds`(按**所有权**过滤)。而所有权可以严格宽于读:
+    `permission.service.ts` 自己论证过「受限祖先可以让节点所有者读不到自己的节点」。
+    → 「我拥有它」+「我读不到它」可以同时成立,审计页就把受限节点的
+    标题与操作历史漏了出去。
+
+    为什么以前没被发现:可见性收口是**逐路径**做的
+    (`readersOverview`/`readerCandidates`/`memberCandidates`/`ownerCandidates`
+    各补过一次),而审计这条路径**不是** `nodes/:id/*` 路由 ——
+    按「逐个核对 nodes 路由」的思路必然漏掉它。
+  */
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly permissions: PermissionService,
+  ) {}
 
   /**
    * 查询审计日志。
@@ -112,9 +130,25 @@ export class AuditService {
     const hasMore = rows.length > limit;
     const page = hasMore ? rows.slice(0, limit) : rows;
 
-    const labels = await this.resolveTargetLabels(page);
+    /*
+      ⚠️ v5.45(P0 修复):剔除**读不到**的节点条目。
+      =
+      ⚠️ 为什么必须**整条丢弃**而不是只把 `targetLabel` 置空:
+      `detail` 里带着 `nodeId`、`title`、改了什么、谁改的、内容字节数 ——
+      只清 label 的话,条目本身仍然泄露。而审计页是"看事件"的,
+      留一条没有标题的事件在那里,等于换个地方再泄露一次。
 
-    const items: AuditLogView[] = page.map((row) => ({
+      为什么不能用 `scopeIds` 那一套:它是**所有权**的口径(见类注释)。
+      这里要问的是"他能不能读到这个节点",两者不是一回事。
+    */
+    const readableNodeIds = await this.readableNodeIds(operator, page);
+    const visible = page.filter(
+      (row) => row.target_type !== 'node' || readableNodeIds.has(row.target_id),
+    );
+
+    const labels = await this.resolveTargetLabels(visible);
+
+    const items: AuditLogView[] = visible.map((row) => ({
       id: row.id.toString(),
       actor: row.actor_id === null ? null : { id: row.actor_id, name: row.actor_name ?? '未知' },
       action: row.action,
@@ -126,7 +160,9 @@ export class AuditService {
       createdAt: row.created_at.toISOString(),
     }));
 
-    const last = page.at(-1);
+    // ⚠️ 游标必须取**过滤后**的最后一条,否则翻页会漏行:
+    // 被剔除的那些 id 不该出现在结果里,拿它们当游标会跳过真实记录。
+    const last = visible.at(-1);
     return { items, nextCursor: hasMore && last !== undefined ? last.id.toString() : null };
   }
 
@@ -240,6 +276,56 @@ export class AuditService {
       select: { id: true },
     });
     return rows.map((row) => row.id);
+  }
+
+  /**
+   * 这一页里那些 `target_type='node'` 的条目,哪些是**这个人读得到的**。
+   *
+   * ⚠️ `canReadBatch` 的契约是「缺失的键表示没判定出来,**不是 false**」
+   * (见它的类注释)—— 把缺失当 false 会**把该看见的审计藏起来**,
+   * 那比多显示一条更糟。所以缺失的那些逐个回源。
+   *
+   * 走 `canReadFast` 而不是 `access()`:它省掉 `chainOf` 的两次查询
+   * (实测 600 次判定里那两次占约 55% 的耗时),而审计页每页最多 200 条。
+   */
+  private async readableNodeIds(
+    operator: Actor,
+    rows: readonly { target_type: string; target_id: string }[],
+  ): Promise<Set<string>> {
+    const nodeIds = [
+      ...new Set(rows.filter((r) => r.target_type === 'node').map((r) => r.target_id)),
+    ];
+    if (nodeIds.length === 0) return new Set();
+
+    /*
+      ⚠️ 超管**不做**读判定过滤 —— 这是一个真实的坑,第一次实现时漏了。
+      =
+      部署后实测发现:超管查审计返回 **0 条**,而库里明明有 3873 条。
+      原因是超管的可见范围是**另一套口径**:上面 `queryRows` 里
+      `${operator.isSuperAdmin}::boolean` 那个分支让他的 SQL **匹配全部行**,
+      而 `visibleNodeIds` 对他直接返回 `[]`(那里注释写了"他走 isSuperAdmin
+      分支,算了也用不上")。
+
+      → 于是「SQL 给他全部、这个过滤器把全部剔除」,两头口径对不上,结果就是空。
+      而 `verify-doc-claims` 那条断言当时报的是 OK —— 因为它写的是
+      「记录不足一页时跳过语义校验」,0 条恰好落进那个分支,**静默放过了**。
+
+      修法:超管直接宣告「全部可读」,与 SQL 那条分支保持同一口径。
+      这不是给他开后门 —— 他本来就该看到全公司的审计(§5.3);
+      而 `canRead` 不对超管豁免说的是**节点内容**的保密,两者是不同维度。
+      把两件事混在一起就会出现"要么泄露、要么全空"这种二选一。
+    */
+    if (operator.isSuperAdmin) return new Set(nodeIds);
+
+    const cached = await this.permissions.canReadBatch(operator, nodeIds);
+    const readable = new Set<string>();
+    for (const nodeId of nodeIds) {
+      const known = cached.get(nodeId);
+      // 缺失 = 没判定出来,回源问一次(顺带把缓存写上)。
+      const can = known ?? (await this.permissions.canReadFast(operator, nodeId));
+      if (can) readable.add(nodeId);
+    }
+    return readable;
   }
 
   /** 批量把 target_id 换成人看得懂的名字。一次查询解决,不做 N+1。 */

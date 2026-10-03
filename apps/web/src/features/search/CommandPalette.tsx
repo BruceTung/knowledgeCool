@@ -160,7 +160,18 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
             <br />
             你能读到的内容都会出现在这里(受限节点里读不到的部分不会出现)。
           </p>
-        ) : search.isPending ? (
+        ) : search.isFetching && search.isPlaceholderData ? (
+          /*
+            ⚠️ v5.45(P0 修复):原来是 `search.isPending`。
+            =
+            `keepPreviousData` 会让 `data` 非空,于是 `isPending` **恒为 false**
+            —— 这一支「搜索中…」**从来没有执行过**。结果是每次改词之后,
+            旧结果继续挂在列表里,而且 `aria-activedescendant` 指向的也是旧项,
+            键盘用户按 ↑↓ 会在"上一批结果"里选。
+
+            → 改用 `isFetching && isPlaceholderData`:两者同时为真
+            精确表示"正在取新数据、界面上还是旧数据"这一段窗口。
+          */
           <p className="px-4 py-6 text-center text-sm text-slate-500">搜索中…</p>
         ) : search.isError ? (
           /*

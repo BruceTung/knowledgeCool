@@ -164,33 +164,66 @@ export class OrgService {
 
     const passwordHash = await this.passwords.hash(INITIAL_PASSWORD);
 
-    const created = await this.prisma.user
-      .create({
-        data: {
-          employeeNo,
-          name: input.name.trim(),
-          passwordHash,
-          mustChangePassword: true,
-        },
-        select: USER_VIEW_SELECT,
+    /*
+      ⚠️ v5.45(P0 修复):归属的**存在性**要在写库**之前**查。
+      =
+      `CreateUserDto.nodeIds` 只校验 UUID 格式(`@IsUUID('4')`),
+      不校验那个节点真的存在 —— 而 `setAssignments` 走的是另一条路、
+      它校验。同一族 DTO 两套标准,结果就是:传一个格式合法但不存在的
+      节点 id,会一路走到 `createMany` 才撞外键。
+
+      ⚠️ 提前查不是为了"给个好看的报错",而是为了**让失败发生在写之前**:
+      建号已经落库、归属没建成、审计也还没写的时候,库里就多了一个
+      无人认领的账号(原版就是这个顺序)。
+    */
+    const nodeIds = input.nodeIds === undefined ? [] : [...new Set(input.nodeIds)];
+    if (nodeIds.length > 0) {
+      const found = await this.prisma.node.count({ where: { id: { in: nodeIds } } });
+      if (found !== nodeIds.length) {
+        throw AppError.validation('设置的归属里有不存在的节点,请刷新后重试');
+      }
+    }
+
+    // 建号与建归属在**同一个事务**里 —— 原来分两步,第二步失败会留下孤儿账号。
+    const created = await this.prisma
+      .$transaction(async (tx) => {
+        const row = await tx.user
+          .create({
+            data: {
+              employeeNo,
+              name: input.name.trim(),
+              passwordHash,
+              mustChangePassword: true,
+            },
+            select: USER_VIEW_SELECT,
+          })
+          .catch((error: unknown) => {
+            if (isUniqueViolation(error)) {
+              throw AppError.validation(`工号「${employeeNo}」已存在`);
+            }
+            throw error;
+          });
+        if (nodeIds.length > 0) {
+          await this.replaceAssignmentsIn(tx, row.id, nodeIds);
+        }
+        return row;
       })
       .catch((error: unknown) => {
+        // 事务内抛的 AppError 原样透出;只有唯一键冲突需要翻译成人话。
         if (isUniqueViolation(error)) {
           throw AppError.validation(`工号「${employeeNo}」已存在`);
         }
         throw error;
       });
 
-    if (input.nodeIds !== undefined && input.nodeIds.length > 0) {
-      await this.replaceAssignments(created.id, input.nodeIds);
-    }
-
     await recordAudit(this.prisma, {
       actorId: operator.id,
       action: 'org.user.create',
       targetType: 'user',
       targetId: created.id,
-      detail: { employeeNo, name: created.name },
+      // ⚠️ v5.45:带上 `nodeIds` —— 原来只有工号与姓名,
+      // 于是"建号时同时指定了归属"这件事在审计里查不到归属到了哪些节点。
+      detail: { employeeNo, name: created.name, nodeIds },
     });
 
     return (await this.viewOf(created.id)) ?? toView(created, []);
@@ -370,7 +403,7 @@ export class OrgService {
    */
   async createOrgNode(
     operator: Actor,
-    input: { name: string; parentId: string | null; ownerId?: string },
+    input: { name: string; parentId: string | null },
   ): Promise<{ id: string; title: string }> {
     const name = input.name.trim();
     if (name === '') throw AppError.validation('名称不能为空');
@@ -378,10 +411,12 @@ export class OrgService {
     await this.permissions.requireCreateUnder(operator, input.parentId);
 
     const id = randomId();
-    const ownerId = input.ownerId ?? operator.id;
-
-    // 指定的所有者也必须存在且在职 —— 把所有权交给一个离职账号,这个节点就废了
-    await this.assertActiveUser(ownerId);
+    /*
+      ⚠️ v5.45(P0 修复):所有者**固定为操作者本人**,不再接受外部指定。
+      理由见 DTO 里那段注释(建组是"谁建谁负责",任命所有权走
+      `setOwner` —— 那条路上有组织范围校验)。
+    */
+    const ownerId = operator.id;
 
     /*
       ⚠️⚠️ 父路径必须在事务**内**读 —— 与 `NodeService.create` 和 `move` 同一条原则。
@@ -457,6 +492,51 @@ export class OrgService {
     }
 
     await this.assertActiveUser(ownerId);
+
+    /*
+      ⚠️ v5.45(P0 修复):**任命所有者受组织范围约束**(§5.3 规则三),
+      **但超管豁免**。
+      =
+      这一句以前**不存在**,而同一份代码里 `ownerCandidates` 的注释
+      明确写着这条规则,并且还写着「与 `setOwner` 必须用同一套规则」。
+      **规则写清楚了,只实现在了读路径** —— 于是改一下请求体就能越权任命。
+      2026-10-04 在生产服务器实测确认:后端组组长(KC003)把 owner 改成
+      市场部部长(KC005)返回 **204**,随后 KC005 对该子树 `canManage=true`,
+      并**真的删掉了整个组**(`removedCount: 4`,v2.12 起物理删除、不可恢复)。
+
+      ⚠️⚠️ **超管必须豁免,这一点是实测逼出来的,不是我一开始想到的。**
+      第一次实现没给豁免,理由是「与 `addMember` 同一口径」。部署后
+      `verify-org` 立刻报出一条真实回归:
+
+        ✗ 超管能改一级部门的所有者 → 204   (实际 403)
+
+      原因:超管**按设计没有组织归属**(种子刻意不给 `assignedTo`,
+      §5.3 讨论过这一点),于是 `isInOperatorScope(超管, 任何人)`
+      恒为 false —— 那会把「超管给顶层节点换部长」这条**逃生通道**
+      彻底堵死。而它是 `REMAINING.md` 明确登记的方案:
+      部长离职且账号停用时,超管靠它换人。
+
+      所以这里的口径是:
+        · **超管换部长**(一级节点)→ 豁免,那是组织架构操作;
+        · **超管改二级组的所有者**→ 那一支本来就要求
+          `requireManageForWrite`,他不是该节点所有者就 403,不受影响;
+        · **其他人一律走范围校验** —— 越权的那条路(组长派跨部门的人)
+          仍然被堵住,因为组长不是超管。
+
+      与 `addMember` 的差别不是"不一致",而是**职责不同**:
+      成员归属调整不需要超管亲自做(他也没有归属范围可谈),
+      而换部长是组织架构层面的动作,只有超管能做。
+    */
+    if (
+      !operator.isSuperAdmin &&
+      !(await this.permissions.isInOperatorScope(operator.id, ownerId))
+    ) {
+      const who = await this.pluckUser(ownerId);
+      throw AppError.forbidden(
+        `不能把「${who.name}」任命为这里的所有者 —— 他不在你的组织范围内。` +
+          '若确实需要他接手,先在「人员 → 设置归属」里把他放进这个部门,再来任命。',
+      );
+    }
 
     await this.prisma.node.update({
       where: { id: nodeId },
@@ -936,15 +1016,36 @@ export class OrgService {
 
   /** 供导入服务复用:整表替换某人的归属。 */
   async replaceAssignments(userId: string, nodeIds: readonly string[]): Promise<void> {
+    await this.prisma.$transaction((tx) => this.replaceAssignmentsIn(tx, userId, nodeIds));
+  }
+
+  /**
+   * `replaceAssignments` 的事务内版本 —— **接受一个已有的事务客户端**。
+   *
+   * ⚠️ v5.45(P0 修复)新增,只为让 `createUser` 能把「建号 + 建归属」
+   * 放进**同一个事务**。
+   *
+   * 原来 `createUser` 是两步:先在事务外 `user.create`,再调
+   * `replaceAssignments`(它自带一个事务)。第二步失败时第一步**已经落库**,
+   * 而异常又发生在 `recordAudit` **之前** —— 于是库里留下一个
+   * 「有账号、零组织归属、审计里查不到」的孤儿。
+   *
+   * 复现(真实可验):`POST /admin/users` 传一个格式合法但**不存在**的
+   * `nodeIds` → `create` 成功 → `createMany` 撞外键 P2003 → 500,
+   * 而那个工号已经在库里了。
+   */
+  private async replaceAssignmentsIn(
+    tx: Prisma.TransactionClient,
+    userId: string,
+    nodeIds: readonly string[],
+  ): Promise<void> {
     const unique = [...new Set(nodeIds)];
-    await this.prisma.$transaction(async (tx) => {
-      await tx.orgAssignment.deleteMany({ where: { userId } });
-      if (unique.length > 0) {
-        await tx.orgAssignment.createMany({
-          data: unique.map((nodeId) => ({ userId, nodeId })),
-        });
-      }
-    });
+    await tx.orgAssignment.deleteMany({ where: { userId } });
+    if (unique.length > 0) {
+      await tx.orgAssignment.createMany({
+        data: unique.map((nodeId) => ({ userId, nodeId })),
+      });
+    }
   }
 
   /**

@@ -299,6 +299,13 @@ export function UsersAdminPage() {
                     aria-label={`重命名「${user.name}」`}
                     className="w-32 rounded border border-blue-400 px-1 py-0.5 text-sm outline-none"
                     onKeyDown={(event) => {
+                      /*
+                        ⚠️ v5.45:与组织树的重命名框是同一个坑 ——
+                        中文输入法组词期间按 Enter 是"选中候选词",不是"提交"。
+                        这个仓库已经因为它踩过一次(`CommentsPanel` 有判据),
+                        漏在这里了。
+                      */
+                      if (event.nativeEvent.isComposing) return;
                       if (event.key === 'Enter') commitRename(user, event.currentTarget.value);
                       if (event.key === 'Escape') setRenamingId(null);
                     }}

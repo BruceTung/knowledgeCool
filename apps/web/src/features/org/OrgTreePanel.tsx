@@ -129,6 +129,23 @@ export function OrgTreePanel({
   );
   const itemRefs = useRef(new Map<string, HTMLLIElement>());
 
+  /*
+    ⚠️ v5.45(P0 修复)新增:漫游 tabindex 用的"有效焦点"。
+    =
+    `focusedId` 是纯 state,**没有和 `visibleIds` 做一致性校验** ——
+    所以它可能指向一个已经被删除的节点(删除按钮就在那一行旁边,鼠标可达)。
+    这时下面那个三目对**每一行**都求值 `focusedId !== null` 为真,
+    而 `focusedId === node.id` 的那一行**已经不存在** → 全部 `-1`
+    → **整棵树一个 tab stop 都不剩,键盘再也进不去**。
+    鼠标点一下任意一行能恢复(触发 onFocus 重新赋值),但那时你已经进不来了。
+
+    ⚠️ 为什么用派生值而不是 `useEffect` 校正 state:
+    派生是**纯计算**,不存在"校正发生在渲染之后"的那一帧 ——
+    那一帧里 tabIndex 会短暂算错,而键盘用户恰好可能就在那一帧里按 Tab。
+    同 `readableNodeIds` 刻意下沉成纯函数是同一个理由。
+  */
+  const effectiveFocusId = focusedId !== null && visibleIds.includes(focusedId) ? focusedId : null;
+
   /** 移动焦点并同步漫游位置。用命令式 focus,因为要真的把光标交过去。 */
   const focusItem = (id: string | undefined): void => {
     if (id === undefined) return;
@@ -388,8 +405,10 @@ export function OrgTreePanel({
           这样"漫游 tabindex"那条规则在任何页面上都成立(始终恰好一个 tab stop)。
         */
         tabIndex={
-          focusedId !== null
-            ? focusedId === node.id
+          // ⚠️ v5.45:用 `effectiveFocusId` 而不是 `focusedId` ——
+          // 后者可能已失效(节点被删),那会让整棵树没有 tab stop。
+          effectiveFocusId !== null
+            ? effectiveFocusId === node.id
               ? 0
               : -1
             : isActive || node.id === visibleIds[0]
@@ -587,6 +606,13 @@ export function OrgTreePanel({
               onKeyDown={(event) => {
                 // 所有按键都留在输入框里,不要给行级的树导航处理
                 event.stopPropagation();
+                /*
+                  ⚠️ v5.45:中文输入法组词期间按 Enter 是"选中候选词",不是"提交改名"。
+                  不判 `isComposing` 的话,每敲一次候选确认就提交一次 ——
+                  而这是个中文界面,几乎每次输入都会经过组词状态。
+                  与 `CommentsPanel` 的同一处判据(仓库里本来就有的正确写法)。
+                */
+                if (event.nativeEvent.isComposing) return;
                 if (event.key === 'Enter') handleRename(node, event.currentTarget.value);
                 if (event.key === 'Escape') setRenamingId(null);
               }}

@@ -107,7 +107,22 @@ export function SearchPage() {
         </div>
       )}
 
-      {query.trim() !== '' && search.data !== undefined && (
+      {/*
+        ⚠️ v5.45(P0 修复)加了这道门禁。
+        =
+        `keepPreviousData` 只替换 `data`,**不替换 `queryKey`** ——
+        所以新请求飞行期间,`search.data` 里装的是**上一个关键词**的响应。
+        而下面渲染用的判据原来是本地 `query.trim() !== ''`,
+        高亮用的是 `search.data.query` —— 两者的"词"不一致,
+        于是界面把上一次的结果当成本次结果显示,并按**旧词**高亮。
+
+        2026-10-04 实测:搜「知识库」→ 改成「报销」回车,
+        100~300ms 内顶部仍写「「知识库」命中 N 条」,列表也是知识库的命中。
+
+        修法用的是**契约里已有的字段**:`SearchResponse.query` 就是服务端
+        回显的关键词(`search.ts:46`)。它一直在那儿,只是没被当门禁用。
+      */}
+      {query.trim() !== '' && search.data !== undefined && search.data.query === query.trim() && (
         <>
           <p className="mt-4 text-sm text-slate-500">
             「{search.data.query}」命中 {search.data.hits.length} 条 · {search.data.tookMs}ms

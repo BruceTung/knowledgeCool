@@ -123,6 +123,32 @@ ck(
   auditItems.length <= pageSize,
   'items=' + String(auditItems.length),
 );
+
+/*
+  ⚠️ v5.45(P0 修复时踩到):下面三条分页断言**全都包在**
+  「满一页且前面还有记录」的条件里(见 `if (auditShown >= pageSize && oldestShown > 1)`),
+  所以**审计返回 0 条时它们一条都不执行** —— 而 `ck` 的"没有输出"在
+  汇总里长得和"通过"一模一样。
+
+  2026-10-04 就是这样漏掉的:审计页被改成按读判定过滤之后,
+  **超管查审计返回 0 条**(库里明明有 3873 条),
+  而这份脚本报的是 `passed 14/14` —— 全绿。
+
+  → 所以这里补一条**不依赖数据量**的断言:只要库里存在审计记录,
+  超管就至少要看到一条。这条的判据是"库里有"而不是"翻到了第几页",
+  因此任何"整体清空"型回归都躲不过它。
+  它也正好钉住超管那条特例(`readableNodeIds` 里对 isSuperAdmin 的短路):
+  那条短路一旦被后人删掉,超管会重新被读判定过滤,这条断言立刻变红。
+*/
+// 库里到底有没有记录 —— 用最大的那条 id 当判据(id 从 1 递增,自增必然大于 0)。
+const auditNewest = await api('GET', '/audit-logs?limit=1');
+const newestId = Number(auditNewest.body?.items?.[0]?.id ?? '0');
+ck(
+  '§6.4 审计:超管至少能看到一条(防"整体清空"型回归)',
+  // 库里最大 id > 1 说明第 1 条之外的记录存在,那时列表就不该是空的
+  auditItems.length > 0 || newestId <= 1,
+  'items=' + String(auditItems.length) + ' newestId=' + String(newestId),
+);
 // 最老那条 id 大于 1,说明它前面还有记录 —— 那就**必须**有下一页游标。
 const oldestShown = auditItems.length > 0 ? Number(auditItems[auditItems.length - 1].id) : 0;
 const auditShown = auditItems.length;
