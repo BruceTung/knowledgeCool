@@ -268,6 +268,11 @@ export class OrgController {
     @UploadedFile() file: Express.Multer.File | undefined,
     @Query('dryRun') dryRun?: string,
     @Query('contentHash') contentHash?: string,
+    /**
+     * v5.46:预览那一刻的库状态指纹,确认写入时原样带回。
+     * 与 `contentHash` 配对 —— 一个绑文件,一个绑库状态。
+     */
+    @Query('stateFingerprint') stateFingerprint?: string,
   ): Promise<OrgImportResponse> {
     // ⚠️ 权限检查必须在**文件校验之前**。
     //
@@ -283,6 +288,7 @@ export class OrgController {
     return this.imports.run(user, file.buffer, {
       dryRun: parseDryRun(dryRun),
       expectedHash: contentHash,
+      expectedState: stateFingerprint,
     });
   }
 }

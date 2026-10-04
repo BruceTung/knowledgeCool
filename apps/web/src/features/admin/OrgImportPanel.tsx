@@ -237,7 +237,14 @@ export function OrgImportPanel() {
                 onClick={() => {
                   if (file === null) return;
                   importOrg.mutate(
-                    { file, dryRun: false, contentHash: preview.contentHash },
+                    {
+                      file,
+                      dryRun: false,
+                      contentHash: preview.contentHash,
+                      // ⚠️ v5.46:与 contentHash 配对,绑的是"库状态"。
+                      // 少了它就会绕过 TOCTOU 那一道闸。
+                      stateFingerprint: preview.stateFingerprint,
+                    },
                     {
                       onSuccess: (result) => {
                         setApplied(result.applied);

@@ -39,6 +39,24 @@ export const EMPLOYEE_NO_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
 /** 工号长度上限 —— 必须与 `EMPLOYEE_NO_PATTERN` 里的 `{1,64}` 保持一致。 */
 export const EMPLOYEE_NO_MAX_LENGTH = 64;
 
+/**
+ * 姓名长度上限(v5.46)—— 与后端 `CreateUserDto.name` 的 `@Length(1, 64)` 一致。
+ *
+ * ⚠️ **为什么要提成常量**:原来上限只写在后端的 DTO 装饰器里,
+ * 前端拿不到。于是「人员管理」那两个输入框**不限长** ——
+ * 用户粘一段 70 字的文本进去,前端不拦、请求发出去、
+ * 后端 400 拒掉,而**错误提示渲染在表单底部约 200px 处**
+ * (两个输入框的下方),输入框里的内容还**原样保留**。
+ * 用户的反应是"填对了但没反应",于是反复点「新建」。
+ *
+ * → 提成常量之后:前端加 `maxLength`、按钮的禁用判据也用它,
+ * 后端的 `@Length` 引用同一个数字。**两处各写一个 64,迟早有一处被改掉。**
+ */
+export const USER_NAME_MAX_LENGTH = 64;
+
+/** 部门 / 组名长度上限 —— 与 `CreateOrgNodeDto.name` 的 `@Length(1, 64)` 一致。 */
+export const ORG_NODE_NAME_MAX_LENGTH = 64;
+
 export const USER_STATUSES = ['active', 'disabled', 'departed'] as const;
 export type UserStatus = (typeof USER_STATUSES)[number];
 
@@ -255,6 +273,21 @@ export interface OrgImportPreview {
  */
 export interface OrgImportResponse {
   contentHash: string;
+  /**
+   * 预览那一刻的**库状态指纹**(v5.46)—— 确认写入时必须原样带回。
+   *
+   * ⚠️ `contentHash` 只证明「我写的就是我预览的那份**文件**」,
+   * 而真正的竞态在**库变了**:预览时「技术部」不存在,于是计划里是
+   * `{kind:'new', key:'d:技术部'}`;管理员停在确认页的那几秒里,
+   * 另一个超管建了一个同名部门 —— 再点确认,计划照旧执行,
+   * **库里就有两个同名部门**,而接口返回 201。
+   *
+   * 这是整个导入路径上**唯一「返回成功但数据已坏」**的地方。
+   *
+   * → 指纹取「节点数 + 人数 + 两者各自最大 updatedAt」,足以覆盖
+   * 「有没有人在这期间动过组织架构」,而代价只是一次 count + 一次 max。
+   */
+  stateFingerprint: string;
   preview: OrgImportPreview;
   /** 预览模式下为 `null`;确认写入后是实际写入的条数 */
   applied: OrgImportResult | null;

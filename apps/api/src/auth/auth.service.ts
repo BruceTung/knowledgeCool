@@ -18,7 +18,7 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import type { ChangePasswordDto } from './dto/change-password.dto.js';
 import type { LoginDto } from './dto/login.dto.js';
 import type { SetupDto } from './dto/setup.dto.js';
-import { LoginThrottleService, lockMessage } from './login-throttle.js';
+import { LoginThrottleService, formatWait, lockMessage } from './login-throttle.js';
 import { PasswordService } from './password.service.js';
 import { SessionService, type SessionMeta } from './session.service.js';
 import { signSetupToken, verifySetupToken } from './setup-token.js';
@@ -408,17 +408,57 @@ export class AuthService {
    * **不吊销其他会话**:用户主动改密之后如果被踢回登录页,他会以为是故障。
    * 要"改密即下线所有设备"是一个独立的安全开关,不放在这里顺手做掉。
    */
-  async changePassword(userId: string, input: ChangePasswordDto): Promise<void> {
+  async changePassword(
+    userId: string,
+    input: ChangePasswordDto,
+    currentToken?: string,
+  ): Promise<void> {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       select: USER_AUTH_SELECT,
     });
     if (user === null) throw AppError.notFound();
 
+    /*
+      ⚠️ v5.46:给「当前密码不正确」加失败限流。
+      =
+      原来这一条没有任何次数限制,所以:拿到别人会话 Cookie 的人可以
+      **无限次**猜他的当前密码 —— 猜中之后改成自己的密码,
+      **会话窃取就被放大成永久账号接管**,而合法用户被锁在门外。
+
+      它的前置条件已经是"拿到了有效会话"(那时攻击者已经能读写该用户
+      能读写的全部内容),所以这不是凭空提权,而是**把影响扩大**。
+      登录那条主链路的限流做得很扎实(假 bcrypt、锁定期不校验密码、
+      计数键归一化),这里只是没跟上。
+
+      ⚠️ **刻意用独立的计数键**,不直接复用 `recordSuccess` 之外那套:
+      如果改密的失败数记到**登录**的计数上,那用户改错一次密码
+      就可能把自己的登录锁住 —— 而他改密码通常正是因为记不清原密码,
+      于是"改不对 → 被锁 → 永远改不了",这是把安全机制变成了故障。
+      改密是"已登录用户确认身份",登录是"未登录用户拿身份",
+      两者的失败含义不同,计数就该分开。
+    */
+    const changeKey = `pwchange:${user.employeeNo}`;
+    const changeVerdict = await this.throttle.check(changeKey, null);
+    if (changeVerdict.locked) {
+      throw new AppError(
+        'RATE_LIMITED',
+        '当前密码连续输错次数过多,请 ' +
+          formatWait(changeVerdict.retryAfterSeconds) +
+          ' 后再试。如果确实忘了密码,请让管理员用「重置密码」重新设置。',
+        { retryAfterSeconds: changeVerdict.retryAfterSeconds },
+      );
+    }
+
     const ok = await this.passwords
       .verify(input.currentPassword, user.passwordHash)
       .catch(() => false);
-    if (!ok) throw new AppError('UNAUTHORIZED', '当前密码不正确');
+    if (!ok) {
+      await this.throttle.recordFailure(changeKey, null);
+      throw new AppError('UNAUTHORIZED', '当前密码不正确');
+    }
+    // 改对了就把这条计数清掉 —— 否则一次输错会累积出一段不必要的长窗口。
+    await this.throttle.recordSuccess(changeKey);
 
     const problem = checkPasswordStrength(input.newPassword);
     if (problem !== null) throw AppError.validation(problem);
@@ -433,12 +473,34 @@ export class AuthService {
       data: { passwordHash, mustChangePassword: false },
     });
 
+    /*
+      ⚠️ v5.46:改密成功后吊销**其他**会话。
+      =
+      为什么必须有这一步:改密这件事的**全部意义**是"密码不再被别人知道"。
+      如果一个攻击者已经拿到了会话(这正是他需要当前密码的原因 ——
+      他不知道原密码,只能靠猜),而改密后不吊销那些会话,
+      那么**他手上的会话依然有效** —— 密码改了,他照样能读写。
+      用户的直觉会告诉他"我改过密码了就安全了",而事实不是。
+
+      ⚠️ 保留当前会话(而不是全吊销):全吊销会把用户自己踢下线,
+      他得重新输一遍新密码才能确认它对不对 —— 那是个**可用性损失**,
+      而首登改密已经有这个行为了(`setInitialPassword` 刻意不建会话,
+      逼用户重新登录一次)。主动改密不该重复这个摩擦:
+      他已经知道新密码是什么(刚输的),让他留在原地。
+
+      拿不到 token 时(理论上不该发生)退化为"不动",而不是"全吊" ——
+      后者会在异常路径上把所有人踢下线。
+    */
+    const revoked = await this.sessions.revokeOthersForUser(userId, currentToken);
+
     await recordAudit(this.prisma, {
       actorId: userId,
       action: 'auth.password.change',
       targetType: 'user',
       targetId: userId,
-      detail: { forced: user.mustChangePassword },
+      // ⚠️ 带上吊销数量:改密同时踢掉了别的设备,这是管理员排查
+      // "为什么我手机上的那个还登着"时唯一能查的线索。
+      detail: { forced: user.mustChangePassword, otherSessionsRevoked: revoked },
     });
   }
 

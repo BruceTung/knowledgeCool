@@ -142,6 +142,32 @@ export class SessionService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * 吊销某人**除指定会话之外**的全部会话(v5.46)。
+   *
+   * ⚠️ 为什么要"除某一个":改密后要把**其他设备**踢下线,
+   * 但不能把用户**当前这个**也踢了 —— 那会让他立刻失去登录态、
+   * 得重新输一遍刚改的密码才能确认它对不对。那是可用性损失,
+   * 而首登改密(`setInitialPassword` 刻意不建会话)已经有那个摩擦了,
+   * 主动改密不该重复。
+   *
+   * ⚠️ 刻意**不**把 `hashToken` 改成 public:它是内部的
+   * 「token → 主键」映射,让调用方拿它就等于让调用方自己拼主键去删行 ——
+   * 那是绕过本类直接操作 session 表。方法留在这一层,
+   * 将来要改哈希方式时只有一个地方要动。
+   *
+   * @param keepToken 要保留的那个会话;传 undefined 则退化为"全吊"。
+   * @returns 被吊销的会话数
+   */
+  async revokeOthersForUser(userId: string, keepToken?: string): Promise<number> {
+    if (keepToken === undefined) return this.revokeAllForUser(userId);
+    const keepId = SessionService.hashToken(keepToken);
+    const result = await this.prisma.session.deleteMany({
+      where: { userId, NOT: { id: keepId } },
+    });
+    return result.count;
+  }
+
+  /**
    * 吊销某人的全部会话。停用账号、修改密码、移出空间时调用 ——
    * 这正是选「服务端会话」而不是 JWT 换来的能力(§6.1.1 理由一)。
    */

@@ -1,4 +1,10 @@
-import { USER_STATUS_LABELS, type OrgUserView, type UserStatus } from '@knowledgecool/shared';
+import {
+  EMPLOYEE_NO_MAX_LENGTH,
+  USER_NAME_MAX_LENGTH,
+  USER_STATUS_LABELS,
+  type OrgUserView,
+  type UserStatus,
+} from '@knowledgecool/shared';
 import { useState } from 'react';
 
 import { Button, ErrorNote, SelectField, Skeleton, TextField } from '../components/ui';
@@ -213,6 +219,10 @@ export function UsersAdminPage() {
               }}
               placeholder="例如 KC2026001"
               hint="登录标识,定下来之后不要改"
+              // ⚠️ v5.46:与后端 `EMPLOYEE_NO_PATTERN` 的 `{1,64}` 同一个上限。
+              // 不加的话:粘一段超长文本 → 前端不拦、请求发出去、后端 400,
+              // 而错误提示在表单底部,用户的反应是"填对了没反应"。
+              maxLength={EMPLOYEE_NO_MAX_LENGTH}
             />
           </div>
           <div className="min-w-[140px] flex-1">
@@ -222,11 +232,22 @@ export function UsersAdminPage() {
               onChange={(event) => {
                 setName(event.target.value);
               }}
+              // ⚠️ v5.46:与后端 `CreateUserDto.name` 的 `@Length` 同一个上限。
+              maxLength={USER_NAME_MAX_LENGTH}
             />
           </div>
           <Button
             className="flex-none"
-            disabled={employeeNo.trim() === '' || name.trim() === '' || createUser.isPending}
+            disabled={
+              employeeNo.trim() === '' ||
+              name.trim() === '' ||
+              // ⚠️ v5.46:`maxLength` 拦不住"粘贴进来被截断"这种情况 ——
+              // 用户可能粘贴了 70 字,输入框里只剩 64 字,他并不知道被截了。
+              // 所以禁用判据里再判一次**原始输入**的长度,给一个明确的提示。
+              employeeNo.length > EMPLOYEE_NO_MAX_LENGTH ||
+              name.length > USER_NAME_MAX_LENGTH ||
+              createUser.isPending
+            }
             onClick={() => {
               createUser.mutate(
                 { employeeNo: employeeNo.trim(), name: name.trim() },
@@ -297,6 +318,11 @@ export function UsersAdminPage() {
                     autoFocus
                     defaultValue={user.name}
                     aria-label={`重命名「${user.name}」`}
+                    // ⚠️ v5.46:与后端 `UpdateUserDto.name` 的 `@MaxLength` 同源。
+                    // 改名是**就地提交**的(失焦即生效),没有"禁用按钮"这一层,
+                    // 所以这里只能靠 `maxLength` 兜住 —— 而超长的那部分
+                    // 会被浏览器静默丢弃,用户看不到自己输了什么。
+                    maxLength={USER_NAME_MAX_LENGTH}
                     className="w-32 rounded border border-blue-400 px-1 py-0.5 text-sm outline-none"
                     onKeyDown={(event) => {
                       /*

@@ -1283,7 +1283,9 @@ async function main() {
 
     const applied = await api(
       'POST',
-      `/admin/org/import?dryRun=false&contentHash=${preview.body.contentHash}`,
+      // ⚠️ v5.46:与 `contentHash` 配对,少了它这一组导入断言会全红。
+      `/admin/org/import?dryRun=false&contentHash=${preview.body.contentHash}` +
+        `&stateFingerprint=${encodeURIComponent(preview.body.stateFingerprint)}`,
       undefined,
       { formData: makeForm() },
     );

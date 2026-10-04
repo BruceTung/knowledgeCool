@@ -108,6 +108,36 @@ const CACHE_TTL_SECONDS = 30;
 
 @Injectable()
 export class PermissionService {
+  /**
+   * ================= ⚠️ 缓存正确性依赖的一条不变量(v5.46 补记) =================
+   *
+   *   **缓存键里的 `generation`,必须由被判定节点「当前」的物化路径推导。**
+   *
+   * 也就是说:`generation = gen(rootIdOfPath(node.materializedPath))`,
+   * 而 `materializedPath` 每次判定都**现查**,不读任何缓存。
+   *
+   * ---- 为什么它重要:移动只失效「一根」,但仍然安全 ----
+   *
+   * 跨部门移动时,`NodeService.move` 调的是 `invalidateByNode(nodeId)`,
+   * 而它现查节点路径 → 只 INCR **新** 根的世代号,**旧** 根不动。
+   * 看起来像个洞:旧根下那些节点的缓存条目还写着旧世代号。
+   *
+   * 但它安全,原因就是上面那条不变量:被移走的节点**再次被判定时**,
+   * 会用它的**新**路径算出新根,于是查的是 `gen(新根)` 那个键 ——
+   * **旧键再也读不到**。所以"旧根没失效"不等于"旧缓存还能用"。
+   *
+   * 2026-10-04 曾试图构造静默越权,**没成功** —— 就是靠这条。
+   *
+   * ---- 什么情况下它会立刻变成活的漏洞 ----
+   *
+   * 1. 把 generation 换成不含根的固定值(比如直接用 nodeId 当键的一部分);
+   * 2. 给 `canEdit` 加上**组织范围**判定 —— 那时 `scope` 会进缓存值,
+   *    而"移走之后范围变了"这件事必须靠失效通知,不能靠键自然漂移。
+   *
+   * → 这两条都是很容易发生的"顺手优化"。所以写在这里,而不是留在脑子里。
+   *
+   * ==================================================================
+   */
   constructor(
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
@@ -849,7 +879,13 @@ export class PermissionService {
     }
   }
 
-  /** 由节点 id 找到所属部门再失效 —— 调用点通常只知道节点 id。 */
+  /**
+   * 由节点 id 找到所属部门再失效 —— 调用点通常只知道节点 id。
+   *
+   * ⚠️ **只失效「移动后」那一根**,旧根不动 —— 这是**安全**的,
+   * 依据是类注释里那条不变量(缓存键的 generation 由当前路径推导)。
+   * 改动这里之前请先读那段注释。
+   */
   async invalidateByNode(nodeId: string): Promise<void> {
     const node = await this.prisma.node.findUnique({
       where: { id: nodeId },

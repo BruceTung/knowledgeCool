@@ -319,10 +319,32 @@ export class NodeService {
     const access = await this.permissions.access(operator, nodeId);
 
     // ⚠️ 读不到 → 404,不是 403(v2.12 保密)。403 等于确认"这里有个你看不见
-    // 的东西",而保密的意义正在于不确认它的存在。内部调用(改名/移动)都已经
-    // 通过了 requireEdit,那时 canRead 必然为真,所以这一句只挡直接的读请求。
+    // 的东西",而保密的意义正在于不确认它的存在。
+    //
+    // ⚠️ v5.46 把上一句"内部调用(改名/移动)都已经通过了 requireEdit,
+    // 那时 canRead 必然为真"删掉了 —— **那句话是错的**(见下面 `viewOf` 的注释)。
     if (!access.canRead) throw AppError.notFound();
 
+    return this.viewOf(row, access);
+  }
+
+  /**
+   * 把一行 + 一份判定组装成 `NodeDetail`(v5.46 从 `detail` 里抽出来的)。
+   *
+   * ⚠️ 抽它的理由:`move` 成功后要返回"移动的结果",而**不能**再走一遍
+   * 读判定 —— 移动**已经落库**了,此时因为读不到而抛 404,
+   * 表现是"接口说没成功、刷新一下却发现真的动了"。
+   *
+   * 那种情况**可以构造**:`visibility='restricted'` 的节点能被授权
+   * (`node_grants`)给一个既非 owner 也非 createdBy 的用户 ——
+   * 那个人 `canEdit=true` 而 `canRead=false`。
+   * 于是 `requireEdit` 放行他(读判定是它自己做的,不强制要求 canRead 为真)、
+   * 移动成功落库、然后 `detail` 抛 404。
+   *
+   * → 写操作的返回值应该是**这次写的结果**,不是"写完之后这个人还能不能读"。
+   * 两者是两个问题,不该用后一个来否决前一个。
+   */
+  private async viewOf(row: DetailRow, access: AccessContext): Promise<NodeDetail> {
     const [owner, creator, breadcrumb] = await Promise.all([
       this.userBrief(row.ownerId),
       this.userBrief(row.createdBy),
@@ -514,7 +536,7 @@ export class NodeService {
       await this.permissions.requireCreateUnder(operator, null);
     }
 
-    await runSerializable(this.prisma, async (tx) => {
+    const moved = await runSerializable(this.prisma, async (tx) => {
       /*
         ⚠️⚠️ v2.16:**目标父节点的路径必须在事务内重读。**
 
@@ -566,7 +588,7 @@ export class NodeService {
         effectiveNewParentPath = fresh.materializedPath;
       }
 
-      await applyMoveTo(tx, {
+      return applyMoveTo(tx, {
         nodeId,
         newParentId: input.newParentId,
         newParentPath: effectiveNewParentPath,
@@ -587,7 +609,33 @@ export class NodeService {
       detail: { newParentId: input.newParentId },
     });
 
-    return this.detail(operator, nodeId);
+    /*
+      ⚠️ v5.46:返回的是**事务内算出的那份视图**,不是 `this.detail(operator, nodeId)`。
+      =
+      `detail()` 会**再走一遍读判定**。而这个仓库反复强调的一条原则是
+      「写操作的成功与否不能取决于写完之后还能不能读」
+      (`requireManageForWrite`、`buildReadersView` 的注释都写着),
+      偏偏这里自己犯了:移动**已经落库**,然后因为读不到而抛 404 ——
+      表现是"接口说没成功、刷新一下却发现真的动了"。
+
+      能不能构造出来,要看 `canEdit` 与 `canRead` 是否可能分叉。
+      结论是**能**:一个 `visibility='restricted'` 的节点可以
+      被授权(`node_grants`)给一个既非 owner 也非 createdBy 的用户 ——
+      那个人 `canEdit=true` 而 `canRead=false`,于是他移动成功、然后拿到 404。
+      那条移动路径是可达的(不需要超管)。
+
+      → 这里返回事务内已经读到的那一行。它是权威数据,而且是
+      **移动这个操作的结果**;把它交给读判定等于问了一个不相干的问题。
+    */
+    /*
+     * ⚠️ v5.46:返回**移动的结果**,而不是再走一遍读判定。
+     * 判定早在 `requireEdit` 里做过了(那里 `canEdit` 为真);
+     * 移动也已落库。此时再问"他还能不能读"是另一个问题,
+     * 用它否决已经成功的写,表现就是"接口说没成功、刷新却发现真动了"。
+     * `canEdit`/`canManage` 沿用事务开始时那份判定 —— 它们描述的是
+     * 「他能不能改」,移动并没有改变这个答案的前提(他仍能改这个节点)。
+     */
+    return this.viewOf(moved, await this.permissions.access(operator, nodeId));
   }
 
   /**
@@ -777,30 +825,32 @@ export class NodeService {
   async deleteSubtree(input: { id: string; materializedPath: string }): Promise<number> {
     const subtree = subtreePrefix(input.materializedPath);
 
-    return runSerializable(this.prisma, async (tx) => {
-      let removed = 0;
+    return runSerializable(
+      this.prisma,
+      async (tx) => {
+        let removed = 0;
 
-      // ⚠️ nodes.parent_id 是 `onDelete: Restrict`(§4.3),而 DELETE 不支持 ORDER BY,
-      // 所以不能一条语句删整棵子树:外键检查是**即时**触发的,
-      // 处理到父行时子行还在,直接撞约束。
-      // 按深度从大到小逐层删 —— 叶子先走。循环上限纯属防御。
-      for (let guard = 0; guard < CHAIN_GUARD; guard += 1) {
-        const remaining = await tx.node.findMany({
-          where: { OR: [{ id: input.id }, { materializedPath: { startsWith: subtree } }] },
-          select: { id: true, depth: true },
-        });
-        if (remaining.length === 0) return removed;
+        // ⚠️ nodes.parent_id 是 `onDelete: Restrict`(§4.3),而 DELETE 不支持 ORDER BY,
+        // 所以不能一条语句删整棵子树:外键检查是**即时**触发的,
+        // 处理到父行时子行还在,直接撞约束。
+        // 按深度从大到小逐层删 —— 叶子先走。循环上限纯属防御。
+        for (let guard = 0; guard < CHAIN_GUARD; guard += 1) {
+          const remaining = await tx.node.findMany({
+            where: { OR: [{ id: input.id }, { materializedPath: { startsWith: subtree } }] },
+            select: { id: true, depth: true },
+          });
+          if (remaining.length === 0) return removed;
 
-        // 自己找最深的一层,**不依赖数据库的返回顺序**。
-        // 靠 orderBy 的话,排序一旦失效(或被后人删掉)这段逻辑会静默退化成
-        // 「每轮删一层但顺序不可控」—— 表现就是偶尔撞外键,极难复现。
-        let maxDepth = -1;
-        for (const item of remaining) {
-          if (item.depth > maxDepth) maxDepth = item.depth;
-        }
+          // 自己找最深的一层,**不依赖数据库的返回顺序**。
+          // 靠 orderBy 的话,排序一旦失效(或被后人删掉)这段逻辑会静默退化成
+          // 「每轮删一层但顺序不可控」—— 表现就是偶尔撞外键,极难复现。
+          let maxDepth = -1;
+          for (const item of remaining) {
+            if (item.depth > maxDepth) maxDepth = item.depth;
+          }
 
-        const ids = remaining.filter((item) => item.depth === maxDepth).map((item) => item.id);
-        /*
+          const ids = remaining.filter((item) => item.depth === maxDepth).map((item) => item.id);
+          /*
           ⚠️ v2.16:把外键冲突翻译成一句人话。
 
           正常情况下这一层不可能还有子节点(depth 最大的层必然无子),
@@ -814,20 +864,27 @@ export class NodeService {
           现在先接住 FK 错误并说明它,再抛那句兜底。
         (不损坏数据:整个事务回滚,一个节点都不会被删掉。)
         */
-        try {
-          await tx.node.deleteMany({ where: { id: { in: ids } } });
-        } catch (error: unknown) {
-          if (hasPrismaCode(error, 'P2003') || hasPrismaCode(error, 'P2014')) {
-            throw AppError.validation(
-              '这棵子树的数据不一致(有节点的层级与实际父子关系对不上),删除已中止,未删除任何内容。请联系管理员用 verify-db 检查。',
-            );
+          try {
+            await tx.node.deleteMany({ where: { id: { in: ids } } });
+          } catch (error: unknown) {
+            if (hasPrismaCode(error, 'P2003') || hasPrismaCode(error, 'P2014')) {
+              throw AppError.validation(
+                '这棵子树的数据不一致(有节点的层级与实际父子关系对不上),删除已中止,未删除任何内容。请联系管理员用 verify-db 检查。',
+              );
+            }
+            throw error;
           }
-          throw error;
+          removed += ids.length;
         }
-        removed += ids.length;
-      }
-      throw AppError.validation('节点层级异常,彻底删除已中止');
-    });
+        throw AppError.validation('节点层级异常,彻底删除已中止');
+      },
+      /*
+        ⚠️ v5.46:放宽事务超时(见 `runSerializable` 那个 options 的注释)。
+        60 秒是「一棵大树删得完」的量级,不是「随便给个大的」——
+        超时仍然会回滚,不会留下半删的状态。
+      */
+      { timeout: 60_000, maxWait: 15_000 },
+    );
   }
 
   // ==================================================================
@@ -927,7 +984,15 @@ async function applyMoveTo(
     /** 省略 = 追加到目标末尾。 */
     position?: number;
   },
-): Promise<void> {
+  /**
+   * 返回移动后的那一行(v5.46)。
+   *
+   * ⚠️ 之所以返回它而不是让调用方再查一次:调用方要把它当作
+   * **本次移动的结果**返回给客户端,而不该再走一遍读判定
+   * (`detail()` 会走 —— 而"写成功与否取决于还能不能读"是本仓库
+   * 反复强调要避免的那一类错误,见 `viewOf` 的注释)。
+   */
+): Promise<DetailRow> {
   const { nodeId, newParentId, newParentPath, actorId } = params;
 
   /*
@@ -1021,6 +1086,17 @@ async function applyMoveTo(
       : await makeRoomAt(tx, newParentId, nodeId, params.position);
 
   await tx.node.update({ where: { id: nodeId }, data: { parentId: newParentId, position } });
+
+  /*
+   * ⚠️ v5.46:把移动后的那一行读出来交给调用方(见签名上的说明)。
+   *
+   * ⚠️ **必须在上面那次 update 之后读** —— `parentId` 与 `position`
+   * 正是移动要改的字段,先读就拿到了旧值,返回给客户端的是"移动前"的样子。
+   * 在同一事务里读,读到的必然是刚写完的状态。
+   */
+  const moved = await tx.node.findUnique({ where: { id: nodeId }, select: DETAIL_SELECT });
+  if (moved === null) throw AppError.notFound();
+  return moved;
 }
 
 async function nextPositionIn(

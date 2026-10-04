@@ -356,7 +356,10 @@ async function main() {
     '确认导入',
     await api(
       'POST',
-      `/admin/org/import?dryRun=false&contentHash=${preview.contentHash}`,
+      // ⚠️ v5.46:`stateFingerprint` 与 `contentHash` 缺一不可 ——
+      // 前者绑文件、后者绑库状态。少带一个就是绕过一道闸。
+      `/admin/org/import?dryRun=false&contentHash=${preview.contentHash}` +
+        `&stateFingerprint=${encodeURIComponent(preview.stateFingerprint)}`,
       undefined,
       { formData: form2 },
     ),

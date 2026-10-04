@@ -737,12 +737,25 @@ export class OrgService {
       scopePaths: row.assignments.map((assignment) => assignment.node.materializedPath),
     });
 
-    // 超管不受组织范围约束 —— 但注意这只是**候选列表**的宽严,
-    // 他能不能改这些成员由 requireManageMember 决定(v5.43 已收掉那条旁路)。
-    // 保留这个分支是为了界面可用性:超管的组织归属通常是空的,
-    // 若也按范围过滤,他会看到一个空列表,却连一个人都加不了。
-    if (operator.isSuperAdmin) return rows.map(toCandidate);
+    /*
+      ⚠️ v5.46 删掉了上面那行 `if (operator.isSuperAdmin) return rows.map(toCandidate)`。
+      =
+      它当时写的理由是「超管的组织归属通常是空的,若也按范围过滤,
+      他会看到一个空列表,却连一个人都加不了」——
+      但 **v5.43 收掉 `addMember` 的超管豁免之后,这句话恰好倒置了**:
 
+        改之前:超管能加任何人 → 空列表确实是问题
+        改之后:超管**只能**加自己范围内的人 → 那个"满列表"里的
+               **每一个人点下去都会 403**
+
+      也就是说它从"超管能用"变成了"超管看到一份用不了的名册"——
+      比空列表更糟,因为界面**看起来是有东西的**,管理员会去逐个试。
+
+      顺带说明这不构成信息泄露:超管本来就能通过
+      `GET /admin/users`(`org.service` 里已校验超管身份)拿到同一份名单,
+      所以这个"泄露"没有新增任何东西 —— 它只是把一份用不了的名册
+      摆在了下拉框里。
+    */
     const myScopes = await this.permissions.scopePathsOf(operator.id);
     if (myScopes.length === 0) return [];
 

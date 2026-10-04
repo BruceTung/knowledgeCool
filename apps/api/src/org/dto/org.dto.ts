@@ -10,6 +10,8 @@ import {
   MaxLength,
 } from 'class-validator';
 import {
+  ORG_NODE_NAME_MAX_LENGTH,
+  USER_NAME_MAX_LENGTH,
   USER_STATUSES,
   type SetUserAssignmentsInput,
   type UpdateUserInput,
@@ -20,7 +22,11 @@ import { EMPLOYEE_NO_PATTERN } from '../../auth/dto/login.dto.js';
 /** 建部门 / 建组。两者的差别只在 `parentId` 是否为空。 */
 export class CreateOrgNodeDto {
   @IsString()
-  @Length(1, 64, { message: '名称长度需在 1~64 个字符之间' })
+  // ⚠️ v5.46:数字来自 shared,前端输入框的 `maxLength` 引的是同一个 ——
+  // 两处各写一个 64,迟早有一处被改掉(见 org.ts 里那条常量的注释)。
+  @Length(1, ORG_NODE_NAME_MAX_LENGTH, {
+    message: `名称长度需在 1~${String(ORG_NODE_NAME_MAX_LENGTH)} 个字符之间`,
+  })
   name!: string;
 
   /**
@@ -67,7 +73,9 @@ export class CreateUserDto {
   employeeNo!: string;
 
   @IsString()
-  @Length(1, 64, { message: '姓名长度需在 1~64 个字符之间' })
+  @Length(1, USER_NAME_MAX_LENGTH, {
+    message: `姓名长度需在 1~${String(USER_NAME_MAX_LENGTH)} 个字符之间`,
+  })
   name!: string;
 
   /** 可选:建号时一并指定归属节点。 */
@@ -81,7 +89,9 @@ export class CreateUserDto {
 export class UpdateUserDto implements UpdateUserInput {
   @IsOptional()
   @IsString()
-  @MaxLength(64)
+  // ⚠️ v5.46:原来这里是一个**字面量 64**,与上面 `CreateUserDto.name`
+  // 各写一份 —— 改一处就会与另一处漂移。统一引 shared。
+  @MaxLength(USER_NAME_MAX_LENGTH)
   name?: string;
 
   @IsOptional()

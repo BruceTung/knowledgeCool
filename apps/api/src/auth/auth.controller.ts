@@ -108,8 +108,11 @@ export class AuthController {
   async changePassword(
     @CurrentUser() user: AuthUser,
     @Body() dto: ChangePasswordDto,
+    @Req() request: AuthenticatedRequest,
   ): Promise<void> {
-    await this.auth.changePassword(user.id, dto);
+    // ⚠️ v5.46:传当前 token —— 改密后要吊销**其他**会话,
+    // 而"吊销除这一个之外的"必须知道这一个是哪一个(与 logout 同一份数据)。
+    await this.auth.changePassword(user.id, dto, request.sessionToken);
   }
 
   /** 登出。 */

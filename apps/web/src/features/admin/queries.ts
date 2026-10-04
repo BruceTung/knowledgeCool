@@ -176,15 +176,28 @@ export function useImportTemplate() {
  * 上传并预览 / 确认写入。**同一个接口的两个模式**,保证预览与实际写入
  * 走的是同一份解析逻辑。
  *
- * 确认写入时必须带上预览返回的 `contentHash` —— 服务端用它确认
- * "你确认的就是你刚才看过的那一份"。
+ * 确认写入时必须带上预览返回的 `contentHash` **与 `stateFingerprint`** ——
+ * 前者让服务端确认"你确认的就是你刚才看过的那一份**文件**",
+ * 后者确认"而这段时间里**库**没被别人动过"。
+ *
+ * ⚠️ 两个都带,缺一个都不行(服务端对缺 `contentHash` 是直接 400 的):
+ * 只有 contentHash 的话,另一个管理员在这期间建了个同名部门,
+ * 这份导入就会**静默地建出第二个同名部门**并返回 201。
  */
 export function useImportOrg() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (vars: { file: File; dryRun: boolean; contentHash?: string }) => {
+    mutationFn: (vars: {
+      file: File;
+      dryRun: boolean;
+      contentHash?: string;
+      stateFingerprint?: string;
+    }) => {
       const params = new URLSearchParams({ dryRun: String(vars.dryRun) });
       if (vars.contentHash !== undefined) params.set('contentHash', vars.contentHash);
+      if (vars.stateFingerprint !== undefined) {
+        params.set('stateFingerprint', vars.stateFingerprint);
+      }
       return apiUpload<OrgImportResponse>(`/admin/org/import?${params.toString()}`, vars.file);
     },
     onSuccess: (result) => {

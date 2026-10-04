@@ -500,6 +500,38 @@ export function PageEditor({
     try {
       const result = await upload.mutateAsync(file);
       editor.chain().focus().setImage({ src: result.url, alt: file.name }).run();
+
+      /*
+        ⚠️ v5.46:插入之后**再数一次**,超了就把刚插的那张撤掉。
+        =
+        上面那道闸在**上传前**数,而上传要等网络 —— 在这段窗口里用户可以
+        继续粘贴、拖拽、或者再点一次「图片」。等 Promise 回来时文档里
+        可能已经有 11 张,而服务端按 `countImages` 拒绝 →
+        用户看到的是"保存失败",而横幅写的是「通常是正文过大或图片过多」——
+        他知道超了,但**不知道是哪一步超的、也不知道该删哪一张**。
+
+        ⚠️ 刻意**不用 `undo()`**:那会连带撤销他之前刚打的那几个字,
+        变成"为了删一张图,丢了一段话"。这里精确地只删刚插的那个节点。
+
+        ⚠️ 也不在 `onUpdate` 里统一拦(那才是"无论从哪条路进来都拦得住"的做法):
+        那里没有"刚插的是哪一个"的信息,只能靠 undoDepth 推断,
+        而 undoDepth 在**协作**场景下会被别人的操作搅动 ——
+        结果是删错节点。放在这条路径上,是精确的。
+      */
+      const after = countImages(editor.getJSON() as ProseMirrorNode);
+      if (after > MAX_IMAGES_PER_NODE) {
+        // 回到插入前:选区落在刚插的那个节点上,直接删。
+        editor.commands.focus();
+        editor.commands.deleteSelection();
+        // 上面的删除作用在选区上;若选区已不在图片节点,再退回一次 undo,
+        // 但**只退一步** —— setImage 是单条 history item,退一步刚好抵掉它。
+        if (countImages(editor.getJSON() as ProseMirrorNode) > MAX_IMAGES_PER_NODE) {
+          editor.commands.undo();
+        }
+        setImageNotice(
+          `一个页面最多放 ${String(MAX_IMAGES_PER_NODE)} 张图片 —— 刚才那张已经撤掉,先删掉一张再插新的。`,
+        );
+      }
     } catch (error: unknown) {
       // ⚠️ 上传失败**不能**复用下面那条"保存失败"状态。
       // 原来两者共用 state='error',而那条横幅写的是

@@ -235,7 +235,12 @@ export class OrgImportService {
   async run(
     operator: Actor,
     file: Buffer,
-    options: { dryRun: boolean; expectedHash?: string | undefined },
+    options: {
+      dryRun: boolean;
+      expectedHash?: string | undefined;
+      /** v5.46:预览时返回的库状态指纹,确认写入时原样带回 */
+      expectedState?: string | undefined;
+    },
   ): Promise<OrgImportResponse> {
     this.requireSuperAdmin(operator);
 
@@ -257,11 +262,36 @@ export class OrgImportService {
       throw AppError.versionConflict('上传的文件与预览时的那一份不一致,请重新预览后再确认');
     }
 
+    /*
+      ⚠️ v5.46:第二道闸 —— **库状态**变了也要拒。
+      =
+      `contentHash` 挡的是"文件被换掉",而真正的竞态在"库被改过":
+      预览时算出 `createNodes` 里有一条 `{kind:'new', key:'d:技术部'}`,
+      管理员停在确认页的那几秒里另一个超管建了同名部门 ——
+      再点确认,计划照旧执行,**库里两个同名部门,而接口返回 201**。
+
+      为什么这不是"小概率":同一个公司里两个管理员同时在导入
+      界面里工作,一点都不稀奇;而重复部门会把 `orgScope` 切成两半
+      (`scopePathsOf` 按路径前缀算),`canGrantTo` 的横向防越权范围跟着算错。
+
+      → 指纹不一致就 409,让人**重新预览**。重新预览是廉价的
+      (一次 count + 一次 max),而它换来的是"你看到的那份差异
+      就是即将写入的那份"。
+    */
+    const stateFingerprint = await this.stateFingerprintOf();
+    if (!options.dryRun && options.expectedState !== stateFingerprint) {
+      throw AppError.versionConflict(
+        '从你预览到现在,组织架构被其他人改过(有人新建了部门或加了人)。' +
+          '请重新预览一次,确认差异符合预期再写入。',
+      );
+    }
+
     const raw = await this.readRows(file);
     const parsed = parseRows(raw);
 
     const response: OrgImportResponse = {
       contentHash,
+      stateFingerprint,
       preview: {
         newUsers: [],
         renamedUsers: [],
@@ -327,6 +357,42 @@ export class OrgImportService {
   // ================================================================
   // 读 xlsx
   // ================================================================
+
+  /**
+   * 组织架构的**状态指纹**(v5.46)—— 见 `OrgImportResponse.stateFingerprint`。
+   *
+   * 取「节点数 + 人数 + 两者各自最大的 updatedAt」四样,拼成一个字符串。
+   *
+   * ⚠️ **为什么这四样够用**:导入会写的就只节点与用户两张表,
+   * 而它俩各自都有 `updatedAt`(Prisma 的 `@updatedAt`,任何 UPDATE 都会刷)。
+   * 所以「有人在这期间建了部门 / 加了人 / 改了名 / 换了所有者」——
+   * 无论哪一种,至少有一张表的 count 或 max(updatedAt) 会变。
+   *
+   * ⚠️ **它防不住什么**(说清楚比声称万无一失重要):
+   * 「先建 A 又删 A」这种净变化为零的操作不会改指纹。但那对导入无影响 ——
+   * 计划里 `createNodes` 判的是「**现在**有没有同名节点」,
+   * 而那一刻已经没有 A 了,新建一个本来就不冲突。
+   *
+   * 代价是两条 `aggregate`,而导入这条路径本来就是分钟级的。
+   */
+  private async stateFingerprintOf(): Promise<string> {
+    const [nodes, users] = await Promise.all([
+      this.prisma.node.aggregate({
+        _count: { _all: true },
+        _max: { updatedAt: true },
+      }),
+      this.prisma.user.aggregate({
+        _count: { _all: true },
+        _max: { updatedAt: true },
+      }),
+    ]);
+    return [
+      `n=${String(nodes._count._all)}`,
+      `nu=${String(nodes._max.updatedAt?.getTime() ?? 0)}`,
+      `u=${String(users._count._all)}`,
+      `uu=${String(users._max.updatedAt?.getTime() ?? 0)}`,
+    ].join('|');
+  }
 
   /**
    * 权限检查放在 service 而不是 controller。

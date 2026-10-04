@@ -18,9 +18,27 @@ import type { Prisma } from '../../generated/prisma/client.js';
 export async function runSerializable<T>(
   prisma: PrismaService,
   work: (tx: Prisma.TransactionClient) => Promise<T>,
+  /**
+   * 事务选项。**默认沿用 Prisma 的 5 秒 / 60 秒** —— 只有那些
+   * 已知会跑很久的调用点才该显式放宽(见 `NodeService.deleteSubtree`)。
+   *
+   * ⚠️ 为什么要留这个口子:Prisma 的默认 `timeout` 是 **5 秒**,
+   * 而它**不区分**「跑得久」与「卡住了」。`deleteSubtree` 那个
+   * 「从叶往根逐层删」的循环每轮都要**全量捞一遍剩余子树**,
+   * 复杂度 O(深度 × 子树节点数)—— 子树一大就必然超过 5 秒,
+   * 于是删一棵大子树会以 `P2028` 失败,而**事务会整体回滚,一个节点都不会丢**。
+   *
+   * 那为什么原来不传?因为同文件的 `import.service` 已经显式设了
+   * `{ timeout: 120_000 }` 并注释"几百人的首次导入会明显超过默认的 5 秒",
+   * 说明作者知道这个默认值 —— 只是删除路径没享受到同待遇。
+   */
+  options?: { timeout?: number; maxWait?: number },
 ): Promise<T> {
   try {
-    return await prisma.$transaction(work, { isolationLevel: 'Serializable' });
+    return await prisma.$transaction(work, {
+      isolationLevel: 'Serializable',
+      ...options,
+    });
   } catch (error: unknown) {
     if (isSerializationFailure(error)) {
       throw AppError.versionConflict('并发操作冲突,请重试');
