@@ -71,15 +71,21 @@ export const SEED_DEPARTMENTS = [
 /**
  * 二级节点(组 / 项目)。挂在 `parentTitle` 下面。
  *
- * ⚠️ **故意造一个"无负责人"的组**(`ownerEmployeeNo: null`):
- * `requireCreateUnder` 允许部门负责人代管他没指定负责人的组(§5.3),
- * 而这条分支只有种子里有一个这样的组才会被验到。
+ * ⚠️ 「市场部工作方式」**不设专职组长**,所有者就是部门负责人本人(KC005)——
+ * 与 `SEED_ACCOUNTS` 里 KC005 的 `owns` 声明一致,也与 `nodes.owner_id`
+ * 的 NOT NULL 约束一致(schema:「没有'无主节点'这种状态」)。
+ *
+ * 2026-10-11 修:这一条的 `ownerEmployeeNo` 原来写的是 `null` ——
+ * seed 一走到它就在 NOT NULL 约束上崩掉(真机报错:
+ * `null value in column "owner_id" of relation "nodes"`),
+ * 整条初始化路径**从未真正跑通过**。「部门负责人代管」的语义是
+ * **所有者本来就是部长**(而不是所有者缺位);库层不存在无主节点。
  */
 export const SEED_SUB_NODES = [
   { title: '后端组', parentTitle: '技术部', ownerEmployeeNo: 'KC003' },
   { title: 'CRM 项目', parentTitle: '技术部', ownerEmployeeNo: 'KC003' },
-  // 部门负责人代管 —— 见上面那条注释
-  { title: '市场部工作方式', parentTitle: '市场部', ownerEmployeeNo: null },
+  // 不设专职组长 —— 部长直接持有(见上面那条注释)
+  { title: '市场部工作方式', parentTitle: '市场部', ownerEmployeeNo: 'KC005' },
 ];
 
 /**
