@@ -27,8 +27,13 @@
  * ⚠️ 这里**没有"角色"字段**,只有 `isSuperAdmin` 与「谁拥有哪些节点」——
  * 因为 v2 的权限模型里**不存在角色表**(§5.3:权限只有所有者 / 祖先链 / 显式授权
  * 三个概念)。"部长"不是一个角色,而是"他是一级部门的所有者"这件事实。
- * → 所以 `owns` 写的是**节点标题**,脚本会按标题找到 id 并设置所有权。
- * 这也正是它必须走真实 Excel 导入或按标题匹配的原因,而不是直接插 id。
+ * → 「谁拥有哪些节点」写在**节点侧**(`ownerEmployeeNo`,见下面的
+ * SEED_DEPARTMENTS / SEED_SUB_NODES / SEED_DOCUMENTS),不在这里列标题。
+ *
+ * 2026-10-11:账号侧原来还有一个 `owns: ['标题', …]` 声明字段,但它
+ * **没有任何消费者**(admin-init 设置所有权走的是节点侧的 ownerEmployeeNo),
+ * 两处重复必然漂移 ——「市场部工作方式」就曾一处有一处无。已删除,
+ * 只保留节点侧这一个事实来源。
  */
 
 /*
@@ -49,7 +54,6 @@
  * @property {string} name
  * @property {'initial'|'fixed'} passwordMode  初始密码的来源,两种都**不**在本文件里出现明文
  * @property {boolean} [isSuperAdmin]
- * @property {readonly string[]} [owns]        他拥有所有权的节点标题(按标题匹配,不是 id)
  * @property {readonly string[]} [assignedTo]  他归属的组织节点标题 —— 决定他能建什么、能管什么(§5.3 规则三)
  * @property {string} [avatarColor]
  * @property {'active'|'disabled'|'departed'} [status]
@@ -72,8 +76,7 @@ export const SEED_DEPARTMENTS = [
  * 二级节点(组 / 项目)。挂在 `parentTitle` 下面。
  *
  * ⚠️ 「市场部工作方式」**不设专职组长**,所有者就是部门负责人本人(KC005)——
- * 与 `SEED_ACCOUNTS` 里 KC005 的 `owns` 声明一致,也与 `nodes.owner_id`
- * 的 NOT NULL 约束一致(schema:「没有'无主节点'这种状态」)。
+ * 与 `nodes.owner_id` 的 NOT NULL 约束一致(schema:「没有'无主节点'这种状态」)。
  *
  * 2026-10-11 修:这一条的 `ownerEmployeeNo` 原来写的是 `null` ——
  * seed 一走到它就在 NOT NULL 约束上崩掉(真机报错:
@@ -119,14 +122,12 @@ export const SEED_ACCOUNTS = [
     passwordMode: 'fixed',
     isSuperAdmin: true,
     // 刻意不给 assignedTo:超管不该有组织归属,§5.3 明确讨论过这一点
-    owns: [],
     avatarColor: 'blue',
   },
   {
     employeeNo: 'KC002',
     name: '技术部部长',
     passwordMode: 'fixed',
-    owns: ['技术部', '研发规范', '技术方案'],
     assignedTo: ['技术部'],
     avatarColor: 'green',
   },
@@ -136,7 +137,6 @@ export const SEED_ACCOUNTS = [
     passwordMode: 'fixed',
     // 多归属:同时在「后端组」与「CRM 项目」下 ——
     // 验「一个人在多个组里,组织范围是它们的并集」
-    owns: ['后端组', 'CRM 项目'],
     assignedTo: ['后端组', 'CRM 项目'],
     avatarColor: 'purple',
   },
@@ -144,7 +144,7 @@ export const SEED_ACCOUNTS = [
     employeeNo: 'KC004',
     name: '技术部组员',
     passwordMode: 'initial',
-    // 不 owns 任何东西 → 他改不了任何节点,只能新建
+    // 不拥有任何节点 → 他改不了任何节点,只能新建
     assignedTo: ['后端组'],
     avatarColor: 'amber',
   },
@@ -152,7 +152,6 @@ export const SEED_ACCOUNTS = [
     employeeNo: 'KC005',
     name: '市场部部长',
     passwordMode: 'fixed',
-    owns: ['市场部', '市场部工作方式'],
     assignedTo: ['市场部'],
     avatarColor: 'rose',
   },
