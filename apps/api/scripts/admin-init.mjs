@@ -525,13 +525,23 @@ async function main() {
       }
     }
 
-    await audit(client, null, 'user.seed.init', 'user', null, {
-      accounts: SEED_ACCOUNTS.map((a) => a.employeeNo),
-      onExisting,
-      // ⚠️ 密码绝不进 detail:审计表只增不删,写进去就永久留下了
-      passwordSource: passwordKind,
-      note: '密码不落审计',
-    });
+    /*
+     * ⚠️ `target_id` 必须非空(见 audit() 的说明)。批量 seed 没有单一目标,
+     * 取**第一个账号的 id** 作代表;完整名单本来就在 detail.accounts 里。
+     * 2026-10-11 之前这里传的是 `null` —— 这条审计从未写进去过。
+     */
+    const seedTargetId = ids.get(SEED_ACCOUNTS[0]?.employeeNo);
+    if (seedTargetId === undefined) {
+      warn('拿不到任何账号 id —— 本次初始化审计未写入(不影响账号与组织数据)');
+    } else {
+      await audit(client, null, 'user.seed.init', 'user', seedTargetId, {
+        accounts: SEED_ACCOUNTS.map((a) => a.employeeNo),
+        onExisting,
+        // ⚠️ 密码绝不进 detail:审计表只增不删,写进去就永久留下了
+        passwordSource: passwordKind,
+        note: '密码不落审计',
+      });
+    }
 
     log('');
     log('='.repeat(56));
@@ -635,6 +645,17 @@ async function ensureNodes(client, userIds, dryRun) {
 
 /** 写审计。⚠️ 调用方负责确保 detail 里没有密码。 */
 async function audit(client, actorId, action, targetType, targetId, detail) {
+  /*
+   * ⚠️ 先挡住「缺 target_id」—— `audit_logs.target_id` 是 NOT NULL。
+   * 2026-10-11 修:seed 路径曾传 `null`,SQL 被约束拒绝、又被下面的
+   * catch 静默吞掉 —— 「所有写操作进 audit_logs」因此**从未兑现过**,
+   * 而没有任何地方报错。这里前置拦截并直接说出它是代码缺陷,
+   * 不再让它退回「一条看不见的 warn」。
+   */
+  if (targetId === undefined || targetId === null || targetId === '') {
+    warn(`审计未写入(${action}):缺少 target_id —— 这是代码缺陷,请修调用方`);
+    return;
+  }
   try {
     await client.query(
       `INSERT INTO audit_logs (actor_id, action, target_type, target_id, detail)
@@ -643,7 +664,7 @@ async function audit(client, actorId, action, targetType, targetId, detail) {
     );
   } catch {
     // 审计写不进去**不能**让初始化失败 —— 它是元数据,不是主任务
-    warn('审计记录写入失败(不影响初始化结果,但请人工补记)');
+    warn(`审计记录写入失败(${action};不影响初始化结果,但请人工补记)`);
   }
 }
 

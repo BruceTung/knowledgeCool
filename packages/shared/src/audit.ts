@@ -62,6 +62,12 @@ export const AUDIT_ACTIONS = [
   /** 在某个节点上单独加人 / 移出人(v2.4 节点成员管理入口) */
   'org.member.add',
   'org.member.remove',
+  // 账号初始化脚本(`admin-init.mjs`)—— 直连数据库写入,不走 recordAudit。
+  // ⚠️ 2026-10-11 补入清单:与 `auth.login.locked` 同类的漏登 —— 筛选器
+  // 取自本清单,漏登则筛不出、标签回退成动作名原文。
+  // 动作名保持 `user.seed.*` 不改:库里已有历史数据,改名会让它们失去标签。
+  'user.seed.init',
+  'user.seed.passwordReset',
   // 评论
   'comment.create',
   'comment.update',
@@ -93,6 +99,8 @@ export const AUDIT_ACTION_LABELS: Readonly<Record<string, string>> = Object.free
   'org.assignment.set': '调整组织归属',
   'org.member.add': '节点添加成员',
   'org.member.remove': '节点移出成员',
+  'user.seed.init': '初始化账号(脚本)',
+  'user.seed.passwordReset': '重置密码(脚本)',
   'comment.create': '发表评论',
   'comment.update': '修改评论',
   'comment.delete': '删除评论',
