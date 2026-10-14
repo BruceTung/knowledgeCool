@@ -100,7 +100,7 @@ SELECT id, depth, materialized_path FROM nodes n
 ## 3. 服务器
 
 `ubuntu@43.134.60.6`，目录 `~/knowledgeCool`，四个容器（web / api / redis / postgres）。
-定时任务两条：每天 05:00 全量备份、周日 05:30 恢复演练。
+定时任务三条：每天 04:45 构建缓存闸门清理（超 8GB 才动手）、每天 05:00 全量备份、周日 05:30 恢复演练。
 
 ⚠️ **向生产机传文件时绝不能整目录打包** —— `.env`、`docker-compose.override.yml`
 这类"在 git 之外、但属于部署"的文件两头都不在版本控制里，最容易被打包搞坏；
