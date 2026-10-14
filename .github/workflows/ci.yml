@@ -104,6 +104,25 @@ jobs:
       - name: 生成 Prisma 客户端
         run: pnpm db:generate
 
+      # ---- 准备 .env ----
+      # ⚠️ compose 的 `:?` 守卫要求 POSTGRES_PASSWORD 与 SESSION_SECRET **非空**,
+      #    而 `.env` 被 .gitignore 挡着、不在检出里 —— 此前漏了"现造一份"这一步,
+      #    于是 e2e 被"起栈"这一步(compose 插值)当场拒绝:
+      #    2026-10-14 实测的失败报错就是
+      #    `required variable POSTGRES_PASSWORD is missing a value`。
+      #    这里的值只在 runner 内使用,不是任何真实环境的密钥。
+      # ⚠️ 不能用 `cp .env.example .env` 了事:样例里 `SESSION_SECRET=` 是**空值**,
+      #    而 `:?` 把"空"也当缺失 —— 拷过来照样在同一个地方被拒(第二个坑)。
+      - name: 准备 .env(compose 必需)
+        run: |
+          cat > .env <<'EOF'
+          POSTGRES_PASSWORD=ci-only-not-a-secret
+          SESSION_SECRET=ci-only-not-a-secret
+          # CI 走 http,按 .env.example 的说明关掉 Secure(只有浏览器会强制它)
+          SESSION_COOKIE_SECURE=false
+          EOF
+          cat .env
+
       # ---- 起栈 ----
       # compose 里 api 依赖 postgres/redis healthy,所以 `up -d` 会等到就绪。
       # ⚠️ 验收在 compose 网络内用服务名互访,所以**不需要映射 api 端口** ——
