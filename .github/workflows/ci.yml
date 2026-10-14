@@ -146,8 +146,15 @@ jobs:
       - name: 数据库契约自检 verify-db
         run: docker compose exec -T api node scripts/verify-db.mjs
 
+      # ⚠️ KC_API / KC_ROOT 两个都要给 —— 种子脚本缺省会连 127.0.0.1:8080
+      #    ("从宿主机跑"的场景),在容器内必然 ECONNREFUSED(与 verify-org
+      #    同一口坑;verify-org 与 verify-doc-claims 两处已传,这里此前漏了)。
       - name: 灌入演示数据
-        run: docker compose exec -T api node scripts/seed-dev.mjs
+        run: |
+          docker compose exec -T \
+            -e KC_API=http://api:3000/api/v1 \
+            -e KC_ROOT=http://web \
+            api node scripts/seed-dev.mjs
 
       # ---- 验收 ----
       # ⚠️ 两个变量都要传,少一个都不行:
